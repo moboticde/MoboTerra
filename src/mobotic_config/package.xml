@@ -5,7 +5,7 @@
   <description>Authoritative MoboTerra platform configuration and launch adapters.</description>
   <maintainer email="noreply@mobotic.invalid">Mobotic Development Team</maintainer>
   <license>Apache-2.0</license>
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>python3-setuptools</buildtool_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>xacro</exec_depend>

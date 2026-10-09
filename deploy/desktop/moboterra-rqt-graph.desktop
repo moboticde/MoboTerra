@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MoboTerra ROS Graph
+Comment=View the MoboTerra ROS node graph
+Exec=moboterra-gui rqt_graph
+Icon=applications-science
+Terminal=false
+Categories=Science;

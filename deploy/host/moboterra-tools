@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+config=/etc/moboterra/software.env
+[[ -r "${config}" ]] || { echo "Run the MoboTerra installer first." >&2; exit 1; }
+image="$(sed -n 's/^MOBOTERRA_TOOLS_IMAGE=//p' "${config}" | tail -n 1)"
+[[ -n "${image}" ]] || { echo "CAD tools image is missing from ${config}" >&2; exit 1; }
+docker=(docker)
+if ! docker info >/dev/null 2>&1; then
+    if [[ -t 0 ]]; then docker=(sudo docker); else docker=(pkexec docker); fi
+fi
+uid="$(id -u)"
+gid="$(id -g)"
+if (( $# > 0 )); then
+    command=("$@")
+else
+    command=(python /opt/moboterra-tools/preview_urdf.py
+        /opt/moboterra/share/mobotic_description/urdf/moboterra.urdf.xacro
+        --output /work/moboterra-preview.png)
+fi
+exec "${docker[@]}" run --rm --network none --user "${uid}:${gid}" \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    --env HOME=/tmp --env ROS_HOME=/tmp/.ros \
+    --env "LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}" \
+    --volume "${PWD}:/work" --workdir /work "${image}" "${command[@]}"

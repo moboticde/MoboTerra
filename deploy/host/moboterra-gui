@@ -3,6 +3,9 @@ set -euo pipefail
 
 config=/etc/moboterra/moboterra.env
 if [[ ! -r "${config}" ]]; then
+    config=/etc/moboterra/software.env
+fi
+if [[ ! -r "${config}" ]]; then
     echo "Cannot read ${config}" >&2
     exit 1
 fi
@@ -26,7 +29,11 @@ fi
 
 docker=(docker)
 if ! docker info >/dev/null 2>&1; then
-    docker=(sudo docker)
+    if [[ -t 0 ]]; then
+        docker=(sudo docker)
+    else
+        docker=(pkexec docker)
+    fi
 fi
 
 uid="$(id -u)"
@@ -46,12 +53,13 @@ options=(
     --env XAUTHORITY=/tmp/.Xauthority
     --env HOME=/tmp/moboterra-home
     --env ROS_HOME=/tmp/moboterra-home/.ros
+    --env "LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}"
     --volume /tmp/.X11-unix:/tmp/.X11-unix:ro
     --volume "${xauthority}:/tmp/.Xauthority:ro"
     --tmpfs /tmp/moboterra-home:rw,nosuid,nodev,mode=700,uid="${uid}",gid="${gid}"
 )
 if [[ "${MOBOTERRA_GUI_DRI:-0}" == "1" && -d /dev/dri ]]; then
-    options+=(--device /dev/dri)
+    options+=(--device /dev/dri --env "LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-0}")
 fi
 
 exec "${docker[@]}" "${options[@]}" "${gui_image}" "${command[@]}"

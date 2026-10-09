@@ -180,7 +180,7 @@ class MoboticSupervisor(Node):
             WheelModuleCommand, 'wheel_modules/command', 1
         )
 
-        self.subscriptions = [
+        self.input_subscriptions = [
             self.create_subscription(
                 TwistStamped, 'manual/cmd_vel', self._manual_command_callback, 1
             ),
