@@ -74,31 +74,33 @@ class PlatformDiagnostics(Node):
                 stamp_age = self.get_clock().now().nanoseconds / 1e9 - stamp_seconds
                 if stamp_seconds == 0:
                     stamp_age = float('inf')
-            status.level, status.message = freshness(received, time.monotonic(), timeout, stamp_age)
-            if status.level == OK:
+            level, status.message = freshness(received, time.monotonic(), timeout, stamp_age)
+            if level == OK:
                 if topic == 'battery/system_state':
-                    status.level, status.message = battery_health(msg, self.minimum_soc)
+                    level, status.message = battery_health(msg, self.minimum_soc)
                     status.values = [KeyValue(key='minimum_soc', value=str(msg.minimum_percentage)),
                                      KeyValue(key='stale_participants', value=','.join(msg.stale_batteries)),
                                      KeyValue(key='faulted_participants', value=','.join(msg.faulted_batteries))]
                 elif topic == 'safety/state':
-                    status.level, status.message = safety_health(msg)
+                    level, status.message = safety_health(msg)
                 elif topic == 'safety/io_state':
-                    status.level = OK if msg.sto_state_known and msg.safety_enable_state_known else WARN
-                    status.message = 'Mapped hardware signals' if status.level == OK else 'Independent STO/enable signals unmapped; interlocks inferred'
+                    level = OK if msg.sto_state_known and msg.safety_enable_state_known else WARN
+                    status.message = 'Mapped hardware signals' if level == OK else 'Independent STO/enable signals unmapped; interlocks inferred'
                     status.values = [KeyValue(key='flexisoft_status_raw', value=hex(msg.flexisoft_status_raw)),
                                      KeyValue(key='sto_state_known', value=str(msg.sto_state_known)),
                                      KeyValue(key='safety_enable_state_known', value=str(msg.safety_enable_state_known))]
                 elif topic == 'vehicle/mode_state':
-                    status.level = ERROR if 'timeout' in msg.status_message.lower() else OK if msg.motion_permitted else WARN
+                    level = ERROR if 'timeout' in msg.status_message.lower() else OK if msg.motion_permitted else WARN
                     status.message = msg.status_message or 'Waiting for motion permission'
                     status.values = [KeyValue(key='mode', value=str(msg.current_mode)),
                                      KeyValue(key='transition_in_progress', value=str(msg.transition_in_progress))]
                 elif topic == 'manual/state':
-                    status.level = OK if msg.connected else WARN
+                    level = OK if msg.connected else WARN
                     status.message = msg.status_message or ('Connected' if msg.connected else 'Joystick disconnected')
                 elif topic.startswith('scanner/') and not msg.ranges:
-                    status.level, status.message = WARN, 'Empty laser scan'
+                    level, status.message = WARN, 'Empty laser scan'
+            # diagnostic_msgs uses a ROS byte, represented by one byte in Python.
+            status.level = bytes([level])
             array.status.append(status)
         self.publisher.publish(array)
 

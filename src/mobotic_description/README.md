@@ -197,7 +197,15 @@ target host remain required. Geometry/launch tests here do not replace them.
 ## Reproduce the mesh
 
 Offline conversion requires `cadquery-ocp==7.9.3.1.1` and VTK. They are not ROS
-runtime dependencies. From the repository root, with the supplied STEP one
+runtime dependencies. The root `bash ./install.sh` command installs them in the
+Docker tools image automatically. Run `moboterra-tools` for the assembled URDF
+preview, or `moboterra-tools python /opt/moboterra-tools/export_step.py ...` for
+conversion, using input/output paths within the current directory mounted at
+`/work`. Software rendering is enabled by default. No host pip installation is
+needed for this workflow. The native commands below remain available for users
+who maintain their own Python environment.
+
+From the repository root, with the supplied STEP one
 directory above it:
 
 ```bash

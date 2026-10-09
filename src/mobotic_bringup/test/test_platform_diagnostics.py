@@ -41,7 +41,7 @@ class PlatformDiagnosticsTest(unittest.TestCase):
 
     def test_missing_sources_are_stale(self):
         self.node._publish()
-        self.assertTrue(all(status.level == health.STALE for status in self.outputs[-1].status))
+        self.assertTrue(all(status.level == bytes([health.STALE]) for status in self.outputs[-1].status))
 
     def test_unknown_hardware_signals_are_warn_not_green(self):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=0)),
@@ -49,7 +49,7 @@ class PlatformDiagnosticsTest(unittest.TestCase):
         self.node._receive('safety/io_state', msg)
         self.node._publish()
         status = self.outputs[-1].status[0]
-        self.assertEqual(status.level, health.WARN)
+        self.assertEqual(status.level, bytes([health.WARN]))
         self.assertIn('unmapped', status.message)
         self.assertEqual(status.values[0].value, '0xf')
 
@@ -57,17 +57,17 @@ class PlatformDiagnosticsTest(unittest.TestCase):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=9, nanosec=0)), ranges=[1.0])
         self.node._receive('scanner/front_left/scan', msg)
         self.node._publish()
-        self.assertEqual(self.outputs[-1].status[1].level, health.STALE)
+        self.assertEqual(self.outputs[-1].status[1].level, bytes([health.STALE]))
         msg.header.stamp.sec = 10
         self.node._publish()
-        self.assertEqual(self.outputs[-1].status[1].level, health.OK)
+        self.assertEqual(self.outputs[-1].status[1].level, bytes([health.OK]))
 
     def test_fresh_odometry_is_not_treated_as_laser_scan(self):
         self.node.channels = {'odometry': (None, 0.5)}
         self.node._receive('odometry', SimpleNamespace(
             header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=0))))
         self.node._publish()
-        self.assertEqual(self.outputs[-1].status[0].level, health.OK)
+        self.assertEqual(self.outputs[-1].status[0].level, bytes([health.OK]))
 
 
 if __name__ == '__main__':

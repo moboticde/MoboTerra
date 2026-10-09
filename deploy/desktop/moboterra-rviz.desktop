@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MoboTerra RViz
+Comment=View the MoboTerra ROS model and feedback
+Exec=moboterra-gui rviz2 --ros-args -r /tf:=/moboterra/tf -r /tf_static:=/moboterra/tf_static
+Icon=applications-science
+Terminal=false
+Categories=Science;

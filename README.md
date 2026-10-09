@@ -52,13 +52,47 @@ Bringup, standalone launches, virtual actuators and description use the same loa
 See [configuration ownership, overrides and validation](src/mobotic_config/README.md).
 No legacy YAML copies are generated. Existing node ROS parameter APIs are unchanged.
 
+## Automated first-time installation
+
+On Ubuntu 24.04 ARM64, download/unpack the project, open a terminal in its
+directory and run:
+
+```bash
+bash ./install.sh
+```
+
+The command asks for Ubuntu administrator authentication, installs missing host
+packages and Docker/Compose, and builds the runtime, GUI and offline CAD tools.
+ROS dependencies are installed inside Docker; no host ROS installation or manual
+pip commands are needed. The build runs the full ROS tests, validates the supplied
+configuration and starts an isolated virtual stack to check all eight joints,
+odometry, wheel status and diagnostics. The installer also checks the installed
+entrypoint, healthcheck, RViz, ROS Graph and CAD imports. It installs `moboterra-gui`,
+`moboterra-tools` and desktop application entries. The default prepares software
+without CAN adapters and does not configure or start a robot service.
+
+After installation:
+
+```bash
+moboterra-gui rviz2
+moboterra-gui rqt_graph
+moboterra-tools  # writes moboterra-preview.png in the current directory
+```
+
+When the two adapters are available, run `sudo bash ./deploy/install.sh --no-start`
+to identify their real serials and install the hardware service. Complete the
+hardware commissioning checks before starting it. Scanner Ethernet addresses and
+physical safety wiring remain specific to the connected hardware.
+See [deployment instructions](deploy/README.md) for unattended provisioning,
+direct Docker builds, recovery and hardware startup.
+
 ## Build and launch
 
 On a ROS 2 Linux build host (target: Jazzy), from the MoboTerra repository root:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths src --ignore-src -r -y
+rosdep install --from-paths src --ignore-src --rosdistro jazzy -y
 colcon build --symlink-install
 source install/setup.bash
 ros2 run mobotic_config check_config
