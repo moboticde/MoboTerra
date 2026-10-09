@@ -1,0 +1,17 @@
+# Node policy only. Shared hardware/geometry/limits are derived from platform.yaml.
+/**:
+  ros__parameters:
+    axis_speed: 3
+    axis_crab: 2
+    axis_steer: 0
+    button_deadman: -1
+    buttons_boost: [9, 10]
+    button_mode_switch: 4
+    mode_switch_type: "toggle"
+    mode_switch_manual_value: 0
+    mode_switch_auto_velocity_value: 1
+    mode_state_timeout: 0.5
+    scale_linear: 0.4
+    scale_angular: 0.4
+    joystick_timeout: 0.25
+    publish_period: 0.02

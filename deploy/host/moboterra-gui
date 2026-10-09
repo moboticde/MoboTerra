@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+config=/etc/moboterra/moboterra.env
+if [[ ! -r "${config}" ]]; then
+    echo "Cannot read ${config}" >&2
+    exit 1
+fi
+
+gui_image="$(sed -n 's/^MOBOTERRA_GUI_IMAGE=//p' "${config}" | tail -n 1)"
+ros_domain_id="$(sed -n 's/^ROS_DOMAIN_ID=//p' "${config}" | tail -n 1)"
+if [[ -z "${gui_image}" || -z "${ros_domain_id}" ]]; then
+    echo "GUI image or ROS_DOMAIN_ID is missing from ${config}" >&2
+    exit 1
+fi
+if [[ -z "${DISPLAY:-}" ]]; then
+    echo "DISPLAY is not set; run this command from an X11/XWayland desktop session" >&2
+    exit 1
+fi
+
+xauthority="${XAUTHORITY:-${HOME}/.Xauthority}"
+if [[ ! -r "${xauthority}" ]]; then
+    echo "Xauthority file is not readable: ${xauthority}" >&2
+    exit 1
+fi
+
+docker=(docker)
+if ! docker info >/dev/null 2>&1; then
+    docker=(sudo docker)
+fi
+
+uid="$(id -u)"
+gid="$(id -g)"
+if (( $# > 0 )); then
+    command=("$@")
+else
+    command=(rviz2)
+fi
+options=(
+    run --rm --network host
+    --user "${uid}:${gid}"
+    --cap-drop ALL
+    --security-opt no-new-privileges:true
+    --env "DISPLAY=${DISPLAY}"
+    --env "ROS_DOMAIN_ID=${ros_domain_id}"
+    --env XAUTHORITY=/tmp/.Xauthority
+    --env HOME=/tmp/moboterra-home
+    --env ROS_HOME=/tmp/moboterra-home/.ros
+    --volume /tmp/.X11-unix:/tmp/.X11-unix:ro
+    --volume "${xauthority}:/tmp/.Xauthority:ro"
+    --tmpfs /tmp/moboterra-home:rw,nosuid,nodev,mode=700,uid="${uid}",gid="${gid}"
+)
+if [[ "${MOBOTERRA_GUI_DRI:-0}" == "1" && -d /dev/dri ]]; then
+    options+=(--device /dev/dri)
+fi
+
+exec "${docker[@]}" "${options[@]}" "${gui_image}" "${command[@]}"
+

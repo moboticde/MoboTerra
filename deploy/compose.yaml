@@ -1,0 +1,65 @@
+name: moboterra
+
+services:
+  robot:
+    image: ${MOBOTERRA_IMAGE:?MOBOTERRA_IMAGE must be set}
+    container_name: moboterra-robot
+    network_mode: host
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    group_add:
+      - ${INPUT_GID:?INPUT_GID must be set}
+    device_cgroup_rules:
+      - "c 13:* r"
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?ROS_DOMAIN_ID must be set}
+      ROS_HOME: /var/log/ros
+      MOBOTERRA_REQUIRED_NODES: ${MOBOTERRA_REQUIRED_NODES:-/moboterra/mobotic_supervisor,/moboterra/platform_diagnostics}
+    command:
+      - ros2
+      - launch
+      - mobotic_bringup
+      - moboterra.launch.py
+      - stack_type:=hardware
+      - robot_name:=moboterra
+      - can_interface:=can0
+      - battery_can_interface:=can1
+    volumes:
+      - type: bind
+        source: /var/lib/moboterra/ros-logs
+        target: /var/log/ros
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /dev/input
+        target: /dev/input
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/udev
+        target: /run/udev
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m,uid=10001,gid=10001
+      - /run:rw,nosuid,nodev,size=16m,uid=10001,gid=10001
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/moboterra-healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+    stop_grace_period: 30s
+

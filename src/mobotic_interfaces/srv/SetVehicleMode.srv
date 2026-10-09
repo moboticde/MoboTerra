@@ -1,0 +1,14 @@
+# Optional programmatic request to change the operating mode.
+# Joystick requests use the same supervisor stop/standstill/switch state machine.
+# Selection does not bypass supervisor safety checks.
+
+uint8 MANUAL=0
+uint8 AUTO_VELOCITY=1
+uint8 AUTO_DIRECT=2
+
+uint8 requested_mode
+---
+bool accepted
+bool transition_started
+uint8 current_mode
+string message

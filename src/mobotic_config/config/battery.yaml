@@ -1,0 +1,5 @@
+# Node policy only. Shared hardware/geometry/limits are derived from platform.yaml.
+/**:
+  ros__parameters:
+    telemetry_timeout: 0.5
+    publish_period: 0.1

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>mobotic_driver</name>
+  <version>1.0.0</version>
+  <description>The mobotic driver package</description>
+
+  <maintainer email="tibor.bataljak-savic@romb-technologies.hr">Tibor Bataljak Savić</maintainer>
+  <license>(c) Copyright 2025 RoMb Technologies d.o.o. All rights reserved.</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>can_msgs</depend>
+  <depend>ros2_socketcan</depend>
+  <depend>mobotic_interfaces</depend>
+  <depend>diagnostic_msgs</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_test</test_depend>
+
+  <exec_depend>ros2launch</exec_depend>
+
+  <exec_depend>mobotic_config</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

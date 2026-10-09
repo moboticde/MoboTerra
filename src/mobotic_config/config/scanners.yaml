@@ -1,0 +1,20 @@
+# Shared configuration package; hardware data is resolved from platform.yaml.
+# Network/acquisition settings from terra_spiro/mobotic_launch/launch/mobotic-etp.launch.py.
+# Sensor addresses and frame names are supplied by MoboTerra bringup.
+/**:
+  ros__parameters:
+    interface_ip: '0.0.0.0'
+    host_udp_port: 0
+    channel: 0
+    channel_enabled: true
+    skip: 0
+    angle_start: 0.0
+    angle_end: 0.0
+    time_offset: 0.0
+    general_system_state: true
+    derived_settings: true
+    measurement_data: true
+    intrusion_data: true
+    application_io_data: true
+    use_persistent_config: false
+    min_intensities: 0.0

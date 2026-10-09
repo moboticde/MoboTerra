@@ -1,0 +1,33 @@
+{
+  "source": "MoboTerra_assembly.step",
+  "scanner_model": "MICS3-AAUZ40AZ1P01",
+  "status": "nominal CAD/manufacturer alignment; not physical calibration",
+  "units": "millimetres except yaw_rad",
+  "datasheet": "https://cdn.sick.com/media/pdf/4/44/544/dataSheet_MICS3-AAUZ40AZ1P01_1094452_en.pdf",
+  "datasheet_page": 5,
+  "scan_plane_below_top_mm": 40.1,
+  "cad_window_top_z_mm": 289.361344313794,
+  "scan_plane_z_mm": 249.261344313794,
+  "coverage_disk_bottom_z_mm": 232.361344313794,
+  "coverage_disks_are_scan_datums": false,
+  "method": "XY: vertical radius-49.75 mm window cylinder axis, coincident with radius-3000 mm field axis. Z: horizontal window top minus manufacturer 40.1 mm. Yaw: away from rear rectangular casing/support, along outward CAD diagonal. CAD simplified body is 135.0 mm tall versus datasheet 135.1 mm; use top datum, not base height.",
+  "ros_convention": "SICK ROS2 driver shifts native beam angles by -90 degrees; frame +X is outward scan bisector, +Z up. No extra 90-degree URDF rotation.",
+  "frames": [
+    {
+      "frame_id": "front_left_scan",
+      "window_solid_index": 184,
+      "body_solid_index": 183,
+      "coverage_solid_index": 185,
+      "cad_xyz_mm": [1207.10112507936, 863.406899086024, 249.261344313790],
+      "yaw_rad": 0.7853981633974483
+    },
+    {
+      "frame_id": "rear_right_scan",
+      "window_solid_index": 179,
+      "body_solid_index": 178,
+      "coverage_solid_index": 180,
+      "cad_xyz_mm": [-1207.48206119322, -860.892490603306, 249.261344313794],
+      "yaw_rad": -2.356194490192345
+    }
+  ]
+}

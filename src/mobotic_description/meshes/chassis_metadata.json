@@ -1,0 +1,145 @@
+{
+  "source": "MoboTerra_assembly.step",
+  "mesh_units": "millimetres",
+  "urdf_scale": [
+    0.001,
+    0.001,
+    0.001
+  ],
+  "measurement_method": "exported tessellated mesh bounds",
+  "mesh_bounds_xmin_xmax_ymin_ymax_zmin_zmax_mm": [
+    -1267.110595703125,
+    1266.729736328125,
+    -920.3035278320312,
+    922.8179321289062,
+    154.36134338378906,
+    970.4819946289062
+  ],
+  "mesh_size_metres": [
+    2.53384033203125,
+    1.8431214599609376,
+    0.8161206512451172
+  ],
+  "triangles": 1041199,
+  "vtk_reader_triangle_count": 1041008,
+  "deflection_mm": 0.8,
+  "excluded_nonphysical_scanner_fields": [
+    {
+      "solid_index": 180,
+      "size_mm": [
+        6000.000000200003,
+        6000.000000200003,
+        2.000000200002546
+      ],
+      "bounds_xyz_min_max_mm": [
+        -4207.482061293222,
+        -3860.892490703308,
+        232.36134421379273,
+        1792.5179389067819,
+        2139.1075094966955,
+        234.36134441379528
+      ]
+    },
+    {
+      "solid_index": 185,
+      "size_mm": [
+        6000.0000002,
+        6000.0000002,
+        2.0000002000043082
+      ],
+      "bounds_xyz_min_max_mm": [
+        -1792.8988750206402,
+        -2136.5931010139757,
+        232.3613442137879,
+        4207.10112517936,
+        3863.406899186024,
+        234.3613444137922
+      ]
+    }
+  ],
+  "solids_before_filter": 188,
+  "solids_after_filter": 186,
+  "chassis_solids": 182,
+  "fixed_steering_units": [
+    {
+      "module": "front_left",
+      "cad_datum_xyz_mm": [
+        845.0,
+        495.0,
+        749.955467
+      ],
+      "datum_feature": "vertical 55 mm-radius bore axis / 7956.014 mm2 lower planar face",
+      "solid_index": 174,
+      "mesh_file": "front_left_steering_mount.stl",
+      "local_mesh_bounds_mm": [
+        -136.49996948242188,
+        71.0,
+        -80.0999984741211,
+        87.0,
+        -6.800000190734863,
+        69.30000305175781
+      ],
+      "triangles": 48643
+    },
+    {
+      "module": "front_right",
+      "cad_datum_xyz_mm": [
+        845.0,
+        -495.0,
+        749.910934
+      ],
+      "datum_feature": "vertical 55 mm-radius bore axis / 7956.014 mm2 lower planar face",
+      "solid_index": 175,
+      "mesh_file": "front_right_steering_mount.stl",
+      "local_mesh_bounds_mm": [
+        -136.49996948242188,
+        71.0,
+        -80.0999984741211,
+        87.0,
+        -6.800000190734863,
+        69.30000305175781
+      ],
+      "triangles": 48643
+    },
+    {
+      "module": "rear_left",
+      "cad_datum_xyz_mm": [
+        -845.0,
+        495.0,
+        749.955467
+      ],
+      "datum_feature": "vertical 55 mm-radius bore axis / 7956.014 mm2 lower planar face",
+      "solid_index": 176,
+      "mesh_file": "rear_left_steering_mount.stl",
+      "local_mesh_bounds_mm": [
+        -71.0,
+        136.49996948242188,
+        -87.0,
+        80.0999984741211,
+        -6.800000190734863,
+        69.30000305175781
+      ],
+      "triangles": 48643
+    },
+    {
+      "module": "rear_right",
+      "cad_datum_xyz_mm": [
+        -845.0,
+        -495.0,
+        750.0
+      ],
+      "datum_feature": "vertical 55 mm-radius bore axis / 7956.014 mm2 lower planar face",
+      "solid_index": 177,
+      "mesh_file": "rear_right_steering_mount.stl",
+      "local_mesh_bounds_mm": [
+        -71.0,
+        136.49996948242188,
+        -87.0,
+        80.0999984741211,
+        -6.800000190734863,
+        69.30000305175781
+      ],
+      "triangles": 48643
+    }
+  ]
+}

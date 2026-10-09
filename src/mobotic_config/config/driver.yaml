@@ -1,0 +1,15 @@
+# Node policy only. Shared hardware/geometry/limits are derived from platform.yaml.
+/**:
+  ros__parameters:
+    feedback_request_period: 0.02
+    can_heartbeat_period: 0.01
+    watchdog_timeout: 0.1
+    supervisor_timeout: 0.3
+    motion_feedback_timeout: 0.3
+    status_feedback_timeout: 0.3
+    fault_feedback_timeout: 2.5
+    diagnostic_sdo_period: 1
+    traction_pdo_enabled: true
+    telemetry_pdo_enabled: true
+    telemetry_pdo_sync_divider: 1
+    traction_pdo_period: 0.02

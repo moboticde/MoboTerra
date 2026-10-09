@@ -1,0 +1,113 @@
+# Authoritative physical/platform data. Units are metres, radians, seconds,
+# encoder counts/revolution, traction motor increments/s and increments/s^2,
+# steering motor rpm and current mA (software limits below use rad/s and A).
+# Values preserve the existing profile; this file is NOT commissioning evidence.
+schema_version: 1
+robot_name: moboterra
+frames: {base: base_link, odom: odom}
+can:
+  master_node_id: '0x0A'
+  drives: {interface: can0, bitrate: 500000}
+  battery: {interface: can1, bitrate: 500000, listen_only: true}
+geometry:
+  wheel_radius: 0.325
+  wheel_width: 0.31
+  # CAD Z=0 is the floor. base_link is at wheel axle height (wheel_radius).
+actuators:
+  steering:
+    resolution: 4096
+    gear_ratio: 121.0
+    mode: position
+    min_steering_velocity: -5000
+    max_steering_velocity: 5000
+    min_traction_velocity: -5000
+    max_traction_velocity: 5000
+    min_current: -4000
+    max_current: 4000
+  traction:
+    resolution: 4096
+    gear_ratio: 16.0
+    mode: velocity
+    min_steering_velocity: -1700
+    max_steering_velocity: 1700
+    min_traction_velocity: -116053
+    max_traction_velocity: 116053
+    min_current: -4000
+    max_current: 4000
+traction_profile:
+  # Preserved controller settings: ~1 m/s^2 with nominal gearing/radius.
+  # Recheck these raw-controller units when changing mechanical scaling.
+  max_velocity: 116053
+  acceleration: 32093
+  deceleration: 32093
+motion_limits:
+  max_velocity_linear: 1.25
+  max_velocity_angular: 1.51
+  max_acceleration_linear: 0.5
+  max_acceleration_angular: 0.52
+  max_steering_velocity: 4.32
+  max_traction_velocity: 11.12
+  max_traction_current: 4.0
+modules:
+  - name: front_left
+    cad_steering_xyz: [0.845, 0.495, 0.749955467]
+    mounting_yaw: 0.0
+    steering: {joint: front_left_steering, can_node_id: '0x01'}
+    traction: {joint: front_left_traction, can_node_id: '0x02'}
+  - name: front_right
+    cad_steering_xyz: [0.845, -0.495, 0.749910934]
+    mounting_yaw: 3.14152
+    steering: {joint: front_right_steering, can_node_id: '0x03'}
+    traction: {joint: front_right_traction, can_node_id: '0x04'}
+  - name: rear_left
+    cad_steering_xyz: [-0.845, 0.495, 0.749955467]
+    mounting_yaw: 0.0
+    steering: {joint: rear_left_steering, can_node_id: '0x07'}
+    traction: {joint: rear_left_traction, can_node_id: '0x08'}
+  - name: rear_right
+    cad_steering_xyz: [-0.845, -0.495, 0.75]
+    mounting_yaw: 3.14152
+    steering: {joint: rear_right_steering, can_node_id: '0x05'}
+    traction: {joint: rear_right_traction, can_node_id: '0x06'}
+usb_joystick: {device_id: 0, autorepeat_rate: 20.0, deadzone: 0.08, sticky_buttons: false}
+scanners:
+  host_ip: '10.60.20.186'
+  units:
+    - name: front_left
+      sensor_ip: '10.60.20.52'
+      frame_id: front_left_scan
+      cad_xyz: [1.207101125, 0.863406899, 0.249261344]
+      yaw: 0.7853981633974483
+    - name: rear_right
+      sensor_ip: '10.60.20.53'
+      frame_id: rear_right_scan
+      cad_xyz: [-1.207482061, -0.860892491, 0.249261344]
+      yaw: -2.356194490192345
+safety:
+  bind_address: '0.0.0.0'
+  port: 9100
+  telegram_size: 15
+  status_byte_offset: 14
+  front_protective_ossd_mask: 3
+  rear_protective_ossd_mask: 12
+  emergency_stop_mask: 16
+  safety_override_mask: 32
+  rear_warning_mask: 64
+  front_warning_mask: 128
+  safety_enable_mask: 0  # Unknown independent mapping, not confirmed enable.
+  sto_mask: 0            # Unknown independent mapping; hardware STO is independent.
+battery:
+  primary_id: parallel_battery_controller
+  participants:
+    - {id: parallel_battery_controller, source_address: '0xF3', status_pgn: '0xF096', soc_pgn: '0xF091', voltage_pgn: '0xF090'}
+    - {id: battery1, source_address: '0xF4', status_pgn: '0xF197', soc_pgn: '0xF192', voltage_pgn: '0xF191'}
+    - {id: battery2, source_address: '0xF5', status_pgn: '0xF1A6', soc_pgn: '0xF1A1', voltage_pgn: '0xF1A0'}
+    - {id: battery3, source_address: '0xF6', status_pgn: '0xF1B5', soc_pgn: '0xF1B0', voltage_pgn: '0xF1AF'}
+    - {id: battery4, source_address: '0x80', status_pgn: '0xF1C4', soc_pgn: '0xF1BF', voltage_pgn: '0xF1BE'}
+commissioning_pending:
+  - Verify drive IDs, encoder zero/sign, gearing, current and mechanical travel limits.
+  - Verify actual battery participants and CAN telegram mapping.
+  - Confirm FlexiSoft/ELMO independent STO and enable bit mapping.
+  - Calibrate scanner extrinsics, wheel odometry and uncertainty.
+  - REMdevice CANopen receiver mapping and B2 error reset are not implemented.
+  - Configure CAN interfaces and host NIC externally; this package does not do so.

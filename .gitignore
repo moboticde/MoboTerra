@@ -1,0 +1,26 @@
+# ROS 2 / colcon outputs
+build/
+install/
+log/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# C/C++ generated files
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Runtime data
+*.bag
+*.db3
+*.mcap
+can_telemetry_records/

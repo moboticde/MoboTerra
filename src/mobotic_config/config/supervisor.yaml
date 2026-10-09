@@ -1,0 +1,19 @@
+# Node policy only. Shared hardware/geometry/limits are derived from platform.yaml.
+/**:
+  ros__parameters:
+    initial_mode: "manual"
+    control_period: 0.02
+    mode_transition_stop_duration: 0.25
+    mode_transition_timeout: 10
+    velocity_feedback_timeout: 0.3
+    standstill_linear_velocity: 0.02
+    standstill_angular_velocity: 0.02
+    standstill_joint_velocity: 0.1
+    manual_timeout: 0.25
+    autonomy_timeout: 0.25
+    safety_timeout: 0.3
+    battery_timeout: 0.6
+    wheel_status_timeout: 0.3
+    minimum_battery_percentage: 0.2
+    warning_speed_scale: 0.3
+    override_speed_scale: 0.2

@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<!-- Visualization/TF description, not a dynamics-validated simulation model.
+     Chassis: physical geometry from MoboTerra_assembly.step; scanner coverage
+     disks excluded. Wheels: old four-wheel radius/width, CAD steering-axis XY.
+     User confirmed CAD Z=0 is the floor and CAD mounting axes define wheel XY.
+     base_link is at wheel-centre height (radius above the floor). CAD axes follow
+     +X forward, +Y left, +Z up. Steering frames use measured lower-face datums;
+     traction origins are offset down to floor + wheel radius, not coincident.
+     The complete CAD steering units remain fixed; their internal rotating
+     subparts are not separately identified. Moving steering links are kinematic
+     frames; no synthetic horizontal axle or unprovided drive housing is drawn.
+     Scanner frames: nominal CAD mirror axes and manufacturer scan-plane height;
+     see scanner_frames.json. These are not physically calibrated extrinsics.
+     No estimated masses, inertias, or controller plugins.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="moboterra">
+  <xacro:arg name="platform_config" default=""/>
+  <xacro:property name="platform_file" value="$(arg platform_config)"/>
+  <xacro:property name="p" value="${xacro.load_yaml(platform_file)}"/>
+  <xacro:property name="radius" value="${p['geometry']['wheel_radius']}"/>
+  <xacro:property name="width" value="${p['geometry']['wheel_width']}"/>
+  <material name="chassis_grey"><color rgba="0.52 0.60 0.67 1"/></material>
+  <material name="wheel_black"><color rgba="0.12 0.12 0.14 1"/></material>
+  <material name="steering_blue"><color rgba="0.1 0.35 0.9 1"/></material>
+
+  <link name="${p['frames']['base']}"/>
+  <link name="chassis">
+    <visual name="cad_assembly">
+      <geometry>
+        <mesh filename="package://mobotic_description/meshes/chassis.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="chassis_grey"/>
+    </visual>
+    <!-- Conservative box enclosing ALL physical CAD geometry, including scanner
+         arms. Not a tuned navigation footprint or an exact collision surface. -->
+    <collision name="physical_assembly_envelope">
+      <origin xyz="-0.0001904296875 0.0012572021484375 0.5624216690063476"/>
+      <geometry><box size="2.53384033203125 1.8431214599609376 0.8161206512451172"/></geometry>
+    </collision>
+  </link>
+  <joint name="base_to_chassis" type="fixed">
+    <parent link="${p['frames']['base']}"/>
+    <child link="chassis"/>
+    <origin xyz="0 0 ${-radius}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Scanner visuals are already in chassis.stl. Origins are CAD/floor
+       coordinates; base_to_chassis applies the wheel-centre offset once. -->
+  <xacro:macro name="scanner" params="s">
+    <link name="${s['frame_id']}"/>
+    <joint name="${s['frame_id']}_fixed" type="fixed">
+      <parent link="chassis"/><child link="${s['frame_id']}"/>
+      <origin xyz="${s['cad_xyz'][0]} ${s['cad_xyz'][1]} ${s['cad_xyz'][2]}" rpy="0 0 ${s['yaw']}"/>
+    </joint>
+  </xacro:macro>
+  <xacro:scanner s="${p['scanners']['units'][0]}"/>
+  <xacro:scanner s="${p['scanners']['units'][1]}"/>
+
+  <!-- Four powered modules, no casters. Fixed CAD mounts, geometry-free moving
+       steering frames, and floor-aligned tyre axes. Meshes are not recalibrated
+       or resized when a custom platform profile is selected. -->
+  <xacro:macro name="module" params="m">
+    <xacro:property name="name" value="${m['name']}"/>
+    <link name="${name}_steering_mount">
+      <visual>
+        <geometry><mesh filename="package://mobotic_description/meshes/${name}_steering_mount.stl" scale="0.001 0.001 0.001"/></geometry>
+        <material name="steering_blue"/>
+      </visual>
+    </link>
+    <joint name="${name}_mount_fixed" type="fixed">
+      <parent link="chassis"/><child link="${name}_steering_mount"/>
+      <origin xyz="${m['cad_steering_xyz'][0]} ${m['cad_steering_xyz'][1]} ${m['cad_steering_xyz'][2]}" rpy="0 0 0"/>
+    </joint>
+    <link name="${name}_steering_link"/>
+    <joint name="${m['steering']['joint']}" type="continuous">
+      <parent link="${name}_steering_mount"/><child link="${name}_steering_link"/>
+      <origin xyz="0 0 0" rpy="0 0 ${m['mounting_yaw']}"/><axis xyz="0 0 1"/>
+    </joint>
+    <link name="${name}_wheel">
+      <visual>
+        <origin rpy="${pi / 2} 0 0"/>
+        <geometry><cylinder radius="${radius}" length="${width}"/></geometry>
+        <material name="wheel_black"/>
+      </visual>
+      <collision>
+        <origin rpy="${pi / 2} 0 0"/>
+        <geometry><cylinder radius="${radius}" length="${width}"/></geometry>
+      </collision>
+    </link>
+    <joint name="${m['traction']['joint']}" type="continuous">
+      <parent link="${name}_steering_link"/><child link="${name}_wheel"/>
+      <origin xyz="0 0 ${radius - m['cad_steering_xyz'][2]}" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+  <xacro:module m="${p['modules'][0]}"/>
+  <xacro:module m="${p['modules'][1]}"/>
+  <xacro:module m="${p['modules'][2]}"/>
+  <xacro:module m="${p['modules'][3]}"/>
+</robot>
