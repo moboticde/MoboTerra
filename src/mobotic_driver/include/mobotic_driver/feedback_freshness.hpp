@@ -64,7 +64,8 @@ public:
   }
   bool motionFresh(bool steering, double timeout, Clock::time_point now = Clock::now()) const
   {
-    return fresh(VELOCITY, timeout, now) && (!steering || fresh(POSITION, timeout, now));
+    (void)steering;
+    return fresh(VELOCITY, timeout, now) && fresh(POSITION, timeout, now);
   }
   bool ready(bool steering, double motion_timeout, double status_timeout, double fault_timeout,
              Clock::time_point now = Clock::now()) const

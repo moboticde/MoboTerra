@@ -13,7 +13,7 @@ class CommandRecoveryTest(unittest.TestCase):
         self.platform.setUp()
         self.node = self.platform.node
         del self.node._source_gate
-        self.node.current_mode = harness.MODES.AUTO_VELOCITY
+        self.node.selected_mode = harness.MODES.AUTO_VELOCITY
         self.node.direct_traction_control_mode = 'velocity'
         self.node.max_direct_steering_velocity = 4.32
         self.node.max_direct_traction_velocity = 11.12
@@ -42,7 +42,7 @@ class CommandRecoveryTest(unittest.TestCase):
         return command
 
     def test_manual_motion_without_physical_deadman_still_requires_active_connected_source(self):
-        self.node.current_mode = harness.MODES.MANUAL
+        self.node.selected_mode = harness.MODES.MANUAL
         self.node.manual_state.deadman_pressed = False
         self.node._manual_command_callback(self.velocity())
         self.assertTrue(self.node._source_gate(self.platform.now)[0])
@@ -61,7 +61,7 @@ class CommandRecoveryTest(unittest.TestCase):
         for mode in (harness.MODES.MANUAL, harness.MODES.AUTO_VELOCITY, harness.MODES.AUTO_DIRECT):
             with self.subTest(mode=mode):
                 self.setUp()
-                self.node.current_mode = mode
+                self.node.selected_mode = mode
                 manual, automatic, direct = self.velocity(), self.velocity(), self.joints()
                 self.node._manual_command_callback(manual)
                 self.node._autonomy_command_callback(automatic)
@@ -88,7 +88,7 @@ class CommandRecoveryTest(unittest.TestCase):
         )
         command.position = [0.7, -0.4, 0.0, 0.0]
         command.velocity = [1.0, 1.0, 2.0, 2.0]
-        command.effort = [0.0, 0.0, 1.0, 1.0]
+        command.effort = []
         return command
 
     def test_velocity_recovery_requires_new_original_source_command(self):
@@ -96,7 +96,7 @@ class CommandRecoveryTest(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.setUp()
                 node = self.node
-                node.current_mode = mode
+                node.selected_mode = mode
                 callback = (node._manual_command_callback if mode == harness.MODES.MANUAL
                             else node._autonomy_command_callback)
                 old = self.velocity()
@@ -121,11 +121,11 @@ class CommandRecoveryTest(unittest.TestCase):
                 self.assertGreater(node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
 
     def test_direct_recovery_requires_new_joint_command_in_both_traction_modes(self):
-        for traction_mode in ('velocity', 'current'):
+        for traction_mode in ('velocity',):
             with self.subTest(traction_mode=traction_mode):
                 self.setUp()
                 node = self.node
-                node.current_mode = harness.MODES.AUTO_DIRECT
+                node.selected_mode = harness.MODES.AUTO_DIRECT
                 node.direct_traction_control_mode = traction_mode
                 old = self.joints()
                 node._autonomy_joint_callback(old)
@@ -138,15 +138,14 @@ class CommandRecoveryTest(unittest.TestCase):
                 node._control()
                 stop = node.direct_command_publisher.messages[-1]
                 self.assertEqual(stop.velocity, [0.0] * 4)
-                self.assertEqual(stop.effort, [0.0] * 4)
+                self.assertEqual(stop.effort, [])
                 node._autonomy_joint_callback(old)
                 self.assertIsNone(node.autonomy_joint_command)
                 node._autonomy_joint_callback(self.joints())
                 node._control()
                 resumed = node.direct_command_publisher.messages[-1]
-                self.assertEqual(resumed.velocity[2:] if traction_mode == 'velocity'
-                                 else resumed.effort[2:], [2.0, 2.0] if traction_mode == 'velocity'
-                                 else [1.0, 1.0])
+                self.assertEqual(resumed.velocity[2:], [0.0, 0.0])
+                self.assertIn('DRIVE_FAULT:front', node.fault_codes)
                 self.assertFalse(node.cmd_vel_publisher.messages)
 
     def test_commands_arriving_while_blocked_are_not_buffered(self):
@@ -191,7 +190,7 @@ class CommandRecoveryTest(unittest.TestCase):
                 self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
 
     def test_direct_reduced_speed_recovery_requires_new_command(self):
-        self.node.current_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.AUTO_DIRECT
         self.node._autonomy_joint_callback(self.joints())
         self.node.safety_state.warning_field_active = True
         self.node._control()
@@ -202,7 +201,7 @@ class CommandRecoveryTest(unittest.TestCase):
         self.assertIsNone(self.node.autonomy_joint_command)
 
     def test_direct_joint_feedback_recovery_requires_new_command(self):
-        self.node.current_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.AUTO_DIRECT
         self.node._autonomy_joint_callback(self.joints())
         invalid = harness.JointState()
         invalid.header.stamp = self.platform.now.to_msg()

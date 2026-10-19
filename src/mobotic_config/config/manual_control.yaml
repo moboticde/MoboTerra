@@ -4,6 +4,9 @@
     axis_speed: 3
     axis_crab: 2
     axis_steer: 0
+    axis_speed_sign: 1
+    axis_crab_sign: 1
+    axis_steer_sign: 1
     button_deadman: -1
     buttons_boost: [9, 10]
     button_mode_switch: 4

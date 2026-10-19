@@ -36,7 +36,7 @@ class SteeringTargetLimitsTest(unittest.TestCase):
         msg.name = self.node.expected_steering_joint_names + self.node.expected_traction_joint_names
         msg.position = [0.1] * 4 + [0.0] * 4
         msg.velocity = [1.0] * 4 + [2.0] * 4
-        msg.effort = [0.0] * 8
+        msg.effort = []
         return msg
 
     def test_normal_and_multi_turn_angles_are_not_wrapped(self):
@@ -69,7 +69,7 @@ class SteeringTargetLimitsTest(unittest.TestCase):
         self.assertFalse(representable(10.0, sys.float_info.max))
 
     def test_any_unsafe_steering_joint_rejects_the_whole_direct_command(self):
-        for mode in ('velocity', 'current'):
+        for mode in ('velocity',):
             self.node.direct_traction_control_mode = mode
             for index in range(4):
                 for value in (1e100, -1e100, angle_for_ticks(MAX_TICKS + 1)):
@@ -90,11 +90,11 @@ class SteeringTargetLimitsTest(unittest.TestCase):
         self.assertFalse(self.node._joint_command_valid(msg))
 
     def test_invalid_replacement_clears_cached_command_and_stops(self):
-        for mode in ('velocity', 'current'):
+        for mode in ('velocity',):
             with self.subTest(mode=mode):
                 self.setUp()
                 node = self.node
-                node.current_mode = harness.MODES.AUTO_DIRECT
+                node.selected_mode = harness.MODES.AUTO_DIRECT
                 node.direct_traction_control_mode = mode
                 del node._source_gate  # Use the real selected-source gate.
                 good = self.command()
@@ -109,7 +109,7 @@ class SteeringTargetLimitsTest(unittest.TestCase):
                 node._control()
                 stop = node.direct_command_publisher.messages[-1]
                 self.assertEqual(stop.velocity, [0.0] * 8)
-                self.assertEqual(stop.effort, [0.0] * 8)
+                self.assertEqual(stop.effort, [])
                 self.assertEqual(stop.position[:4], node.joint_state.position[:4])
                 self.assertTrue(node.module_command_publisher.messages[-1].enable)
 

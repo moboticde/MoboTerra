@@ -4,8 +4,12 @@ Provides the monitoring boundary between the SICK FlexiSoft safety controller an
 
 `flexisoft_tcp_bridge` accepts fixed-size Ethernet telegrams and publishes the configured status byte on
 `flexisoft/status_byte`. `safety_monitor` decodes that byte into `safety/io_state` and a fail-safe `safety/state`.
-Communication loss asserts emergency stop, STO, and protective stop in the ROS monitoring state.
+Communication loss inhibits motion and marks physical safety states unknown; it does not fabricate a confirmed E-stop or STO.
 The complete received bytes are also published on `flexisoft/telegram`.
+The status byte uses `SafetyTelegram`, preserving receipt timestamp, connection
+epoch and sequence. Periodic publications never refresh the acquisition time.
+`scanner_safety_adapter` provides generic scanner field/OSSD status and diagnostics
+for both scanners to autonomy; field-set numbers remain unknown.
 
 The ROS node only monitors and reports the hardware safety system. It must not be used as the safety-rated stop path.
 The configured 15-byte telegram size, byte offset, and bit masks reproduce the existing platform mapping and must be

@@ -183,8 +183,10 @@ enum ParameterIds
   EC_CONTROLWORD = 0x6040,
   EC_STATUSWORD = 0x6041,
   EC_TRACTION_MODE_OF_OPERATION = 0x6060,
+  EC_TRACTION_MODE_DISPLAY = 0x6061,
   EC_TRACTION_VELOCITY_INPUT = 0x60FF,
   EC_TRACTION_VELOCITY_FEEDBACK = 0x606C,
+  EC_TRACTION_POSITION_FEEDBACK = 0x6064,
   EC_TRACTION_MAX_PROFILE_VELOCITY = 0x607F,
   EC_TRACTION_PROFILE_ACCEL = 0x6083,
   EC_TRACTION_PROFILE_DECEL = 0x6084,
@@ -192,6 +194,7 @@ enum ParameterIds
   EC_TRACTION_MAX_ACCEL = 0x60C5,
   EC_TRACTION_MAX_DECEL = 0x60C6,
   EC_TRACTION_CURRENT_FEEDBACK = 0x6078,
+  EC_TRACTION_RATED_CURRENT = 0x6075,
   EC_ERROR_REGISTER = 0x1001,
   EC_ERROR_CODE = 0x603F,
   EC_RPDO1_COMMUNICATION_PARAMETER = 0x1400,
@@ -229,6 +232,7 @@ constexpr std::uint32_t EC_TRACTION_RPDO_TARGET_VELOCITY_MAPPING = 0x60FF0020;
 constexpr std::uint32_t EC_TRACTION_TPDO_STATUSWORD_MAPPING = 0x60410010;
 constexpr std::uint32_t EC_TRACTION_TPDO_MODE_DISPLAY_MAPPING = 0x60610008;
 constexpr std::uint32_t EC_TRACTION_TPDO_ACTUAL_VELOCITY_MAPPING = 0x606C0020;
+constexpr std::uint32_t EC_TRACTION_TPDO_ACTUAL_POSITION_MAPPING = 0x60640020;
 constexpr std::uint32_t EC_TRACTION_TPDO_ACTUAL_CURRENT_MAPPING = 0x60780010;
 constexpr std::uint32_t EC_TRACTION_TPDO_DRIVE_TEMPERATURE_MAPPING = 0x22A20010;
 
@@ -380,6 +384,7 @@ public:
     const std::uint32_t rpdo_cob_id = tractionRpdoCobId();
     const std::uint32_t tpdo_cob_id = tractionTpdoCobId();
     const std::uint32_t telemetry_tpdo_cob_id = telemetryTpdo2CobId();
+    const std::uint32_t position_tpdo_cob_id = telemetryTpdo3CobId();
 
     return {
       nmtPreOperationalRequest(),
@@ -387,9 +392,12 @@ public:
       make_sdo_u32(EC_TPDO1_COMMUNICATION_PARAMETER, 0x01, CANOPEN_PDO_COB_ID_INVALID_BIT | tpdo_cob_id),
       make_sdo_u32(EC_TPDO2_COMMUNICATION_PARAMETER, 0x01,
                    CANOPEN_PDO_COB_ID_INVALID_BIT | telemetry_tpdo_cob_id),
+      make_sdo_u32(EC_TPDO3_COMMUNICATION_PARAMETER, 0x01, CANOPEN_PDO_COB_ID_INVALID_BIT | position_tpdo_cob_id),
       make_sdo_u8(EC_RPDO1_MAPPING_PARAMETER, 0x00, 0),
       make_sdo_u8(EC_TPDO1_MAPPING_PARAMETER, 0x00, 0),
       make_sdo_u8(EC_TPDO2_MAPPING_PARAMETER, 0x00, 0),
+      make_sdo_u8(EC_TPDO3_MAPPING_PARAMETER, 0x00, 0),
+      make_sdo_u32(EC_TPDO3_MAPPING_PARAMETER, 0x01, EC_TRACTION_TPDO_ACTUAL_POSITION_MAPPING),
       make_sdo_u32(EC_RPDO1_MAPPING_PARAMETER, 0x01, EC_TRACTION_RPDO_CONTROLWORD_MAPPING),
       make_sdo_u32(EC_RPDO1_MAPPING_PARAMETER, 0x02, EC_TRACTION_RPDO_TARGET_VELOCITY_MAPPING),
       make_sdo_u32(EC_TPDO1_MAPPING_PARAMETER, 0x01, EC_TRACTION_TPDO_STATUSWORD_MAPPING),
@@ -400,12 +408,15 @@ public:
       make_sdo_u8(EC_RPDO1_MAPPING_PARAMETER, 0x00, 2),
       make_sdo_u8(EC_TPDO1_MAPPING_PARAMETER, 0x00, 3),
       make_sdo_u8(EC_TPDO2_MAPPING_PARAMETER, 0x00, 2),
+      make_sdo_u8(EC_TPDO3_MAPPING_PARAMETER, 0x00, 1),
+      make_sdo_u8(EC_TPDO3_COMMUNICATION_PARAMETER, 0x02, CANOPEN_SYNCHRONOUS_EVERY_SYNC),
       make_sdo_u8(EC_RPDO1_COMMUNICATION_PARAMETER, 0x02, CANOPEN_SYNCHRONOUS_EVERY_SYNC),
       make_sdo_u8(EC_TPDO1_COMMUNICATION_PARAMETER, 0x02, CANOPEN_SYNCHRONOUS_EVERY_SYNC),
       make_sdo_u8(EC_TPDO2_COMMUNICATION_PARAMETER, 0x02, telemetry_sync_divider),
       make_sdo_u32(EC_RPDO1_COMMUNICATION_PARAMETER, 0x01, rpdo_cob_id),
       make_sdo_u32(EC_TPDO1_COMMUNICATION_PARAMETER, 0x01, tpdo_cob_id),
       make_sdo_u32(EC_TPDO2_COMMUNICATION_PARAMETER, 0x01, telemetry_tpdo_cob_id),
+      make_sdo_u32(EC_TPDO3_COMMUNICATION_PARAMETER, 0x01, position_tpdo_cob_id),
       nmtOperationalRequest(),
     };
   }
@@ -530,7 +541,7 @@ public:
   can_msgs::msg::Frame readDeviceModeRequest() const
   {
     return createAndFillMoboticHeader(
-        requestNodeID_, READ_FROM_DEVICE, isTractionController() ? EC_TRACTION_MODE_OF_OPERATION : MICONTROL_DEVICE_MODE,
+        requestNodeID_, READ_FROM_DEVICE, isTractionController() ? EC_TRACTION_MODE_DISPLAY : MICONTROL_DEVICE_MODE,
         0x00);
   }
 
@@ -570,7 +581,7 @@ public:
     std::vector<can_msgs::msg::Frame> frames;
     if (has_statusword_ && (statusword_ & 0x004F) == 0x0008)
     {
-      frames.push_back(make_controlword_frame(0x0080));
+      return {}; // Fault clearing is an explicit supervisor transaction only.
     }
 
     frames.push_back(make_controlword_frame(0x0006));
@@ -604,7 +615,7 @@ public:
     {
       if (isTractionController())
       {
-        return readDeviceStateRequest();
+        return createAndFillMoboticHeader(requestNodeID_, READ_FROM_DEVICE, EC_TRACTION_POSITION_FEEDBACK, 0);
       }
       feedback_parameter = POSITION_FEEDBACK;
       subindex = 0x00;
@@ -630,7 +641,19 @@ public:
     const auto accept = [this, received_at, source_stamp_ns](FeedbackFreshness::Field field) {
       return feedback_freshness_.record(field, received_at, source_stamp_ns);
     };
-    if (isTractionController() && frame.id == tractionTpdoCobId() && frame.dlc >= 7)
+    if (frame.id == 0x700 + requestNodeID_ - 0x600 && frame.dlc == 1 && frame.data[0] == 0)
+    {
+      rated_current_ma_ = 0;
+      initialized_ = enabled_ = has_statusword_ = false;
+      current_mode_ = UNKNOWN;
+      return frames;
+    }
+    if (isTractionController() && frame.id == telemetryTpdo3CobId() && frame.dlc == 4)
+    {
+      if (accept(FeedbackFreshness::POSITION)) { feedbacks_[POSITION_FEEDBACK] = intFromFrame(frame, 0); }
+      return frames;
+    }
+    if (isTractionController() && frame.id == tractionTpdoCobId() && frame.dlc == 7)
     {
       // PDO and SDO sources share per-field ordering. A newer SDO status must
       // survive an older PDO, without discarding genuinely newer PDO velocity.
@@ -638,6 +661,7 @@ public:
       {
         statusword_ = static_cast<unsigned short>(shortFromFrame(frame, 0));
         has_statusword_ = true;
+        native_device_state_ = statusword_;
         enabled_ = (statusword_ & 0x006F) == 0x0027;
       }
       if (accept(FeedbackFreshness::CONTROL_MODE))
@@ -699,7 +723,7 @@ public:
       error_code_ = static_cast<uint16_t>(shortFromFrame(frame, 4));
     }
     else if (subindex == 0 && ((isSteeringController() && parameterId == MICONTROL_DEVICE_MODE && size == 4) ||
-             (isTractionController() && parameterId == EC_TRACTION_MODE_OF_OPERATION)))
+             (isTractionController() && parameterId == EC_TRACTION_MODE_DISPLAY && size == 1)))
     {
       if (!accept(FeedbackFreshness::CONTROL_MODE)) { return frames; }
       current_mode_ = static_cast<DeviceMode>(frame.data[4]);
@@ -713,14 +737,21 @@ public:
       if (!accept(FeedbackFreshness::STATUS)) { return frames; }
       statusword_ = static_cast<unsigned short>(shortFromFrame(frame, 4));
       has_statusword_ = true;
+      native_device_state_ = statusword_;
       enabled_ = (statusword_ & 0x006F) == 0x0027;
     }
     else if (isSteeringController() && parameterId == MICONTROL_DEVICE_STATE && subindex == 0 && size >= 2)
     {
       if (!accept(FeedbackFreshness::STATUS)) { return frames; }
+      native_device_state_ = intFromFrame(frame, 4);
       enabled_ = frame.data[4] != 0;
     }
-    else if ((isTractionController() && parameterId == EC_TRACTION_CURRENT_FEEDBACK && subindex == 0 && size >= 2) ||
+    else if (isTractionController() && parameterId == EC_TRACTION_RATED_CURRENT && subindex == 0 && size == 4)
+    {
+      if (rated_current_sample_.record(received_at, source_stamp_ns))
+      { rated_current_ma_ = static_cast<uint32_t>(intFromFrame(frame, 4)); }
+    }
+    else if ((isTractionController() && parameterId == EC_TRACTION_CURRENT_FEEDBACK && subindex == 0 && size == 2) ||
              (isSteeringController() && parameterId == MICONTROL_CURRENT_FEEDBACK && subindex == 1 && size == 4))
     {
       if (!accept(FeedbackFreshness::CURRENT)) { return frames; }
@@ -732,7 +763,8 @@ public:
       if (!accept(FeedbackFreshness::VELOCITY)) { return frames; }
       feedbacks_[VELOCITY_FEEDBACK] = intFromFrame(frame, 4);
     }
-    else if (isSteeringController() && parameterId == POSITION_FEEDBACK && subindex == 0 && size == 4)
+    else if (((isSteeringController() && parameterId == POSITION_FEEDBACK) ||
+             (isTractionController() && parameterId == EC_TRACTION_POSITION_FEEDBACK)) && subindex == 0 && size == 4)
     {
       if (!accept(FeedbackFreshness::POSITION)) { return frames; }
       feedbacks_[POSITION_FEEDBACK] = intFromFrame(frame, 4);
@@ -761,9 +793,10 @@ public:
   bool enabled() const { return enabled_; }
   const FeedbackFreshness& feedbackFreshness() const { return feedback_freshness_; }
   bool hasError() const { return error_ != 0; }
-  bool initialized() const { return initialized_; }
+  bool initialized() const { return initialized_ && current_mode_ == target_mode_; }
   bool hasStatusword() const { return has_statusword_; }
   unsigned short statusword() const { return statusword_; }
+  int32_t nativeDeviceState() const { return native_device_state_; }
 
   bool hasFeedback(const ParameterIds feedback_type) const
   {
@@ -830,6 +863,17 @@ public:
   double resolution() const { return resolution_; }
   double gearRatio() const { return gear_ratio_; }
 
+  // Elmo 6078 is per-mille of 6075 (mA), not mA. MiControl 3262:1 is mA.
+  double motorCurrentAmps(FeedbackFreshness::Clock::time_point now = FeedbackFreshness::Clock::now()) const
+  {
+    if (!hasFeedback(CURRENT_FEEDBACK)) { return std::numeric_limits<double>::quiet_NaN(); }
+    if (!isTractionController()) { return feedback(CURRENT_FEEDBACK) / 1000.0; }
+    const double rated_age = rated_current_sample_.age(now);
+    if (rated_current_ma_ == 0 || rated_age < 0.0 || rated_age > 2.0)
+    { return std::numeric_limits<double>::quiet_NaN(); }
+    return feedback(CURRENT_FEEDBACK) * static_cast<double>(rated_current_ma_) / 1000000.0;
+  }
+
 private:
   std::string id_;
   unsigned requestNodeID_{0};
@@ -841,10 +885,13 @@ private:
   bool is_traction_controller_{false};
   bool has_statusword_{false};
   unsigned short statusword_{0};
+  int32_t native_device_state_{0};
   unsigned short traction_pdo_controlword_{0};
   int traction_pdo_target_velocity_{0};
   int error_{0};
   int error_code_{0};
+  uint32_t rated_current_ma_{0};
+  OrderedFeedbackSample rated_current_sample_;
   std::map<ParameterIds, double> feedbacks_;
   FeedbackFreshness feedback_freshness_;
   std::map<DriveLimits, double> limits_;

@@ -53,6 +53,9 @@
     "telemetry_pdo_enabled": true,
     "telemetry_pdo_sync_divider": 1,
     "traction_pdo_period": 0.02,
+    "sample_skew_budget": 0.005,
+    "max_steering_velocity": 4.32,
+    "max_traction_velocity": 11.12,
     "traction_max_profile_velocity": 116053,
     "traction_profile_accel": 32093,
     "traction_profile_decel": 32093,
@@ -347,12 +350,17 @@
       "rear_right_traction"
     ],
     "direct_traction_control_mode": "velocity",
+    "require_operator_interlock": false,
     "direct_steering_encoder_resolutions": [
       4096,
       4096,
       4096,
       4096
     ],
+    "startup_grace": 10.0,
+    "reset_timeout": 5.0,
+    "required_health_sources": ["kinematics"],
+    "health_timeout": 0.3,
     "control_period": 0.02,
     "mode_transition_stop_duration": 0.25,
     "mode_transition_timeout": 10,

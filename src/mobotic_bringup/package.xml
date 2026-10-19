@@ -15,6 +15,9 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>mobotic_driver</exec_depend>
+  <exec_depend>mobotic_description</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>mobotic_interfaces</exec_depend>
   <exec_depend>mobotic_kinematics</exec_depend>
   <exec_depend>mobotic_odometry</exec_depend>

@@ -18,6 +18,9 @@ class SoftwareInstallationTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.deploy = self.root / 'repo' / 'deploy'
         shutil.copytree(DEPLOY, self.deploy)
+        profile = self.root / 'repo/src/mobotic_config/config/platform.yaml'
+        profile.parent.mkdir(parents=True)
+        shutil.copyfile(DEPLOY.parent / 'src/mobotic_config/config/platform.yaml', profile)
         text = (self.deploy / 'install.sh').read_text()
         # Only the test copy bypasses root authentication; every filesystem write
         # is redirected to this temporary root and external operations are fake.

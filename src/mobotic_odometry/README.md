@@ -1,7 +1,7 @@
 # mobotic_odometry
 
 Planar wheel odometry from measured body velocity:
-`joint_states -> mobotic_kinematics -> agv_vel -> mobotic_odometry`.
+`joint_states -> mobotic_kinematics -> vehicle/measured_velocity -> mobotic_odometry`.
 Forward kinematics uses all four steering positions and traction velocities,
 the actual module coordinates, mounting yaws and wheel radius. No commanded
 velocity, laser scan or autonomous planner is used for integration.
@@ -10,11 +10,11 @@ velocity, laser scan or autonomous planner is used for integration.
 
 | Direction | Namespace-relative interface | Type / purpose |
 |:--|:--|:--|
-| Input | `agv_vel` | `geometry_msgs/msg/TwistStamped`, measured body vx/vy/wz |
-| Output | `odometry` | `nav_msgs/msg/Odometry` |
+| Input | `vehicle/measured_velocity` | `geometry_msgs/msg/TwistStamped`, measured body vx/vy/wz |
+| Output | `vehicle/odom` | `nav_msgs/msg/Odometry` |
 | Output | `tf` | `odom -> base_link`, optional, same pose/stamp as odometry |
 | Output | `diagnostics` | Feedback freshness and persistent gap warning |
-| Service | `odometry/reset` | `std_srvs/srv/Trigger`; requires fresh measured standstill |
+| Service | `vehicle/reset_odometry` | `std_srvs/srv/Trigger`; requires fresh measured standstill |
 
 The default namespace is `/moboterra`. Pose is in `odom`; twist is in
 `base_link`, following the [Odometry message contract](https://github.com/ros2/common_interfaces/blob/jazzy/nav_msgs/msg/Odometry.msg).
@@ -68,7 +68,7 @@ Standalone, alongside driver/kinematics (do not duplicate integrated bringup):
 
 ```bash
 ros2 launch mobotic_odometry odometry.launch.py robot_name:=moboterra
-ros2 topic info /moboterra/odometry -v
+ros2 topic info /moboterra/vehicle/odom -v
 ros2 topic echo /moboterra/diagnostics
 ```
 
@@ -79,7 +79,7 @@ retains replay watermarks and waits for a new measured sample. Call only during
 commissioning with downstream consumers aware of the reset:
 
 ```bash
-ros2 service call /moboterra/odometry/reset std_srvs/srv/Trigger '{}'
+ros2 service call /moboterra/vehicle/odom/reset std_srvs/srv/Trigger '{}'
 ```
 
 Tests exercise the real integration engine, ROS callback/message adapters and

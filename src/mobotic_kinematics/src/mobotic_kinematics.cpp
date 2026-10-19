@@ -70,10 +70,10 @@ public:
     command_publisher_ = this->create_publisher<sensor_msgs::msg::JointState>(
         "kinematics/joint_setpoints", rclcpp::QoS(rclcpp::KeepLast(1)));
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
-        "agv_vel", rclcpp::QoS(rclcpp::KeepLast(1)));
+        "vehicle/measured_velocity", rclcpp::QoS(rclcpp::KeepLast(1)));
 
     cmd_vel_subscription_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
-        "cmd_vel", rclcpp::QoS(rclcpp::KeepLast(1)),
+        "vehicle/cmd_vel", rclcpp::QoS(rclcpp::KeepLast(1)),
         [this](const geometry_msgs::msg::TwistStamped& msg) { cmdVelCallback(msg); });
     joint_state_subscription_ = this->create_subscription<sensor_msgs::msg::JointState>(
         "joint_states", rclcpp::QoS(rclcpp::KeepLast(1)),
@@ -127,9 +127,9 @@ private:
       throw std::invalid_argument("wheel radius, velocity limits, and command/feedback timeouts must be positive");
     }
 
-    if (traction_control_mode_ != "velocity" && traction_control_mode_ != "current")
+    if (traction_control_mode_ != "velocity")
     {
-      throw std::invalid_argument("traction_control_mode must be 'velocity' or 'current'");
+      throw std::invalid_argument("only traction velocity commands are supported");
     }
     if (traction_control_mode_ == "current" &&
         (!std::isfinite(max_traction_current_) || max_traction_current_ <= 0.0))
@@ -272,26 +272,16 @@ private:
 
     sensor_msgs::msg::JointState output;
     output.header = msg.header;
-    const bool current_mode = traction_control_mode_ == "current";
-    const double current_magnitude = current_mode
-                                         ? max_traction_current_ * maximum_requested_velocity /
-                                               max_traction_velocity_
-                                         : 0.0;
 
     for (std::size_t i = 0; i < module_names_.size(); ++i)
     {
       output.name.push_back(steering_joint_names_[i]);
       output.position.push_back(steering_targets[i]);
       output.velocity.push_back(steering_velocities[i]);
-      output.effort.push_back(0.0);
 
       output.name.push_back(traction_joint_names_[i]);
       output.position.push_back(0.0);
-      output.velocity.push_back(current_mode ? 0.0 : traction_velocities[i]);
-      output.effort.push_back(
-          current_mode && std::abs(traction_velocities[i]) > 0.0
-              ? std::copysign(current_magnitude, traction_velocities[i])
-              : 0.0);
+      output.velocity.push_back(traction_velocities[i]);
     }
 
     command_publisher_->publish(output);

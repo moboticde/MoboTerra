@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed host supervisor for MoboTerra CAN and Docker lifecycle."""
+"""Host CAN monitoring: operational faults preserve ROS and inhibit motion through ERROR."""
 
 from __future__ import annotations
 
@@ -315,18 +315,18 @@ class Supervisor:
         self.config_identity: tuple[str, str, int, int] | None = None
         self.stable_since = 0.0
         self.start_deadline: float | None = None
-        self.running_since: float | None = None
-        self.bus_off_since: float | None = None
         self.last_bus_off_count: int | None = None
         self.bus_off_events: list[float] = []
         self.failures = 0
-        self.backoff_until = 0.0
+        self.launch_attempted = False
 
     def request_stop(self, *_args) -> None:
         self.stop_requested = True
 
     def publish_state(self, state: str, detail: str, **extra) -> None:
         changed = state != self.state or detail != self.detail
+        if state == 'ERROR' and self.state != 'ERROR':
+            self.failures += 1
         self.state, self.detail = state, detail
         if changed:
             LOG.info("state=%s detail=%s", state, detail)
@@ -348,137 +348,96 @@ class Supervisor:
             LOG.warning("Stopping MoboTerra: %s", reason)
             self.backend.stop_stack()
         self.start_deadline = None
-        self.running_since = None
 
-    def schedule_backoff(self, now: float, reason: str, *, deactivate_can: bool = False) -> None:
-        self.stop_stack(reason)
-        if deactivate_can:
-            self.backend.deactivate_links()
-            self.bus_off_since = None
-            self.last_bus_off_count = None
-            self.bus_off_events.clear()
-        self.failures += 1
-        delay = min(60.0, float(2 ** min(self.failures, 6)))
-        self.backoff_until = now + delay
-        self.publish_state("BACKOFF", f"{reason}; retrying in {delay:.0f}s")
+    def step(self, now: float) -> float:
+        """One monitoring pass. Only explicit service shutdown calls stop_stack.
+
+        Host faults are exported to the required ROS host-health input. Keep
+        monitoring alive; do not tear down CAN or a running container on faults.
+        A disappeared/crashed container requires an explicit service restart.
+        """
+        try:
+            config = self.backend.read_config()
+        except (OSError, ConfigurationError, CommandError) as exc:
+            self.publish_state("ERROR", f"Deployment configuration unavailable: {exc}")
+            return 2.0
+        issues = []
+        try:
+            mapping = select_devices(self.backend.list_can_devices(), config)
+            identity = (config.platform_serial, config.battery_serial, config.bitrate, config.ros_domain_id)
+            if self.config_identity is not None and identity != self.config_identity:
+                # Do not silently apply new deployment identity to live processes.
+                issues.append("Deployment configuration changed; explicit service restart required")
+            elif self.config_identity is None:
+                self.config_identity = identity
+            if mapping.identity != self.stable_identity:
+                self.stable_identity = mapping.identity
+                self.stable_since = now
+            if not self.backend.links_ready(mapping, config):
+                if now - self.stable_since < config.stable_seconds:
+                    issues.append("CAN adapters detected; waiting for stable identity")
+                elif identity == self.config_identity:
+                    # Export the fault BEFORE touching interfaces. Recovery must
+                    # not erase the ROS supervisor's latched error or old-input fence.
+                    self.publish_state("ERROR", "Configuring recovered CAN interfaces; motion inhibited")
+                    self.backend.configure_links(mapping, config)
+                    mapping = select_devices(self.backend.list_can_devices(), config)
+                    if not self.backend.links_ready(mapping, config):
+                        issues.append("CAN verification failed after configuration")
+                    else:
+                        issues.append("CAN interfaces reconfigured; ROS reset required before motion")
+            count = self.backend.platform_bus_off_count()
+            if count is not None:
+                if self.last_bus_off_count is not None and count > self.last_bus_off_count:
+                    self.bus_off_events.extend([now] * min(count - self.last_bus_off_count, 3))
+                elif self.last_bus_off_count is not None and count < self.last_bus_off_count:
+                    self.bus_off_events.clear()
+                self.last_bus_off_count = count
+            self.bus_off_events = [event for event in self.bus_off_events if now - event <= 60.0]
+            if len(self.bus_off_events) >= 3:
+                issues.append("Platform CAN entered BUS-OFF at least three times in 60s")
+            if self.backend.platform_bus_off():
+                issues.append("Platform CAN is BUS-OFF")
+        except (OSError, ConfigurationError, InventoryError, CommandError, subprocess.SubprocessError) as exc:
+            self.stable_identity = None
+            issues.append(str(exc))
+
+        try:
+            status, health = self.backend.stack_status()
+            if status == "running":
+                self.launch_attempted = True
+                if health == "healthy":
+                    self.start_deadline = None
+                elif health in {"starting", "none"}:
+                    if self.start_deadline is None:
+                        self.start_deadline = now + config.start_timeout
+                    issues.append("ROS health-check timeout" if now >= self.start_deadline
+                                  else f"ROS container health is {health}")
+                else:
+                    issues.append(f"ROS container health is {health}; container kept running")
+            elif not self.launch_attempted and status in {"absent", "exited", "dead"}:
+                # Start once on service startup, even with missing hardware, so
+                # the application can publish ERROR and remain inspectable.
+                self.launch_attempted = True
+                self.publish_state("ERROR", "; ".join(issues) or "Starting ROS; motion inhibited")
+                self.backend.start_stack()
+                self.start_deadline = now + config.start_timeout
+                issues.append("ROS startup awaiting health confirmation")
+            else:
+                issues.append(f"ROS container state={status}; explicit service restart required")
+        except (OSError, CommandError, subprocess.SubprocessError) as exc:
+            issues.append(f"Container monitoring/start failed: {exc}")
+
+        self.publish_state("ERROR" if issues else "RUNNING",
+                           "; ".join(issues) if issues else "CAN and required ROS processes available; ROS reset may still be required",
+                           platform_interface="can0", battery_interface="can1")
+        return config.poll_seconds
 
     def run(self) -> int:
         while not self.stop_requested:
-            now = time.monotonic()
-            try:
-                config = self.backend.read_config()
-                devices = self.backend.list_can_devices()
-                mapping = select_devices(devices, config)
-            except (OSError, ConfigurationError, InventoryError, CommandError) as exc:
-                self.stable_identity = None
-                self.stop_stack(str(exc))
-                self.publish_state("WAITING_FOR_CAN", str(exc))
-                time.sleep(2.0)
-                continue
-
-            config_identity = (
-                config.platform_serial,
-                config.battery_serial,
-                config.bitrate,
-                config.ros_domain_id,
-            )
-            if config_identity != self.config_identity:
-                if self.config_identity is not None:
-                    self.stop_stack("Deployment configuration changed")
-                self.config_identity = config_identity
-                self.stable_identity = None
-
-            if mapping.identity != self.stable_identity:
-                if self.stable_identity is not None:
-                    self.stop_stack("CAN adapter identity changed")
-                self.stable_identity = mapping.identity
-                self.stable_since = now
-                self.publish_state("WAITING_FOR_CAN", "Both adapters detected; debouncing")
-                time.sleep(config.poll_seconds)
-                continue
-            if now - self.stable_since < config.stable_seconds:
-                self.publish_state("WAITING_FOR_CAN", "Both adapters detected; debouncing")
-                time.sleep(config.poll_seconds)
-                continue
-
-            if now < self.backoff_until:
-                self.publish_state("BACKOFF", f"Waiting {self.backoff_until - now:.0f}s before retry")
-                time.sleep(config.poll_seconds)
-                continue
-
-            try:
-                if not self.backend.links_ready(mapping, config):
-                    self.stop_stack("CAN topology or configuration changed")
-                    self.publish_state("CONFIGURING_CAN", "Assigning and configuring can0/can1")
-                    self.backend.configure_links(mapping, config)
-                    remapped = select_devices(self.backend.list_can_devices(), config)
-                    if not self.backend.links_ready(remapped, config):
-                        raise CommandError("CAN verification failed after configuration")
-                    mapping = remapped
-
-                bus_off_count = self.backend.platform_bus_off_count()
-                if bus_off_count is not None:
-                    if self.last_bus_off_count is not None and bus_off_count > self.last_bus_off_count:
-                        self.bus_off_events.append(now)
-                    elif self.last_bus_off_count is not None and bus_off_count < self.last_bus_off_count:
-                        self.bus_off_events.clear()
-                    self.last_bus_off_count = bus_off_count
-                self.bus_off_events = [event for event in self.bus_off_events if now - event <= 60.0]
-
-                if len(self.bus_off_events) >= 3:
-                    self.schedule_backoff(
-                        now,
-                        "Platform CAN entered BUS-OFF at least three times in 60s",
-                        deactivate_can=True,
-                    )
-                    time.sleep(config.poll_seconds)
-                    continue
-                if self.backend.platform_bus_off():
-                    if self.bus_off_since is None:
-                        self.bus_off_since = now
-                    elif now - self.bus_off_since >= 5.0:
-                        self.schedule_backoff(
-                            now, "Platform CAN remained BUS-OFF", deactivate_can=True
-                        )
-                        time.sleep(config.poll_seconds)
-                        continue
-                else:
-                    self.bus_off_since = None
-
-                container_state, health = self.backend.stack_status()
-                if container_state == "absent" or container_state in {"exited", "dead"}:
-                    self.publish_state("STARTING_ROS", "Starting MoboTerra container")
-                    self.backend.start_stack()
-                    self.start_deadline = now + config.start_timeout
-                    self.running_since = None
-                elif container_state == "running" and health == "healthy":
-                    if self.running_since is None:
-                        self.running_since = now
-                    if now - self.running_since >= 60.0:
-                        self.failures = 0
-                    self.start_deadline = None
-                    self.publish_state(
-                        "RUNNING",
-                        "CAN is ready and required ROS processes are present",
-                        platform_interface="can0",
-                        battery_interface="can1",
-                    )
-                elif container_state == "running" and health in {"starting", "none"}:
-                    if self.start_deadline is None:
-                        self.start_deadline = now + config.start_timeout
-                    if now >= self.start_deadline:
-                        self.schedule_backoff(now, "ROS health-check timeout")
-                    else:
-                        self.publish_state("STARTING_ROS", f"Container health is {health}")
-                else:
-                    self.schedule_backoff(now, f"Container state={container_state}, health={health}")
-            except (OSError, InventoryError, CommandError, subprocess.SubprocessError) as exc:
-                LOG.exception("Supervisor operation failed")
-                self.schedule_backoff(now, str(exc))
-
-            time.sleep(config.poll_seconds)
-
-        self.stop_stack("Supervisor stopping")
+            time.sleep(self.step(time.monotonic()))
+        # Explicit operator/service shutdown still owns the container lifecycle.
+        self.stop_stack("Supervisor explicitly stopped")
         self.publish_state("STOPPED", "Supervisor stopped")
         return 0
 

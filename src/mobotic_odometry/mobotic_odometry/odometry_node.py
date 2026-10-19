@@ -38,11 +38,11 @@ class MoboticOdometry(Node):
         if self.odom_frame == self.base_frame:
             raise ValueError('Odometry and body frame IDs must differ')
         self.engine = PlanarOdometry(**parameters)
-        self.publisher = self.create_publisher(Odometry, 'odometry', 10)
+        self.publisher = self.create_publisher(Odometry, 'vehicle/odom', 10)
         self.diagnostic_publisher = self.create_publisher(DiagnosticArray, 'diagnostics', 10)
         self.broadcaster = TransformBroadcaster(self) if publish_tf else None
-        self.subscription = self.create_subscription(TwistStamped, 'agv_vel', self._receive, 1)
-        self.reset_service = self.create_service(Trigger, 'odometry/reset', self._reset)
+        self.subscription = self.create_subscription(TwistStamped, 'vehicle/measured_velocity', self._receive, 1)
+        self.reset_service = self.create_service(Trigger, 'vehicle/reset_odometry', self._reset)
         self.steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
         self.health_timer = self.create_timer(0.2, self._diagnostics, clock=self.steady_clock)
 

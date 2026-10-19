@@ -19,7 +19,7 @@ def battery_health(msg, minimum=0.2):
             not math.isfinite(msg.minimum_percentage) or not 0 <= msg.minimum_percentage <= 1):
         return ERROR, 'Battery not ready/invalid'
     if msg.minimum_percentage < minimum:
-        return ERROR, 'SOC below enable threshold'
+        return WARN, 'SOC below enable threshold'
     return OK, 'Battery ready'
 
 
@@ -27,7 +27,7 @@ def safety_health(msg):
     if not msg.communication_ok:
         return ERROR, 'FlexiSoft telemetry missing/stale'
     if msg.emergency_stop_active or msg.sto_active or not msg.system_ready:
-        return ERROR, msg.status_message or 'Safety not ready'
+        return WARN, msg.status_message or 'Safety inhibition'
     if not msg.motion_permitted or msg.warning_field_active or msg.safety_override_active:
         return WARN, msg.status_message or 'Safety restriction/override'
     return OK, msg.status_message or 'Safety ready'

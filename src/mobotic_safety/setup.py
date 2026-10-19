@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'flexisoft_tcp_bridge = mobotic_safety.flexisoft_tcp_bridge:main',
             'safety_monitor = mobotic_safety.safety_monitor:main',
+            'scanner_safety_adapter = mobotic_safety.scanner_safety:main',
         ],
     },
 )

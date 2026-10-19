@@ -4,6 +4,8 @@
 std_msgs/Header header
 
 bool emergency_stop_active
+bool emergency_stop_state_known
+bool scanner_state_known
 bool safety_enable_active
 bool sto_active
 # True only for a separately mapped, fresh hardware signal. Defaults below

@@ -5,6 +5,13 @@
 schema_version: 1
 robot_name: moboterra
 frames: {base: base_link, odom: odom}
+# Ground projection of the CAD physical-assembly collision envelope; includes
+# scanner arms. These are NOT a navigation footprint or chassis-only corners.
+reference_corners:
+  - {name: vehicle_front_left_corner, xyz: [1.2667297363, 0.9228179321, 0.0]}
+  - {name: vehicle_front_right_corner, xyz: [1.2667297363, -0.9203035278, 0.0]}
+  - {name: vehicle_rear_left_corner, xyz: [-1.2671105957, 0.9228179321, 0.0]}
+  - {name: vehicle_rear_right_corner, xyz: [-1.2671105957, -0.9203035278, 0.0]}
 can:
   master_node_id: '0x0A'
   drives: {interface: can0, bitrate: 500000}
@@ -70,6 +77,14 @@ modules:
     steering: {joint: rear_right_steering, can_node_id: '0x05'}
     traction: {joint: rear_right_traction, can_node_id: '0x06'}
 usb_joystick: {device_id: 0, autorepeat_rate: 20.0, deadzone: 0.08, sticky_buttons: false}
+operator:
+  source: remdevice
+  # Use source: usb for the PAIL's generic USB HID connection.
+  usb_driver: joy_node
+  usb_mapping_verified: false
+  # Ecobox shares can.drives (can0, 500 kbit/s). Configure its hardware separately.
+  # No motion or mode/reset requests until a recorded physical mapping is verified.
+  mapping: {verified: false, node_id: 9, axes: {}, buttons: {}}
 scanners:
   host_ip: '10.60.20.186'
   units:
@@ -109,5 +124,5 @@ commissioning_pending:
   - Verify actual battery participants and CAN telegram mapping.
   - Confirm FlexiSoft/ELMO independent STO and enable bit mapping.
   - Calibrate scanner extrinsics, wheel odometry and uncertainty.
-  - REMdevice CANopen receiver mapping and B2 error reset are not implemented.
+  - Capture PAIL controls and verify axis calibration, RP1/B1/B2/STOP and radio-loss behavior.
   - Configure CAN interfaces and host NIC externally; this package does not do so.

@@ -70,7 +70,7 @@ _NODES = {
     'kinematics': ('mobotic_kinematics', 'mobotic_kinematics', 'mobotic_kinematics'),
     'supervisor': ('mobotic_supervisor', 'mobotic_supervisor', 'mobotic_supervisor'),
     'odometry': ('mobotic_odometry', 'mobotic_odometry', 'mobotic_odometry'),
-    'manual': ('mobotic_manual_control', 'manual_control', 'manual_control'),
+    'manual': ('mobotic_manual_control', 'manual_control', 'operator'),
     'battery': ('mobotic_vanguard_battery', 'vanguard_battery_monitor', 'vanguard_battery_monitor'),
 }
 
@@ -83,7 +83,7 @@ def _standalone_setup(context, component):
         return actions + [Node(package='mobotic_safety', executable=executable, name=executable,
                                namespace=namespace, parameters=[cfg.parameters('safety')],
                                output='screen', respawn=True, respawn_delay=1.0)
-                          for executable in ('flexisoft_tcp_bridge', 'safety_monitor')]
+                          for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter')]
     parameters = cfg.parameters(component)
     if component == 'driver':
         legacy = {}
@@ -97,8 +97,8 @@ def _standalone_setup(context, component):
         cfg.apply_overrides(component, legacy, legacy=True)
         cfg._validate_policy()
         parameters = cfg.parameters(component)
-    if component == 'manual':
-        actions.append(Node(package='joy', executable='game_controller_node', name='joystick', namespace=namespace,
+    if component == 'manual' and cfg.platform.get('operator', {}).get('source', 'usb') == 'usb':
+        actions.append(Node(package='joy', executable=cfg.platform.get('operator', {}).get('usb_driver', 'game_controller_node'), name='joystick', namespace=namespace,
                             parameters=[cfg.platform['usb_joystick']], output='screen'))
     if component == 'odometry':
         parameters['publish_tf'] = boolean_override(context, 'publish_tf', parameters['publish_tf'])
@@ -115,6 +115,8 @@ def _standalone_setup(context, component):
                                   'enable_can_fd': 'false', 'filters': '0:0', 'interval_sec': '0.01',
                                   'use_bus_time': 'true'}.items())]))
     package, executable, name = _NODES[component]
+    if component == 'manual' and cfg.platform.get('operator', {}).get('source', 'usb') == 'remdevice':
+        executable = 'remdevice_control'
     remappings = [('can_rx', 'battery_can/can_rx')] if component == 'battery' else [('/tf', 'tf')] if component == 'odometry' else []
     actions.append(Node(package=package, executable=executable, name=name, namespace=namespace,
                         parameters=[parameters], output='screen', remappings=remappings,

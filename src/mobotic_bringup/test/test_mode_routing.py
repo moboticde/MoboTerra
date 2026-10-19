@@ -38,20 +38,21 @@ class ModeRoutingTest(unittest.TestCase):
         for launch in ('mobotic_bringup/launch/moboterra.launch.py',
                        'mobotic_config/mobotic_config/launching.py'):
             wiring = (PACKAGES / launch).read_text()
-            self.assertIn("executable='game_controller_node'", wiring)
+            self.assertIn("get('usb_driver', 'game_controller_node')", wiring)
             self.assertIn("cfg.platform['usb_joystick']", wiring)
         self.assertFalse(Configuration().platform['usb_joystick']['sticky_buttons'])
         for removed in ('button_mode_manual', 'button_mode_auto_velocity', 'button_mode_auto_direct'):
             self.assertNotIn(removed, defaults)
-        self.assertIn("VehicleModeRequest, 'vehicle/mode_request'", source)
+        self.assertIn("VehicleModeRequest, 'operator/mode_request'", source)
 
     def test_driver_labels_each_motion_input_and_consumes_mode_authority(self):
         source = (PACKAGES / 'mobotic_driver/src/mobotic_driver.cpp').read_text()
-        for topic, label in (('kinematics/joint_setpoints', 'Kinematics'),
-                             ('supervisor/joint_setpoints', 'SupervisorDirect')):
-            self.assertRegex(source, re.escape('"' + topic + '"') +
-                             r'[^;]*jointSetpointsCallback\(command, MotionSourceGate::Source::' + label)
-        self.assertIn('"vehicle/mode_state"', source)
+        self.assertIn('"wheel_modules/command"', source)
+        self.assertIn('this->finalCommandCallback(command)', source)
+        self.assertNotIn('"supervisor/joint_setpoints"', source)
+        self.assertNotIn('"kinematics/joint_setpoints"', source)
+        self.assertIn('msg.authority_generation != authority_.authority_generation', source)
+        self.assertIn('"vehicle/mode"', source)
         self.assertIn('motion_source_gate_.permits(source', source)
         self.assertIn('this->enforceModeAuthority();', source)
         self.assertIn('output.header = msg.header;',

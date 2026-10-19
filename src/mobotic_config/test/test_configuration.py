@@ -23,6 +23,11 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_every_previous_parameter_is_preserved(self):
         baseline = json.loads(Path(__file__).with_name('baseline_parameters.json').read_text())
+        # Hardware profile now selects CAN; unrelated USB policy/drive limits stay intact.
+        baseline['manual']['remdevice_mapping'] = json.dumps(
+            {'verified': False, 'node_id': 9, 'axes': {}, 'buttons': {}}, sort_keys=True)
+        baseline['supervisor']['require_operator_interlock'] = True
+        baseline['manual'].update(axis_speed_sign=1, axis_crab_sign=1, axis_steer_sign=1)
         for component, values in baseline.items():
             self.assertEqual(self.cfg.parameters(component), values, component)
 
@@ -33,6 +38,18 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(drive['can_node_id'], p['drives.can_node_ids'][index])
             self.assertEqual(drive['encoder_resolution'], p['drives.resolutions'][index])
             self.assertEqual(drive['gear_ratio'], p['drives.gear_ratios'][index])
+
+    def test_synchronized_profile_rejects_missing_pdos_and_invalid_skew(self):
+        for overrides in ({'traction_pdo_enabled': False}, {'telemetry_pdo_enabled': False},
+                          {'sample_skew_budget': 0}, {'sample_skew_budget': 0.02}):
+            cfg = Configuration()
+            cfg.apply_overrides('driver', overrides)
+            with self.subTest(overrides=overrides), self.assertRaises(ConfigurationError):
+                cfg._validate_policy()
+        for mode in ('autonomous', 'kinematicoff'):
+            cfg = Configuration()
+            cfg.apply_overrides('supervisor', {'initial_mode': mode})
+            cfg._validate_policy()
 
     def test_invalid_physical_profiles_fail(self):
         mutations = [lambda p: p.update(schema_version=True),
@@ -91,13 +108,64 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual((context['can_interface'], context['battery_can_interface']), ('can0', 'can1'))
         env = environment()
         executable = {'driver': 'mobotic_driver', 'kinematics': 'mobotic_kinematics',
-                      'manual': 'manual_control', 'supervisor': 'mobotic_supervisor',
+                      'manual': 'remdevice_control', 'supervisor': 'mobotic_supervisor',
                       'battery': 'vanguard_battery_monitor', 'odometry': 'mobotic_odometry'}
         for component, name in executable.items():
             standalone, _ = resolve(env['standalone_launch'](component))
             node = next(a for a in standalone if a.kind == 'Node' and a.kwargs['executable'] == name)
             integrated = next(a for a in actions if a.kind == 'Node' and a.kwargs['executable'] == name)
-            self.assertEqual(node.kwargs['parameters'][0], integrated.kwargs['parameters'][0])
+            expected = dict(node.kwargs['parameters'][0])
+            if component == 'supervisor':
+                expected['required_health_sources'] = ['kinematics', 'odometry']
+            self.assertEqual(expected, integrated.kwargs['parameters'][0])
+
+    def test_can_operator_and_usb_fallback_select_one_standalone_provider(self):
+        env = environment()
+        actions, _ = resolve(env['standalone_launch']('manual'))
+        nodes = [a.kwargs for a in actions if a.kind == 'Node']
+        self.assertEqual([node['executable'] for node in nodes], ['remdevice_control'])
+        self.assertEqual(nodes[0]['name'], 'operator')
+        with tempfile.TemporaryDirectory() as directory:
+            p = copy.deepcopy(self.cfg.platform)
+            p['operator'] = {'source': 'usb'}
+            path = Path(directory) / 'usb.yaml'
+            path.write_text(yaml.safe_dump(p))
+            actions, _ = resolve(env['standalone_launch']('manual'), {'platform_config': str(path)})
+            nodes = [a.kwargs for a in actions if a.kind == 'Node']
+            self.assertEqual([node['executable'] for node in nodes], ['game_controller_node', 'manual_control'])
+            self.assertEqual(nodes[1]['name'], 'operator')
+
+    def test_can_operator_rejects_node_collision_and_unknown_bus_setting(self):
+        for mutation in (lambda p: p['operator']['mapping'].update(node_id=10),
+                         lambda p: p['operator']['mapping'].update(node_id=1),
+                         lambda p: p['operator'].update(interface='can2')):
+            p = copy.deepcopy(self.cfg.platform)
+            mutation(p)
+            with self.assertRaises(ConfigurationError):
+                validate_platform(p)
+
+    def test_pail_usb_uses_generic_driver_and_inhibits_unverified_mapping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = copy.deepcopy(self.cfg.platform)
+            p['operator']['source'] = 'usb'
+            path = Path(directory) / 'pail-usb.yaml'
+            path.write_text(yaml.safe_dump(p))
+            cfg = Configuration(path)
+            self.assertFalse(cfg.parameters('manual')['input_mapping_verified'])
+            actions, _ = resolve(environment()['standalone_launch']('manual'), {'platform_config': str(path)})
+            nodes = [a.kwargs for a in actions if a.kind == 'Node']
+            self.assertEqual([node['executable'] for node in nodes], ['joy_node', 'manual_control'])
+            integrated, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                                    {'platform_config': str(path)})
+            joystick = next(a for a in integrated if a.kind == 'Node' and a.kwargs['name'] == 'joystick')
+            self.assertEqual(joystick.kwargs['executable'], 'joy_node')
+
+    def test_usb_driver_and_verification_types_are_validated(self):
+        for change in (dict(usb_driver='unknown'), dict(usb_mapping_verified='true')):
+            p = copy.deepcopy(self.cfg.platform)
+            p['operator'].update(change)
+            with self.assertRaises(ConfigurationError):
+                validate_platform(p)
 
     def test_namespace_root_and_endpoint_overrides(self):
         desc = factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')()

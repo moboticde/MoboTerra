@@ -53,6 +53,13 @@ class SafetyMonitorTest(unittest.TestCase):
         self.assertFalse(self.io[-1].safety_enable_state_known)
         self.assertEqual(self.io[-1].flexisoft_status_raw, 0x0F)
 
+    def test_one_ossd_channel_cannot_hide_the_other_low_channel(self):
+        for value in (0x0D, 0x0E, 0x07, 0x0B):
+            self.node.status_byte = value
+            self.node._publish()
+            self.assertFalse(self.state[-1].motion_permitted)
+            self.assertTrue(self.state[-1].protective_stop_active)
+
     def test_estop_is_conservative_not_confirmed_sto(self):
         self.node.status_byte = 0x1F
         self.node._publish()
@@ -75,7 +82,7 @@ class SafetyMonitorTest(unittest.TestCase):
             self.node._publish()
             self.assertFalse(self.state[-1].communication_ok)
             self.assertFalse(self.state[-1].motion_permitted)
-            self.assertTrue(self.io[-1].sto_active)
+            self.assertFalse(self.io[-1].sto_active)  # Timeout is unknown physical state, not confirmed STO.
             self.assertFalse(self.io[-1].sto_state_known)
 
 

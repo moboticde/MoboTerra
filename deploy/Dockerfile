@@ -4,7 +4,7 @@ ARG ROS_IMAGE=ros:jazzy-ros-base-noble
 FROM ${ROS_IMAGE} AS dependencies
 ARG TARGETARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN test "${TARGETARCH}" = "arm64" || { echo "MoboTerra supports linux/arm64 only" >&2; exit 1; }
+RUN case "${TARGETARCH}" in arm64|amd64) ;; *) echo "Supported architectures: arm64, amd64" >&2; exit 1 ;; esac
 # Share dependency installation between builder, runtime and desktop tools.
 # Fail on unresolved rosdep keys instead of silently producing a partial install.
 RUN --mount=type=bind,source=src,target=/tmp/moboterra-src,readonly \
@@ -32,7 +32,7 @@ RUN source /opt/ros/jazzy/setup.bash \
 FROM dependencies AS runtime-common
 RUN groupadd --gid 10001 moboterra \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/moboterra --shell /usr/sbin/nologin moboterra \
-    && install -d -o 10001 -g 10001 /var/log/ros /tmp/moboterra
+    && install -d -o 10001 -g 10001 /var/log/ros /tmp/moboterra /var/lib/moboterra/position-state
 COPY deploy/checks/virtual_smoke.py /opt/moboterra-checks/virtual_smoke.py
 COPY --chmod=0755 deploy/container/entrypoint.sh /usr/local/bin/moboterra-entrypoint
 COPY --chmod=0755 deploy/container/healthcheck.sh /usr/local/bin/moboterra-healthcheck

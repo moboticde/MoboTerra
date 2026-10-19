@@ -1,16 +1,20 @@
 import copy
 import math
+import uuid
 
 import rclpy
 from geometry_msgs.msg import TwistStamped
 from mobotic_interfaces.msg import (
     BatterySystemState,
-    ManualControlState,
+    OperatorState,
     SafetyIOState,
     SafetyState,
     VehicleModeRequest,
     VehicleModeState,
+    WheelModuleOperationCommand,
     WheelModuleCommand,
+    WheelModuleCommandArray,
+    ComponentHealthArray,
     WheelModuleStatusArray,
 )
 from mobotic_interfaces.srv import SetVehicleMode
@@ -19,6 +23,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.time import Time
 from sensor_msgs.msg import JointState
+from std_srvs.srv import Trigger
 
 from .control_math import clamp, clamp_planar, slew, steering_position_representable
 
@@ -28,6 +33,11 @@ class MoboticSupervisor(Node):
         super().__init__('mobotic_supervisor')
 
         self.declare_parameter('initial_mode', 'manual')
+        self.declare_parameter('startup_grace', 10.0)
+        self.declare_parameter('reset_timeout', 5.0)
+        self.declare_parameter('required_health_sources', Parameter.Type.STRING_ARRAY)
+        self.declare_parameter('health_timeout', 0.3)
+        self.declare_parameter('require_operator_interlock', False)
         # Required topology is supplied by mobotic_config, not duplicated here.
         self.declare_parameter('expected_module_names', Parameter.Type.STRING_ARRAY)
         self.declare_parameter(
@@ -77,9 +87,9 @@ class MoboticSupervisor(Node):
         direct_traction_mode = str(
             self.get_parameter('direct_traction_control_mode').value
         )
-        if direct_traction_mode not in ('velocity', 'current'):
+        if direct_traction_mode != 'velocity':
             raise ValueError(
-                'direct_traction_control_mode must be velocity or current'
+                'only traction velocity commands are supported'
             )
         self.direct_traction_control_mode = direct_traction_mode
         self.control_period = float(self.get_parameter('control_period').value)
@@ -135,7 +145,25 @@ class MoboticSupervisor(Node):
         self._validate_parameters()
         initial_mode = self._mode_from_name(str(self.get_parameter('initial_mode').value))
 
-        self.current_mode = initial_mode
+        self.selected_mode = initial_mode
+        self.started_at = self.get_clock().now()
+        self.startup_grace = float(self.get_parameter('startup_grace').value)
+        self.reset_timeout = float(self.get_parameter('reset_timeout').value)
+        if not all(math.isfinite(v) and v > 0 for v in (self.startup_grace, self.reset_timeout)):
+            raise ValueError('startup/reset timeouts must be positive and finite')
+        self.supervisor_instance = str(uuid.uuid4())
+        self.authority_generation = 1
+        self.fault_codes = set()
+        self.reset_id = 0
+        self.reset_started_at = None
+        self.reset_result = ''
+        self.standstill_since = None
+        self.velocity_ledger = {}
+        self.component_health = {}
+        self.required_health_sources = list(self.get_parameter('required_health_sources').value)
+        self.health_timeout = float(self.get_parameter('health_timeout').value)
+        self.require_operator_interlock = bool(self.get_parameter('require_operator_interlock').value)
+        self.last_final = {}
         self.requested_mode = initial_mode
         self.transition_in_progress = False
         self.transition_started_at = None
@@ -169,23 +197,23 @@ class MoboticSupervisor(Node):
         self.last_output = [0.0, 0.0, 0.0]
         self.last_control_time = self.get_clock().now()
 
-        self.cmd_vel_publisher = self.create_publisher(TwistStamped, 'cmd_vel', 1)
-        self.direct_command_publisher = self.create_publisher(
-            JointState, 'supervisor/joint_setpoints', 1
+        self.cmd_vel_publisher = self.create_publisher(TwistStamped, 'vehicle/cmd_vel', 1)
+        self.final_command_publisher = self.create_publisher(
+            WheelModuleCommandArray, 'wheel_modules/command', 1
         )
         self.mode_state_publisher = self.create_publisher(
-            VehicleModeState, 'vehicle/mode_state', 1
+            VehicleModeState, 'vehicle/mode', 1
         )
         self.module_command_publisher = self.create_publisher(
-            WheelModuleCommand, 'wheel_modules/command', 1
+            WheelModuleOperationCommand, 'wheel_modules/operation_command', 1
         )
 
         self.input_subscriptions = [
             self.create_subscription(
-                TwistStamped, 'manual/cmd_vel', self._manual_command_callback, 1
+                TwistStamped, 'operator/cmd_vel', self._manual_command_callback, 1
             ),
             self.create_subscription(
-                ManualControlState, 'manual/state', self._manual_state_callback, 1
+                OperatorState, 'operator/state', self._manual_state_callback, 1
             ),
             self.create_subscription(
                 TwistStamped,
@@ -224,11 +252,11 @@ class MoboticSupervisor(Node):
                 JointState, 'joint_states', self._joint_state_callback, 1
             ),
             self.create_subscription(
-                TwistStamped, 'agv_vel', self._velocity_feedback_callback, 1
+                TwistStamped, 'vehicle/measured_velocity', self._velocity_feedback_callback, 1
             ),
             self.create_subscription(
                 VehicleModeRequest,
-                'vehicle/mode_request',
+                'operator/mode_request',
                 self._mode_request_callback,
                 1,
             ),
@@ -236,10 +264,16 @@ class MoboticSupervisor(Node):
         self.mode_service = self.create_service(
             SetVehicleMode, 'vehicle/set_mode', self._set_mode_service
         )
+        self.kinematics_subscription = self.create_subscription(
+            JointState, 'kinematics/joint_setpoints', self._kinematics_candidate_callback, 1)
+        self.reset_service = self.create_service(
+            Trigger, 'wheel_modules/clear_errors', self._reset_errors_service)
+        self.health_subscription = self.create_subscription(
+            ComponentHealthArray, 'internal/component_health', self._health_callback, 1)
         self.timer = self.create_timer(self.control_period, self._control)
 
         self.get_logger().info(
-            f'Supervisor initialized in {self._mode_name(self.current_mode)} mode.'
+            f'Supervisor initialized in {self._mode_name(self.selected_mode)} mode.'
         )
 
     def _validate_parameters(self):
@@ -311,6 +345,8 @@ class MoboticSupervisor(Node):
     def _mode_from_name(name):
         modes = {
             'manual': VehicleModeState.MANUAL,
+            'autonomous': VehicleModeState.AUTONOMOUS,
+            'kinematicoff': VehicleModeState.KINEMATICOFF,
             'auto_velocity': VehicleModeState.AUTO_VELOCITY,
             'auto_direct': VehicleModeState.AUTO_DIRECT,
         }
@@ -341,7 +377,12 @@ class MoboticSupervisor(Node):
         return msg is not None and msg.header.frame_id == self.output_frame_id
 
     def _stamp_valid(self, stamp, timeout, now=None):
-        message_time = Time.from_msg(stamp)
+        if hasattr(stamp, 'sec') and (stamp.sec < 0 or not 0 <= stamp.nanosec < 1000000000):
+            return False
+        try:
+            message_time = Time.from_msg(stamp)
+        except (TypeError, ValueError, OverflowError):
+            return False
         if message_time.nanoseconds == 0:
             return False
         if now is None:
@@ -481,7 +522,10 @@ class MoboticSupervisor(Node):
             self.transition_standstill_since = None
 
     def _command_stamp_valid(self, stamp, timeout):
+        # A future-dated command must not cross a later recovery boundary.
         return self.motion_inputs_ready and self._stamp_valid(stamp, timeout) and (
+            Time.from_msg(stamp).nanoseconds <= self.get_clock().now().nanoseconds
+        ) and (
             self.command_accept_after is None
             or Time.from_msg(stamp).nanoseconds >= self.command_accept_after.nanoseconds
         )
@@ -503,11 +547,13 @@ class MoboticSupervisor(Node):
         accepted, transition_started, message = self._request_mode(request.requested_mode)
         response.accepted = accepted
         response.transition_started = transition_started
-        response.current_mode = self.current_mode
+        response.current_mode = self.selected_mode
         response.message = message
         return response
 
     def _request_mode(self, requested_mode):
+        if getattr(self, 'fault_codes', set()) or getattr(self, 'reset_started_at', None) is not None:
+            return False, False, 'reset faults before selecting a mode'
         valid_modes = {
             VehicleModeState.MANUAL,
             VehicleModeState.AUTO_VELOCITY,
@@ -521,8 +567,9 @@ class MoboticSupervisor(Node):
             return False, False, 'another mode transition is in progress'
         self.requested_mode = requested_mode
         self.transition_in_progress = True
+        self._new_authority(preserve_stop=True)
         self.transition_started_at = self.get_clock().now()
-        self.transition_from_direct = self.current_mode == VehicleModeState.AUTO_DIRECT
+        self.transition_from_direct = self.selected_mode == VehicleModeState.AUTO_DIRECT
         self.transition_standstill_since = None
         self.transition_timed_out = False
         self.command_accept_after = self.transition_started_at
@@ -534,7 +581,7 @@ class MoboticSupervisor(Node):
         self._publish_mode_state(self.transition_started_at, False,
                                  'mode transition started: stopping before source selection')
         self.get_logger().info(
-            f'Mode transition requested: {self._mode_name(self.current_mode)} -> '
+            f'Mode transition requested: {self._mode_name(self.selected_mode)} -> '
             f'{self._mode_name(requested_mode)}'
         )
         return True, True, 'mode transition started'
@@ -555,6 +602,11 @@ class MoboticSupervisor(Node):
         )
 
     def _enable_gate(self, now):
+        if 'host' in getattr(self, 'required_health_sources', []):
+            health, received = self.component_health.get('host', (None, None))
+            if (not self._message_fresh(health, received, self.health_timeout, now)
+                    or not health.monitoring_valid or health.fault_active):
+                return False, 'host deployment fault or monitoring unavailable'
         # Drive enable depends only on safety and battery readiness. Requiring
         # enabled wheel feedback here would prevent disabled drives from starting.
         if not self._message_fresh(
@@ -612,7 +664,25 @@ class MoboticSupervisor(Node):
             or self.battery_state.minimum_percentage < self.minimum_battery_percentage
         ):
             return False, 'battery state of charge invalid or below enable threshold'
-        return True, 'safety and battery ready'
+        if getattr(self, 'fault_codes', set()) or getattr(self, 'reset_started_at', None) is not None:
+            return False, 'system fault/reset inhibits enable'
+        operator = getattr(self, 'manual_state', None)
+        if getattr(self, 'require_operator_interlock', False) and (
+                not self._message_fresh(operator, self.manual_state_received, self.manual_timeout, now)
+                or not operator.connected or not operator.estop_state_known):
+            return False, 'required physical operator interlock unavailable'
+        if (operator is not None and getattr(operator, 'estop_state_known', False)
+                and operator.estop_pressed):
+            return False, 'physical operator E-stop pressed'
+        if self.wheel_status is not None:
+            if not self._message_fresh(self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now):
+                return False, 'driver status stale'
+            if any(not getattr(m, 'initialized', True) or not getattr(m, 'position_valid', True)
+                   or m.error_code != 0 for m in self.wheel_status.modules):
+                return False, 'driver initialization/position/fault prevents enable'
+        else:
+            return False, 'waiting for passive driver status'
+        return True, 'safety, battery and disabled-driver initialization ready'
 
     def _base_gate(self, now):
         enable_ready, reason = self._enable_gate(now)
@@ -640,11 +710,15 @@ class MoboticSupervisor(Node):
         return True, 'hardware ready'
 
     def _motion_hardware_gate(self, now):
+        for name in getattr(self, 'required_health_sources', []):
+            message, received = self.component_health.get(name, (None, None))
+            if not self._message_fresh(message, received, self.health_timeout, now) or not message.monitoring_valid or message.fault_active:
+                return False, 'required component health unavailable: ' + name
         base_ready, reason = self._base_gate(now)
         if not base_ready:
             return False, reason
 
-        if self.current_mode == VehicleModeState.AUTO_DIRECT:
+        if self.selected_mode == VehicleModeState.AUTO_DIRECT:
             if (
                 self.safety_state.warning_field_active
                 or self._io_warning_active()
@@ -658,6 +732,7 @@ class MoboticSupervisor(Node):
         return True, 'motion hardware ready'
 
     def _invalidate_motion_commands(self, now):
+        self._new_authority()
         # Preserve a later mode-switch/recovery boundary across a clock reversal.
         if (
             self.command_accept_after is None
@@ -675,7 +750,7 @@ class MoboticSupervisor(Node):
 
     def _refresh_motion_readiness(self, now):
         ready, reason = self._motion_hardware_gate(now)
-        if not ready or not self.motion_inputs_ready:
+        if ready != self.motion_inputs_ready:
             # Clear on loss AND recovery: input received during inhibition must
             # not become motion merely because we give it a fresh output stamp.
             self._invalidate_motion_commands(now)
@@ -687,7 +762,7 @@ class MoboticSupervisor(Node):
         if not hardware_ready:
             return False, reason
 
-        if self.current_mode == VehicleModeState.MANUAL:
+        if self.selected_mode == VehicleModeState.MANUAL:
             if not self._message_fresh(
                 self.manual_state, self.manual_state_received, self.manual_timeout, now
             ):
@@ -705,7 +780,7 @@ class MoboticSupervisor(Node):
                 return False, 'manual velocity command frame mismatch'
             return True, 'manual command active'
 
-        if self.current_mode == VehicleModeState.AUTO_VELOCITY:
+        if self.selected_mode == VehicleModeState.AUTO_VELOCITY:
             if not self._message_fresh(
                 self.autonomy_command, self.autonomy_command_received,
                 self.autonomy_timeout, now
@@ -715,7 +790,7 @@ class MoboticSupervisor(Node):
                 return False, 'autonomous velocity command frame mismatch'
             return True, 'autonomous velocity command active'
 
-        if self.current_mode == VehicleModeState.AUTO_DIRECT:
+        if self.selected_mode == VehicleModeState.AUTO_DIRECT:
             if not self._message_fresh(
                 self.autonomy_joint_command, self.autonomy_joint_received,
                 self.autonomy_timeout, now
@@ -737,13 +812,18 @@ class MoboticSupervisor(Node):
             return False
         if len(msg.position) != len(msg.name) or len(msg.velocity) != len(msg.name):
             return False
-        if len(msg.effort) not in (0, len(msg.name)):
+        if msg.effort:
             return False
         if not all(math.isfinite(value) for value in msg.position + msg.velocity):
             return False
         if msg.effort and not all(math.isfinite(value) for value in msg.effort):
             return False
-        if self.direct_traction_control_mode == 'current' and not msg.effort:
+        indices = {name: index for index, name in enumerate(msg.name)}
+        if any(not 0 <= msg.velocity[indices[name]] <= self.max_direct_steering_velocity
+               for name in self.expected_steering_joint_names):
+            return False
+        if any(abs(msg.velocity[indices[name]]) > self.max_direct_traction_velocity
+               for name in self.expected_traction_joint_names):
             return False
         return self._steering_positions_valid(msg)
 
@@ -772,7 +852,7 @@ class MoboticSupervisor(Node):
         if source is None or immediate_stop:
             self.last_output = [0.0, 0.0, 0.0]
             self.last_control_time = now
-            self.cmd_vel_publisher.publish(output)
+            self._publish_velocity_candidate(output, source, now)
             return
 
         scale = self._speed_scale()
@@ -813,7 +893,7 @@ class MoboticSupervisor(Node):
             output.twist.angular.z,
         ]
         self.last_control_time = now
-        self.cmd_vel_publisher.publish(output)
+        self._publish_velocity_candidate(output, source, now)
 
     def _publish_direct(self, source, now):
         output = copy.deepcopy(source)
@@ -840,9 +920,12 @@ class MoboticSupervisor(Node):
                     -self.max_direct_traction_current,
                     self.max_direct_traction_current,
                 )
-        self.direct_command_publisher.publish(output)
+        output.effort = []
+        self._emit_final(output, source.header.stamp, now, WheelModuleCommandArray.MOTION)
 
     def _publish_direct_stop(self, now):
+        if not self._message_fresh(self.joint_state, self.joint_state_received, self.wheel_status_timeout, now):
+            return
         output = JointState()
         output.header.stamp = now.to_msg()
         output.name = (
@@ -867,16 +950,47 @@ class MoboticSupervisor(Node):
             for name in output.name
         ]
         output.velocity = [0.0] * len(output.name)
-        output.effort = [0.0] * len(output.name)
-        self.direct_command_publisher.publish(output)
+        output.effort = []
+        self._emit_final(output, now.to_msg(), now, WheelModuleCommandArray.HOLD)
 
     def _publish_mode_state(self, now, motion_permitted, status_message):
         state = VehicleModeState()
         state.header.stamp = now.to_msg()
-        state.current_mode = self.current_mode
+        errors, safety = self._system_conditions(now)
+        faults = getattr(self, 'fault_codes', set())
+        state.current_mode = (VehicleModeState.ERROR if faults or errors else
+                              VehicleModeState.SAFETY if safety else self.selected_mode)
+        state.selected_mode = self.selected_mode
         state.requested_mode = self.requested_mode
         state.transition_in_progress = self.transition_in_progress
-        state.motion_permitted = motion_permitted
+        state.motion_permitted = bool(motion_permitted and not faults and not errors and not safety
+                                      and getattr(self, 'reset_started_at', None) is None)
+        state.safety_stop_active = safety
+        state.error_active = bool(faults or errors)
+        state.reset_in_progress = getattr(self, 'reset_started_at', None) is not None
+        state.reset_id = getattr(self, 'reset_id', 0)
+        state.reset_result = getattr(self, 'reset_result', '')
+        state.reason_codes = sorted(faults | set(errors))
+        state.supervisor_instance = getattr(self, 'supervisor_instance', '')
+        state.authority_generation = getattr(self, 'authority_generation', 0)
+        module_names = [m.name for m in self.wheel_status.modules] if self.wheel_status is not None else []
+        state.readiness_known = (self._message_fresh(self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now)
+                                and len(module_names) == len(self.expected_module_names)
+                                and set(module_names) == set(self.expected_module_names))
+        state.drives_enabled = state.readiness_known and all(m.enabled for m in self.wheel_status.modules)
+        state.ready_to_drive = state.readiness_known and all(
+            getattr(m, 'initialized', True) and getattr(m, 'position_valid', True)
+            and m.feedback_fresh and m.error_code == 0 for m in self.wheel_status.modules)
+        monitors_known = all(self._message_fresh(message, received, timeout, now)
+                             for message, received, timeout in (
+                                 (self.safety_state, self.safety_received, self.safety_timeout),
+                                 (self.safety_io_state, self.safety_io_received, self.safety_timeout),
+                                 (self.battery_state, self.battery_received, self.battery_timeout)))
+        if state.ready_to_drive and monitors_known:
+            self.startup_complete = True
+        if not getattr(self, 'startup_complete', False) and not state.error_active and not safety:
+            state.current_mode = VehicleModeState.UNKNOWN
+            state.motion_permitted = False
         state.status_message = status_message
         self.mode_state_publisher.publish(state)
 
@@ -954,7 +1068,7 @@ class MoboticSupervisor(Node):
             self._publish_mode_state(now, False, 'mode transition: confirming sustained standstill')
             return
 
-        self.current_mode = self.requested_mode
+        self.selected_mode = self.requested_mode
         self.transition_in_progress = False
         self.transition_started_at = None
         self.transition_from_direct = False
@@ -963,16 +1077,24 @@ class MoboticSupervisor(Node):
         self._invalidate_motion_commands(now)
         self._publish_mode_state(now, False, 'mode transition complete: waiting for new command')
         self.get_logger().info(
-            f'Mode transition complete: {self._mode_name(self.current_mode)}'
+            f'Mode transition complete: {self._mode_name(self.selected_mode)}'
         )
 
     def _control(self):
         now = self.get_clock().now()
+        errors, _ = self._system_conditions(now)
+        if not hasattr(self, 'fault_codes'):
+            self.fault_codes = set()
+        if errors:
+            self.fault_codes.update(errors)
+        self._observe_reset(now, errors)
         enable_ready, _ = self._enable_gate(now)
-        module_command = WheelModuleCommand()
+        module_command = WheelModuleOperationCommand()
         module_command.header.stamp = now.to_msg()
         module_command.enable = enable_ready
-        module_command.clear_errors = False
+        module_command.supervisor_instance = getattr(self, 'supervisor_instance', '')
+        module_command.authority_generation = getattr(self, 'authority_generation', 0)
+        module_command.reset_id = self.reset_id if getattr(self, 'reset_started_at', None) is not None else 0
         self.module_command_publisher.publish(module_command)
 
         # Also observe expiry when no new hardware callbacks arrive.
@@ -983,7 +1105,7 @@ class MoboticSupervisor(Node):
             return
 
         source_ready, reason = self._source_gate(now)
-        if self.current_mode == VehicleModeState.AUTO_DIRECT:
+        if self.selected_mode == VehicleModeState.AUTO_DIRECT:
             if source_ready:
                 self._publish_direct(self.autonomy_joint_command, now)
             else:
@@ -992,12 +1114,191 @@ class MoboticSupervisor(Node):
             return
 
         source = None
-        if source_ready and self.current_mode == VehicleModeState.MANUAL:
+        if source_ready and self.selected_mode == VehicleModeState.MANUAL:
             source = self.manual_command
-        elif source_ready and self.current_mode == VehicleModeState.AUTO_VELOCITY:
+        elif source_ready and self.selected_mode == VehicleModeState.AUTO_VELOCITY:
             source = self.autonomy_command
         self._publish_velocity(source, now, immediate_stop=not source_ready)
         self._publish_mode_state(now, source_ready, reason)
+
+    def _new_authority(self, preserve_stop=False):
+        self.authority_generation = getattr(self, 'authority_generation', 0) + 1
+        self.velocity_ledger = {}
+        if not preserve_stop:
+            self.last_final = {}
+
+    def _system_conditions(self, now):
+        errors = []
+        started = getattr(self, 'started_at', now)
+        grace = (now - started).nanoseconds < int(getattr(self, 'startup_grace', 10.0) * 1e9)
+        for message, received, timeout, code in (
+                (self.safety_state, self.safety_received, self.safety_timeout, 'SAFETY_MONITOR_LOST'),
+                (self.safety_io_state, self.safety_io_received, self.safety_timeout, 'SAFETY_IO_LOST'),
+                (self.battery_state, self.battery_received, self.battery_timeout, 'BMS_MONITOR_LOST'),
+                (self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, 'DRIVER_MONITOR_LOST')):
+            if not self._message_fresh(message, received, timeout, now) and not grace:
+                errors.append(code)
+        safety = self.safety_state
+        io = self.safety_io_state
+        safety_fresh = self._message_fresh(safety, self.safety_received, self.safety_timeout, now)
+        confirmed_stop = bool(safety_fresh and safety.communication_ok and
+            ((safety.emergency_stop_active and getattr(io, 'emergency_stop_state_known', False))
+             or (safety.sto_active and getattr(io, 'sto_state_known', False))
+             or (safety.protective_stop_active and not safety.safety_override_active
+                 and getattr(io, 'scanner_state_known', False))
+             or (getattr(io, 'safety_enable_state_known', False) and not io.safety_enable_active)))
+        if safety_fresh and not safety.communication_ok and not grace:
+            errors.append('SAFETY_MONITOR_LOST')
+        operator = getattr(self, 'manual_state', None)
+        if operator is not None and getattr(operator, 'estop_state_known', False) and operator.estop_pressed:
+            # A known pressed E-stop remains inhibited even after telemetry expires.
+            confirmed_stop = True
+        if (self.selected_mode == VehicleModeState.MANUAL or getattr(self, 'require_operator_interlock', False)) and not grace:
+            if not self._message_fresh(operator, self.manual_state_received, self.manual_timeout, now) or not operator.connected:
+                errors.append('OPERATOR_LOST')
+            elif getattr(self, 'require_operator_interlock', False) and not operator.estop_state_known:
+                errors.append('OPERATOR_ESTOP_UNKNOWN')
+        battery = self.battery_state
+        if battery is not None and not battery.communication_ok and not grace:
+            errors.append('BMS_MONITOR_LOST')
+        if battery is not None and getattr(battery, 'faulted_batteries', []):
+            errors.append('BMS_FAULT')
+        if self.wheel_status is not None:
+            names = [m.name for m in self.wheel_status.modules]
+            if not grace and (len(names) != len(self.expected_module_names) or set(names) != set(self.expected_module_names)):
+                errors.append('DRIVER_STATUS_INVALID')
+            for module in self.wheel_status.modules:
+                if module.error_code:
+                    errors.append('DRIVE_FAULT:' + module.name)
+                if not grace and (not module.feedback_fresh or not getattr(module, 'initialized', True)):
+                    errors.append('DRIVE_FEEDBACK_LOST:' + module.name)
+                if not grace and not getattr(module, 'position_valid', True):
+                    errors.append('POSITION_CONTINUITY_UNKNOWN:' + module.name)
+        if self.transition_timed_out and getattr(self, 'reset_started_at', None) is None:
+            errors.append('MODE_TRANSITION_TIMEOUT')
+        for name in getattr(self, 'required_health_sources', []):
+            message, received = self.component_health.get(name, (None, None))
+            if (name == 'host' or not grace) and (not self._message_fresh(message, received, self.health_timeout, now)
+                    or not message.monitoring_valid or message.fault_active):
+                errors.append('COMPONENT_HEALTH_LOST:' + name)
+        return errors, confirmed_stop
+
+    def _health_callback(self, array):
+        now = self.get_clock().now()
+        ids = [m.component_id for m in array.components]
+        if len(ids) != len(set(ids)):
+            self.component_health.clear()
+            return
+        for message in array.components:
+            if message.component_id in self.required_health_sources:
+                self.component_health[message.component_id] = (message, now)
+
+    def _observe_reset(self, now, errors):
+        proof_times_valid = (self.joint_state is not None and self.measured_velocity is not None and
+                             all(0 < Time.from_msg(m.header.stamp).nanoseconds <= now.nanoseconds
+                                 for m in (self.joint_state, self.measured_velocity)))
+        stationary = (proof_times_valid and self._joint_feedback_valid(self.joint_state)
+                      and self._finite_twist(self.measured_velocity)
+                      and self.measured_velocity.header.frame_id == self.output_frame_id
+                      and self._message_fresh(self.joint_state, self.joint_state_received, self.wheel_status_timeout, now)
+                      and self._message_fresh(self.measured_velocity, self.measured_velocity_received, self.velocity_feedback_timeout, now)
+                      and all(abs(v) <= self.standstill_joint_velocity for v in self.joint_state.velocity)
+                      and math.hypot(self.measured_velocity.twist.linear.x, self.measured_velocity.twist.linear.y) <= self.standstill_linear_velocity
+                      and abs(self.measured_velocity.twist.angular.z) <= self.standstill_angular_velocity)
+        if not stationary:
+            self.standstill_since = None
+        elif getattr(self, 'standstill_since', None) is None:
+            self.standstill_since = now
+        started = getattr(self, 'reset_started_at', None)
+        if started is None:
+            return
+        acknowledged = (self.wheel_status is not None and self._message_fresh(
+            self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now)
+            and Time.from_msg(self.wheel_status.header.stamp).nanoseconds > started.nanoseconds
+            and all(m.reset_id == self.reset_id and m.reset_acknowledged for m in self.wheel_status.modules))
+        if acknowledged and not errors and stationary:
+            self.fault_codes.clear()
+            self.reset_started_at = None
+            self.reset_result = 'completed; fresh command and manual rearm required'
+            self.transition_timed_out = self.transition_in_progress = False
+            self._invalidate_motion_commands(now)
+        elif (now - started).nanoseconds > int(self.reset_timeout * 1e9):
+            self.reset_started_at = None
+            self.reset_result = 'reset timeout'
+            self.fault_codes.add('RESET_TIMEOUT')
+
+    def _reset_errors_service(self, request, response):
+        del request
+        now = self.get_clock().now()
+        self._observe_reset(now, self._system_conditions(now)[0])
+        proof_ns = min(Time.from_msg(m.header.stamp).nanoseconds for m in
+                       (self.joint_state, self.measured_velocity)) if self.standstill_since is not None else 0
+        if self.reset_started_at is not None or (self.transition_in_progress and not self.transition_timed_out):
+            response.success, response.message = False, 'reset/transition already active'
+        elif self.standstill_since is None or proof_ns - self.standstill_since.nanoseconds < int(self.transition_duration * 1e9):
+            response.success, response.message = False, 'fresh sustained measured standstill required'
+        else:
+            self.reset_id += 1
+            self.transition_in_progress = False
+            self.reset_started_at = now
+            self.reset_result = 'accepted; recovery not yet verified'
+            self._invalidate_motion_commands(now)
+            response.success, response.message = True, self.reset_result
+        return response
+
+    def _publish_velocity_candidate(self, output, source, now):
+        if hasattr(self, 'velocity_ledger'):
+            purpose = (WheelModuleCommandArray.CONTROLLED_STOP if self.transition_in_progress else
+                       WheelModuleCommandArray.MOTION if source is not None else WheelModuleCommandArray.HOLD)
+            self.velocity_ledger[now.nanoseconds] = (self.authority_generation, purpose,
+                source.header.stamp if source is not None and not self.transition_in_progress else now.to_msg())
+            self.velocity_ledger = {k: v for k, v in self.velocity_ledger.items() if now.nanoseconds - k <= int(self.control_period * 10 * 1e9)}
+        self.cmd_vel_publisher.publish(output)
+
+    def _kinematics_candidate_callback(self, msg):
+        now = self.get_clock().now()
+        entry = self.velocity_ledger.pop(Time.from_msg(msg.header.stamp).nanoseconds, None)
+        if entry is None or entry[0] != self.authority_generation or self.selected_mode == VehicleModeState.KINEMATICOFF:
+            return
+        if not self._joint_feedback_valid(msg) or msg.effort:
+            return
+        if entry[1] == WheelModuleCommandArray.MOTION and not self._source_gate(now)[0]:
+            return
+        self._emit_final(msg, entry[2], now, entry[1])
+
+    def _emit_final(self, msg, source_stamp, now, purpose):
+        if not hasattr(self, 'final_command_publisher'):
+            return
+        indices = {name: i for i, name in enumerate(msg.name)}
+        if len(indices) != len(msg.name) or set(indices) != set(self.expected_steering_joint_names + self.expected_traction_joint_names):
+            return
+        output = WheelModuleCommandArray()
+        output.header.stamp = now.to_msg()
+        output.source_stamp = source_stamp
+        output.supervisor_instance = self.supervisor_instance
+        output.authority_generation = self.authority_generation
+        output.selected_mode = self.selected_mode
+        output.purpose = purpose
+        feedback = dict(zip(self.joint_state.name, self.joint_state.position)) if self.joint_state is not None else {}
+        for name, steering, traction in zip(self.expected_module_names, self.expected_steering_joint_names, self.expected_traction_joint_names):
+            record = WheelModuleCommand()
+            record.name = name
+            record.steering_position = msg.position[indices[steering]]
+            record.steering_profile_velocity = msg.velocity[indices[steering]]
+            record.traction_velocity = msg.velocity[indices[traction]]
+            if purpose != WheelModuleCommandArray.MOTION:
+                if steering not in feedback:
+                    return
+                record.steering_position = feedback[steering]
+                record.steering_profile_velocity = 0.0
+                previous = self.last_final.get(name, 0.0)
+                if purpose == WheelModuleCommandArray.HOLD or record.traction_velocity * previous < 0:
+                    record.traction_velocity = 0.0
+                else:
+                    record.traction_velocity = math.copysign(min(abs(previous), abs(record.traction_velocity)), previous)
+            output.modules.append(record)
+        self.last_final = {m.name: m.traction_velocity for m in output.modules}
+        self.final_command_publisher.publish(output)
 
 
 def main(args=None):

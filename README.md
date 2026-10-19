@@ -11,16 +11,22 @@ spacing follows actual CAD axes: 1.69 m front–rear / 0.99 m left–right, with
 old four-wheel radius 0.325 m and width 0.31 m. CAD Z=0 is confirmed as the floor.
 CAN bindings and reference mounting offsets still require hardware checks.
 
+The default `/moboterra/operator` provider uses PAIL/Ecobox CANopen node 9 on
+`can0` at 500 kbit/s, without a hold-to-drive button. Physical control mapping
+is still required; the unverified profile publishes zero motion and permits
+passive capture. See the [PAIL capture guide](docs/remdevice_commissioning.md).
+
 ## Control architecture
 
-- Manual driving: `joy -> mobotic_manual_control -> mobotic_supervisor -> mobotic_kinematics -> mobotic_driver`.
-- Autonomous velocity: `autonomy/cmd_vel -> supervisor -> cmd_vel -> kinematics -> kinematics/joint_setpoints -> driver`.
-- Autonomy with its own kinematics: `autonomy/joint_setpoints -> supervisor -> supervisor/joint_setpoints -> driver`.
-  `AUTO_DIRECT` is selectable as mode 2 without an extra permission setting.
-- `wheel_modules/command` manages enable/disable and error clearing for **all units together**.
-  It never carries joint motion. Hardware brake actuation follows enable; brake feedback is unavailable.
+- Operator/autonomous velocity: candidate -> supervisor -> `vehicle/cmd_vel` -> kinematics -> `kinematics/joint_setpoints` -> supervisor -> `wheel_modules/command` -> driver.
+- Autonomy with its own kinematics: `autonomy/joint_setpoints` -> supervisor -> the same final `wheel_modules/command` array -> driver.
+  KINEMATICOFF is mode 2; velocity candidates have no motion effect there.
+- The supervisor contains the mode state machine and publishes `vehicle/mode`, including automatic SAFETY and latched ERROR. Operator inputs are separately published on `operator/state`.
+- Internal `wheel_modules/operation_command` manages enable/disable and explicit reset transactions for all units together. Public reset is supervisor-owned `wheel_modules/clear_errors`.
 - The driver publishes `joint_states` and `wheel_modules/status`. Missing required CAN feedback
   blocks motion on all units; a new motion command is required after recovery.
+
+Physical enable and authoritative joint publication remain inhibited pending verified Elmo position scale/reference and power-cycle continuity. Only the virtual launch enables synthetic position; never use that flag on hardware. Position is read exclusively through Elmo; no encoder changes are performed. See [implementation status](docs/implementation_plan.md).
 
 All topic names above are relative to the robot namespace, normally `/moboterra`.
 The supervisor consumes both `safety/state` and `safety/io_state`, plus
@@ -85,6 +91,11 @@ hardware commissioning checks before starting it. Scanner Ethernet addresses and
 physical safety wiring remain specific to the connected hardware.
 See [deployment instructions](deploy/README.md) for unattended provisioning,
 direct Docker builds, recovery and hardware startup.
+See the [installation and command reference](docs/commands.md) for copyable
+host/container commands, isolated virtual testing, updated operator/vehicle ROS
+services and the edit–rebuild–deploy workflow. The guide distinguishes the pulled
+installer from the newer local interface implementation saved before the pull;
+verify the built image's message definitions before using its updated ROS commands.
 
 ## Build and launch
 
@@ -104,19 +115,18 @@ ros2 launch mobotic_bringup moboterra.launch.py \
 Install the external `ros2_socketcan`, `joy` and `sick_safetyscanners2` packages
 and their dependencies. Bringup launches the current stack automatically; it does
 not configure the OS CAN interface, NIC address or hardware safety wiring. Scanner
-TF is supplied by the separately launched `mobotic_description`, not by the scanners.
+TF is supplied by integrated `robot_state_publisher` (`start_description:=true` by default), not by the scanners. Do not start a second description owner.
 The drive bridge uses `can0`; a separate receive-only battery receiver uses
 `can1` and publishes `battery_can/can_rx`. Configure both OS interfaces at
 500 kbit/s, with the battery adapter in listen-only mode, as in the reference.
 No battery operating-consent/HV control is added.
 
 Bringup now also starts measured wheel odometry:
-`joint_states -> kinematics -> agv_vel -> mobotic_odometry`.
-It publishes `/moboterra/odometry` and `odom -> base_link` on `/moboterra/tf`.
+`joint_states -> kinematics -> vehicle/measured_velocity -> mobotic_odometry`.
+It publishes `/moboterra/vehicle/odom` and `odom -> base_link` on `/moboterra/tf`.
 The default `publish_odom_tf:=auto` honors the shared odometry policy.
 Use `publish_odom_tf:=false` if an external estimator owns that transform, or
-`start_odometry:=false` to omit the node. Robot-state publisher remains a separate
-description launch. No laser/IMU fusion or autonomous navigation is added.
+`start_odometry:=false` to omit the node. Use `start_description:=false` only when another description owner is already running. No laser/IMU fusion or autonomous navigation is added.
 
 The four-wheel profile restores the 10 ms heartbeat and 116053 increments/s
 traction ceiling. Driver acceleration/deceleration use the actual 0.325 m wheel
@@ -131,6 +141,7 @@ and minimum SOC is at least 20%, even without an active joystick command.
 The default USB profile requires no held button for manual motion: left stick
 steers, right stick translates/crabs, and L1 or R1 boosts. Manual motion still
 requires fresh joystick input and all supervisor readiness checks.
+Startup, reconnect, mode changes and safety recovery additionally require neutral controls; a configured deadman requires release/new press. USB E-stop state is unknown rather than fabricated.
 
 ## Readiness and loss handling
 
@@ -155,14 +166,16 @@ hardware stop/brake chain remain responsible for physical safety.
 
 Still required: ROS/C++ build and integration tests, secured hardware commissioning,
 virtual-stack ROS runtime validation, an explicit fault-reset policy and joystick
-fault-reset controls and the final REMdevice CANopen input driver/mapping.
+fault-reset hardware acceptance and the physical PAIL control mapping. The
+REMdevice CAN provider and B2 supervisor-reset path are implemented; the default
+unverified profile permits capture only.
 The temporary F310/F710 profile uses Back to toggle MANUAL/AUTO_VELOCITY and
 uses no face buttons. AUTO_DIRECT is terminal/service-only. Joystick and
 terminal requests share stop/standstill/switch logic; the driver enforces one
 selected motion path. The [robot description](src/mobotic_description/README.md)
 now includes the updated CAD geometry and a standalone `robot_state_publisher`
 launch; CAD floor/axis placement is confirmed, but ROS/RViz and hardware validation remain required.
-It is not automatically included in bringup. Wheel odometry and `odom -> base_link`
+It is included in bringup by default. Wheel odometry and `odom -> base_link`
 are implemented, but need ROS/hardware validation and covariance/slip calibration;
 Nominal CAD-aligned scanner frames are included in the description; physical
 extrinsic calibration remains required. `map -> odom` localization is not added.
@@ -170,10 +183,11 @@ Unknown STO bit mappings are exposed as raw telemetry, not decoded safety confir
 
 ## Container deployment
 
-An ARM64 Ubuntu 24.04 deployment is available in [deploy/README.md](deploy/README.md).
+An ARM64/AMD64 Ubuntu 24.04 deployment is available in [deploy/README.md](deploy/README.md).
 It builds a ROS 2 Jazzy runtime image, identifies the two USB-to-CAN adapters by
 their unique USB serial numbers, configures platform `can0` and listen-only
 battery `can1`, and starts the hardware stack under a single systemd supervisor.
-The supervisor stops ROS on adapter loss and performs a clean, health-checked
-restart after both adapters return. See the deployment guide for installation,
+Adapter loss and host-health faults keep ROS alive and latch ERROR with motion
+inhibited. Recovery requires explicit reset rather than a whole-stack restart.
+See the deployment guide for installation,
 rollback, diagnostics, GUI tools, and hardware acceptance tests.

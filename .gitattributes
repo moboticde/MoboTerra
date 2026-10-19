@@ -1,0 +1,4 @@
+# Shell entry points are copied into Linux containers, including from Windows.
+*.sh text eol=lf
+deploy/host/moboterra-gui text eol=lf
+deploy/host/moboterra-tools text eol=lf

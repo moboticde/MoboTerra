@@ -70,7 +70,7 @@ controller_class.body = [
 ]
 namespace = {
     'Duration': Duration, 'TwistStamped': TwistStamped,
-    'ManualControlState': SimpleNamespace, 'math': math,
+    'OperatorState': SimpleNamespace, 'math': math,
     'Time': Time, 'VehicleModeRequest': VehicleModeRequest,
 }
 exec(compile(ast.Module(body=[controller_class], type_ignores=[]), str(SOURCE), 'exec'), namespace)
@@ -183,11 +183,17 @@ class ManualControlTest(unittest.TestCase):
         self.now = Time(11.02)
         self.node._joy_callback(self.joy(moving=True))
         self.node._publish()
+        self.assertEqual(self.output()[0], 0.0)  # Held stick cannot rearm after disconnect.
+        self.now = Time(11.04)
+        self.node._joy_callback(self.joy())
+        self.now = Time(11.06)
+        self.node._joy_callback(self.joy(moving=True))
+        self.node._publish()
         self.assertAlmostEqual(self.output()[0], 0.01)
         self.assertEqual(self.output()[1:], [0.0, 0.0])
 
     def test_healthy_input_keeps_normal_acceleration(self):
-        self.node._joy_callback(self.joy(moving=True))
+        self.node._joy_callback(self.joy())  # Neutral before first motion.
         for time, expected in ((10.1, 0.05), (10.2, 0.1)):
             self.now = Time(time)
             self.node._joy_callback(self.joy(moving=True))
@@ -215,6 +221,50 @@ class ManualControlTest(unittest.TestCase):
         self.assertEqual(self.node.command, [0.0] * 3)
         self.assertEqual(self.output(), [0.0] * 3)
         self.assertFalse(self.node.state_publisher.messages[-1].command_active)
+
+    def test_deadman_held_at_start_requires_neutral_release_and_new_press(self):
+        self.node.button_deadman = 8
+        for pressed in (True, True):
+            self.node._joy_callback(self.joy(deadman=pressed))
+            self.assertFalse(self.node._manual_enabled())
+            self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
+        self.node._joy_callback(self.joy(deadman=False))
+        self.assertFalse(self.node._manual_enabled())
+        self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
+        self.node._joy_callback(self.joy(deadman=True))
+        self.assertTrue(self.node._manual_enabled())
+        self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
+        self.node._joy_callback(self.joy(deadman=True, moving=True))
+        self.assertGreater(self.node.command[0], 0)
+        self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
+        self.node._joy_callback(self.joy(deadman=False, moving=True))
+        self.assertEqual(self.node.command, [0, 0, 0])
+
+    def test_unverified_usb_cannot_drive_or_request_modes(self):
+        self.node.input_mapping_verified = False
+        self.node._joy_callback(self.joy())
+        self.now = Time(10.1)
+        msg = self.joy(moving=True)
+        msg.buttons[4] = 1
+        self.node._joy_callback(msg)
+        self.node._publish()
+        self.assertEqual(self.node.command, [0, 0, 0])
+        self.assertFalse(self.node.mode_publisher.messages)
+        self.assertIn('USB mapping unverified', self.node.state_publisher.messages[-1].status_message)
+
+    def test_generic_usb_axis_signs_can_be_calibrated(self):
+        self.node.axis_speed_sign = -1
+        self.node.axis_crab_sign = -1
+        self.node.axis_steer_sign = -1
+        self.node.max_acceleration_linear = self.node.max_acceleration_angular = 100
+        self.node._joy_callback(self.joy())
+        self.now = Time(10.1)
+        msg = self.joy(moving=True)
+        msg.axes[0] = msg.axes[2] = 1.0
+        self.node._joy_callback(msg)
+        self.assertLess(self.node.command[0], 0)
+        self.assertLess(self.node.command[1], 0)
+        self.assertGreater(self.node.command[2], 0)  # reversed speed and steering
 
     def test_clock_reversal_clears_old_motion(self):
         self.seed_motion()
@@ -284,7 +334,7 @@ class ManualControlTest(unittest.TestCase):
             with self.subTest(index=index):
                 self.setUp()
                 self.node.button_mode_switch = index
-                self.node._joy_callback(self.joy(moving=True))
+                self.node._joy_callback(self.joy())
                 self.now = Time(10.1)
                 self.node._joy_callback(self.joy(moving=True))
                 self.node._publish()
@@ -406,7 +456,7 @@ class ManualControlTest(unittest.TestCase):
             self.assertEqual(self.node.command, [0.0] * 3)
 
     def test_manual_motion_needs_no_shoulder_and_reports_no_fake_deadman(self):
-        self.node._joy_callback(self.joy(moving=True))
+        self.node._joy_callback(self.joy())
         self.now = Time(10.1)
         self.node._joy_callback(self.joy(moving=True))
         self.node._publish()
@@ -422,7 +472,7 @@ class ManualControlTest(unittest.TestCase):
             with self.subTest(buttons=buttons):
                 self.setUp()
                 self.node.max_acceleration_linear = 100.0
-                self.node._joy_callback(self.joy(moving=True))
+                self.node._joy_callback(self.joy())
                 self.now = Time(10.1)
                 msg = self.joy(moving=True)
                 for button in buttons:

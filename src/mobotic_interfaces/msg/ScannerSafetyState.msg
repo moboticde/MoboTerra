@@ -1,0 +1,12 @@
+std_msgs/Header header
+string scanner_id
+bool communication_ok
+bool protective_field_clear
+bool protective_state_known
+bool warning_field_clear
+bool warning_state_known
+bool ossd_active
+bool ossd_state_known
+bool field_set_known
+uint32 field_set
+string source

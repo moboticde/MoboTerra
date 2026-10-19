@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -146,6 +147,99 @@ class BackendTest(unittest.TestCase):
     def test_bus_off_counter_is_parsed(self):
         self.backend.link_details = lambda _name: "re-started bus-errors bus-off 7 error-active 9"
         self.assertEqual(self.backend.platform_bus_off_count(), 7)
+
+
+class MonitoringBackend:
+    def __init__(self):
+        self.config = MODULE.DeploymentConfig('platform', 'battery', 500000, 42, stable_seconds=0)
+        self.devices = [MODULE.CanDevice('can0', 'platform'), MODULE.CanDevice('can1', 'battery')]
+        self.status = ('running', 'healthy')
+        self.ready = True
+        self.bus_off = False
+        self.bus_off_count = 0
+        self.calls = []
+        self.invalid_config = False
+    def read_config(self):
+        if self.invalid_config: raise MODULE.ConfigurationError('bad config')
+        return self.config
+    def list_can_devices(self): return self.devices
+    def links_ready(self, *args): return self.ready
+    def configure_links(self, *args): self.calls.append('configure'); self.ready = True
+    def platform_bus_off(self): return self.bus_off
+    def platform_bus_off_count(self): return self.bus_off_count
+    def stack_status(self): return self.status
+    def start_stack(self): self.calls.append('start'); self.status = ('running', 'starting')
+    def stop_stack(self): self.calls.append('stop')
+    def deactivate_links(self): self.calls.append('deactivate')
+
+
+class ErrorModeLifecycleTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.backend = MonitoringBackend()
+        self.supervisor = MODULE.Supervisor(self.backend, Path(self.temp.name) / 'state.json')
+
+    def test_adapter_loss_keeps_running_container_and_recovers_health(self):
+        self.supervisor.step(100)
+        self.backend.devices = self.backend.devices[:1]
+        self.supervisor.step(102)
+        self.assertEqual(self.supervisor.state, 'ERROR')
+        self.assertEqual(self.backend.calls, [])
+        self.backend.devices.append(MODULE.CanDevice('can1', 'battery'))
+        self.supervisor.step(104)
+        self.assertEqual(self.supervisor.state, 'RUNNING')
+        self.assertEqual(self.backend.calls, [])
+
+    def test_busoff_and_repeated_busoff_preserve_container_and_interfaces(self):
+        self.supervisor.step(100)
+        self.backend.bus_off = True
+        self.backend.bus_off_count = 3
+        self.supervisor.step(102)
+        self.supervisor.step(110)
+        self.assertEqual(self.supervisor.state, 'ERROR')
+        self.assertNotIn('stop', self.backend.calls)
+        self.assertNotIn('deactivate', self.backend.calls)
+
+    def test_unhealthy_and_timed_out_container_is_not_killed(self):
+        for status in [('running', 'unhealthy'), ('running', 'starting'), ('running', 'none')]:
+            self.backend.status = status
+            self.supervisor.step(100)
+            self.supervisor.step(300)
+            self.assertEqual(self.supervisor.state, 'ERROR')
+        self.assertEqual(self.backend.calls, [])
+
+    def test_can_reconfiguration_is_announced_and_keeps_ros_alive(self):
+        self.backend.ready = False
+        self.supervisor.step(100)
+        self.assertEqual(self.supervisor.state, 'ERROR')
+        self.assertEqual(self.backend.calls, ['configure'])
+        self.assertIn('reset required', self.supervisor.detail)
+        self.supervisor.step(102)
+        self.assertEqual(self.supervisor.state, 'RUNNING')
+
+    def test_bad_config_does_not_stop_live_stack(self):
+        self.backend.invalid_config = True
+        self.supervisor.step(100)
+        self.assertEqual(self.supervisor.state, 'ERROR')
+        self.assertEqual(self.backend.calls, [])
+
+    def test_start_once_without_adapters_but_do_not_recreate_crashed_container(self):
+        self.backend.devices = []
+        self.backend.status = ('absent', 'none')
+        self.supervisor.step(100)
+        self.assertEqual(self.backend.calls, ['start'])
+        self.assertEqual(self.supervisor.state, 'ERROR')
+        self.backend.status = ('exited', 'unhealthy')
+        self.supervisor.step(102)
+        self.assertEqual(self.backend.calls, ['start'])
+        self.assertIn('explicit service restart', self.supervisor.detail)
+
+    def test_explicit_service_stop_still_stops_container(self):
+        self.supervisor.request_stop()
+        self.assertEqual(self.supervisor.run(), 0)
+        self.assertEqual(self.backend.calls, ['stop'])
+        self.assertEqual(self.supervisor.state, 'STOPPED')
 
 
 if __name__ == "__main__":

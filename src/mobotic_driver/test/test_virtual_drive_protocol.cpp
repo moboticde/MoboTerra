@@ -100,7 +100,8 @@ void tractionPdo()
   drive.handle(driver.tractionPdoCommandFrame());
   check(!drive.enabled() && read(drive, 2, 0x606C) == 0, "RPDO must wait for SYNC");
   const auto frames = drive.handle(MoboticDriveCanCommunication::syncFrame());
-  check(frames.size() == 2 && frames[0].id == 0x182 && frames[0].dlc == 7, "ELMO motion PDO layout");
+  check(frames.size() == 3 && frames[0].id == 0x182 && frames[0].dlc == 7 &&
+        frames[2].id == 0x382 && frames[2].dlc == 4, "ELMO velocity/status + position PDO layouts");
   check(shortFromFrame(frames[0], 0) == 0x27 && frames[0].data[2] == VELOCITY &&
         intFromFrame(frames[0], 3) == -76543, "ELMO PDO contents");
   driver.update(frames[0]); driver.update(frames[1]);

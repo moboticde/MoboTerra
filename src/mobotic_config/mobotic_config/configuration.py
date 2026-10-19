@@ -10,6 +10,7 @@ import warnings
 
 import yaml
 from .policy_schema import POLICY_TYPES
+from .operator_inputs import RemdeviceMapping
 
 
 COMPONENT_FILES = {
@@ -127,7 +128,7 @@ def validate_platform(platform):
         top = ('schema_version', 'robot_name', 'frames', 'can', 'geometry', 'actuators',
                'traction_profile', 'motion_limits', 'modules', 'usb_joystick',
                'scanners', 'safety', 'battery')
-        _record(platform, (*top, 'commissioning_pending'), 'platform', required=top)
+        _record(platform, (*top, 'commissioning_pending', 'reference_corners', 'operator'), 'platform', required=top)
         _record(platform['frames'], ('base', 'odom'), 'frames')
         _record(platform['geometry'], ('wheel_radius', 'wheel_width'), 'geometry')
         _record(platform['can'], ('master_node_id', 'drives', 'battery'), 'can')
@@ -225,6 +226,21 @@ def validate_platform(platform):
                         raise ConfigurationError(f'{joint}: software steering limit exceeds controller limit')
         if len(set(ids)) != len(ids) or len(set(joints)) != len(joints):
             raise ConfigurationError('CAN IDs and joint names must be unique')
+        operator = platform.get('operator', {'source': 'usb'})
+        _record(operator, ('source', 'mapping', 'usb_driver', 'usb_mapping_verified'), 'operator', required=('source',))
+        if operator.get('source') not in ('usb', 'remdevice'):
+            raise ConfigurationError('operator.source must be usb or remdevice')
+        if operator.get('usb_driver', 'game_controller_node') not in ('joy_node', 'game_controller_node'):
+            raise ConfigurationError('operator.usb_driver must be joy_node or game_controller_node')
+        if 'usb_mapping_verified' in operator and type(operator['usb_mapping_verified']) is not bool:
+            raise ConfigurationError('operator.usb_mapping_verified must be boolean')
+        if operator['source'] == 'remdevice':
+            try:
+                RemdeviceMapping(operator.get('mapping', {}))
+            except (ValueError, KeyError, TypeError) as error:
+                raise ConfigurationError(str(error)) from error
+            if operator['mapping']['node_id'] in ids:
+                raise ConfigurationError('REMdevice node ID conflicts with platform drives/master')
         if len({tuple(m['cad_steering_xyz'][:2]) for m in modules}) != 4:
             raise ConfigurationError('four wheel axes must have distinct XY coordinates')
         scanners = platform['scanners']
@@ -242,10 +258,22 @@ def validate_platform(platform):
         if len({s['frame_id'] for s in scanners['units']}) != 2 or len({s['sensor_ip'] for s in scanners['units']}) != 2:
             raise ConfigurationError('scanner frames and IPs must be unique')
         generated_links = {'chassis', platform['frames']['base']}
+        corners = platform.get('reference_corners', [])
+        if not isinstance(corners, list) or (corners and len(corners) != 4):
+            raise ConfigurationError('reference_corners must contain four named frames or be empty')
+        corner_names = []
+        for corner in corners:
+            _record(corner, ('name', 'xyz'), 'reference corner')
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', corner['name']):
+                raise ConfigurationError('invalid corner frame name')
+            _vector(corner['xyz'], 'reference corner coordinates')
+            corner_names.append(corner['name'])
         for module in modules:
             generated_links.update(module['name'] + suffix for suffix in ('_steering_mount', '_steering_link', '_wheel'))
         if len(generated_links) != 14 or any(s['frame_id'] in generated_links for s in scanners['units']):
             raise ConfigurationError('base and scanner frames conflict with generated links')
+        if len(set(corner_names)) != len(corner_names) or any(n in generated_links or n in {s['frame_id'] for s in scanners['units']} or n == platform['frames']['odom'] for n in corner_names):
+            raise ConfigurationError('corner frame names conflict')
         if platform['frames']['odom'] in generated_links or platform['frames']['odom'] in {s['frame_id'] for s in scanners['units']}:
             raise ConfigurationError('odom frame cannot belong to the robot description tree')
         safety = platform['safety']
@@ -350,6 +378,7 @@ class Configuration:
         vehicle_limits = {key: float(limits[key]) for key in ('max_velocity_linear', 'max_velocity_angular',
                                                             'max_acceleration_linear', 'max_acceleration_angular')}
         joint_limits = {key: float(limits[key]) for key in ('max_steering_velocity', 'max_traction_velocity', 'max_traction_current')}
+        driver.update({key: joint_limits[key] for key in ('max_steering_velocity', 'max_traction_velocity')})
         kinematics = {'module_names': names, 'steering_joint_names': steering, 'traction_joint_names': traction,
                       'wheels_x': [float(m['cad_steering_xyz'][0]) for m in modules],
                       'wheels_y': [float(m['cad_steering_xyz'][1]) for m in modules],
@@ -359,6 +388,14 @@ class Configuration:
         supervisor = {'expected_module_names': names, 'expected_steering_joint_names': steering,
                       'expected_traction_joint_names': traction, 'direct_steering_encoder_resolutions': resolutions,
                       'direct_traction_control_mode': 'velocity', 'output_frame_id': frame, **vehicle_limits}
+        operator = p.get('operator', {'source': 'usb'})
+        supervisor['require_operator_interlock'] = operator['source'] == 'remdevice'
+        manual = {'frame_id': frame, **vehicle_limits}
+        if operator['source'] == 'usb':
+            manual['input_mapping_verified'] = operator.get(
+                'usb_mapping_verified', operator.get('usb_driver', 'game_controller_node') == 'game_controller_node')
+        if operator['source'] == 'remdevice':
+            manual['remdevice_mapping'] = json.dumps(operator['mapping'], sort_keys=True)
         supervisor.update({'max_direct_' + key.removeprefix('max_'): value for key, value in joint_limits.items()})
         participants = p['battery']['participants']
         battery = {'primary_battery_id': p['battery']['primary_id']}
@@ -366,7 +403,7 @@ class Configuration:
                            ('soc_pgns', 'soc_pgn'), ('voltage_pgns', 'voltage_pgn')):
             battery['batteries.' + key] = [str(b[field]) for b in participants]
         return {'driver': driver, 'kinematics': kinematics, 'supervisor': supervisor,
-                'manual': {'frame_id': frame, **vehicle_limits}, 'battery': battery,
+                'manual': manual, 'battery': battery,
                 'safety': copy.deepcopy(p['safety']),
                 'odometry': {'base_frame_id': frame, 'odom_frame_id': p['frames']['odom']}}
 
@@ -458,6 +495,8 @@ class Configuration:
         if not 0 <= percentage <= 1:
             raise ConfigurationError('minimum_battery_percentage must be a fraction in [0, 1]')
         manual = self._parameters['manual']
+        if any(manual[key] not in (-1, 1) for key in ('axis_speed_sign', 'axis_crab_sign', 'axis_steer_sign')):
+            raise ConfigurationError('axis signs must be -1 or 1')
         if manual['mode_switch_type'] not in ('toggle', 'position'):
             raise ConfigurationError('mode_switch_type must be toggle or position')
         if {manual['mode_switch_manual_value'], manual['mode_switch_auto_velocity_value']} != {0, 1}:
@@ -477,7 +516,7 @@ class Configuration:
             if not 0 <= manual[key] <= 1:
                 raise ConfigurationError(f'{key} must be in [0, 1]')
         supervisor = self._parameters['supervisor']
-        if supervisor['initial_mode'] not in ('manual', 'auto_velocity', 'auto_direct'):
+        if supervisor['initial_mode'] not in ('manual', 'autonomous', 'kinematicoff', 'auto_velocity', 'auto_direct'):
             raise ConfigurationError('invalid initial_mode')
         for key in ('warning_speed_scale', 'override_speed_scale'):
             if not 0 <= supervisor[key] <= 1:
@@ -488,6 +527,11 @@ class Configuration:
                 raise ConfigurationError(f'{key}: expected three finite values (variances nonnegative)')
         if self._parameters['driver']['telemetry_pdo_sync_divider'] not in range(1, 241):
             raise ConfigurationError('telemetry_pdo_sync_divider must be an integer in 1..240')
+        driver = self._parameters['driver']
+        if not driver['traction_pdo_enabled'] or not driver['telemetry_pdo_enabled']:
+            raise ConfigurationError('the synchronized feedback profile requires both motion PDO paths')
+        if not 0 < driver['sample_skew_budget'] < driver['traction_pdo_period']:
+            raise ConfigurationError('sample_skew_budget must be positive and less than the SYNC period')
 
     def virtual_drives(self):
         result = []

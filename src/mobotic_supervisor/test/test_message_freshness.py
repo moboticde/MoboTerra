@@ -17,7 +17,7 @@ class MessageFreshnessTest(unittest.TestCase):
         self.node.command_accept_after = harness.Time(9.5)
 
     def delayed_command(self, mode):
-        self.node.current_mode = mode
+        self.node.selected_mode = mode
         stamp = harness.Time(9.76).to_msg()  # 240 ms old at receipt.
         if mode == harness.MODES.AUTO_DIRECT:
             msg = self.platform.joints(stamp)
@@ -51,13 +51,13 @@ class MessageFreshnessTest(unittest.TestCase):
                 if mode == harness.MODES.AUTO_DIRECT:
                     stop = self.node.direct_command_publisher.messages[-1]
                     self.assertEqual(stop.velocity, [0.0] * 4)
-                    self.assertEqual(stop.effort, [0.0] * 4)
+                    self.assertEqual(stop.effort, [])
                 else:
                     self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
                 self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
 
     def test_manual_state_original_stamp_also_expires(self):
-        self.node.current_mode = harness.MODES.MANUAL
+        self.node.selected_mode = harness.MODES.MANUAL
         self.node._manual_command_callback(self.platform.velocity())
         state = copy.deepcopy(self.node.manual_state)
         state.header.stamp = harness.Time(9.76).to_msg()
@@ -92,7 +92,7 @@ class MessageFreshnessTest(unittest.TestCase):
                 self.assertIsNone(self.node.autonomy_command)
                 self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
 
-    def test_wheel_report_stamp_expiry_blocks_motion_not_enable(self):
+    def test_wheel_report_stamp_expiry_blocks_motion_and_enable(self):
         delayed = copy.deepcopy(self.node.wheel_status)
         delayed.header.stamp = harness.Time(9.71).to_msg()
         self.node._wheel_status_callback(delayed)
@@ -100,12 +100,12 @@ class MessageFreshnessTest(unittest.TestCase):
         self.platform.advance(0.02)
         self.node.wheel_status = delayed
         self.node._control()
-        self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
         self.assertIsNone(self.node.autonomy_command)
         self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
 
     def test_direct_joint_feedback_stamp_expiry_clears_motion(self):
-        self.node.current_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.AUTO_DIRECT
         delayed = copy.deepcopy(self.node.joint_state)
         delayed.header.stamp = harness.Time(9.71).to_msg()
         self.node._joint_state_callback(delayed)
@@ -114,7 +114,7 @@ class MessageFreshnessTest(unittest.TestCase):
         self.node.joint_state = delayed
         self.node._control()
         self.assertIsNone(self.node.autonomy_joint_command)
-        self.assertEqual(self.node.direct_command_publisher.messages[-1].velocity, [0.0] * 4)
+        self.assertFalse(self.node.direct_command_publisher.messages)  # Never guess a stale hold angle; local driver watchdog stops.
         self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
 
     def test_timestamp_and_receipt_boundaries(self):

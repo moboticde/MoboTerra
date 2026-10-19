@@ -2,17 +2,22 @@
 
 Integrated launch for the current MoboTerra stack, with two supervised motion paths:
 
-- Velocity: manual/external autonomy -> supervisor -> kinematics -> driver.
+- Velocity: operator/external autonomy -> supervisor -> kinematics -> supervisor -> driver.
 - External joint commands: autonomy -> supervisor -> driver (`AUTO_DIRECT`, mode 2).
 
-Wheel-module management is a third, separate path: supervisor -> driver for global
-enable/disable and error clearing, never motion setpoints.
+Both paths converge into final wheel_modules/command arrays. Internal operation
+commands separately manage global enable/disable and explicit reset transactions.
 The temporary F310/F710 USB profile uses Back (standardized button 4) to toggle
 MANUAL/AUTO_VELOCITY; face buttons are unused. Terminal requests use
 `vehicle/set_mode`, the only API accepting AUTO_DIRECT. Both first stop and verify standstill, then
 switch the sole selected mode. The driver enforces exclusive setpoint routing
-using fresh `vehicle/mode_state`; AUTO_DIRECT needs no extra opt-in setting.
-The joystick node is `joy/game_controller_node` for standardized SDL ordering.
+using fresh `vehicle/mode`; AUTO_DIRECT needs no extra opt-in setting.
+The default `operator` node is `remdevice_control`: PAIL/Ecobox node 9, 500 kbit/s,
+on the drive CAN bus. Its unverified mapping permits capture only. Follow the
+[REMdevice commissioning guide](../../docs/remdevice_commissioning.md).
+Selecting `operator.source: usb` starts the configured USB driver: generic
+`joy_node` for PAIL, or `game_controller_node` for standardized Logitech ordering.
+The PAIL USB mapping must be verified separately before enabling motion.
 See [the complete temporary control map](../mobotic_manual_control/README.md).
 
 ## Hardware launch
@@ -27,13 +32,15 @@ ros2 launch mobotic_bringup moboterra.launch.py \
 
 One launch starts the driver, kinematics, odometry, supervisor and platform diagnostics.
 By default it also starts the drive SocketCAN bridge, a separate receive-only
-battery CAN receiver, joystick and manual
-control, FlexiSoft bridge and safety monitor, Vanguard battery monitor and both
-SICK scanner nodes. Autonomy and robot description/joint TF are not launched.
+battery CAN receiver, the selected operator provider,
+FlexiSoft bridge and safety monitor, Vanguard battery monitor and both
+SICK scanner nodes and the generic scanner-safety adapter. Autonomy is not launched.
 Wheel odometry does publish `odom -> base_link` on the namespaced `tf` topic.
-The separate [mobotic_description](../mobotic_description/README.md) package now
-provides an optional standalone description launch with confirmed CAD floor/axis
-placement; ROS/RViz validation is still required before integration into bringup.
+The shared [description](../mobotic_description/README.md) starts by default,
+including joint/static TF and CAD-envelope corner frames. Use start_description:=false
+if an external owner supplies it; do not start two robot_state_publishers.
+ROS/RViz validation remains required. Physical position continuity is not yet
+commissioned, so physical enable/joint publication remain inhibited.
 
 Required external packages: `ros2_socketcan`, `joy`, `sick_safetyscanners2`.
 Bringup does not configure the OS CAN interfaces or PC network interface.
@@ -109,8 +116,8 @@ controller profile and per-drive limits consistently.
 
 ## Odometry and scanner data
 
-`mobotic_odometry` integrates measured `agv_vel` (derived from all four modules),
-including sideways crab motion and yaw, and publishes `/moboterra/odometry`.
+`mobotic_odometry` integrates measured `vehicle/measured_velocity` (derived from all four modules),
+including sideways crab motion and yaw, and publishes `/moboterra/vehicle/odom`.
 The `odom -> base_link` transform carries the same pose/acquisition timestamp,
 on `/moboterra/tf`. Never run another broadcaster for that transform unless
 `publish_odom_tf:=false`. The CAD/joint description is still launched separately.
@@ -130,7 +137,7 @@ on the actual network; no raw-data recording or scanner extrinsic TF is added.
 ```bash
 ros2 topic info /moboterra/scanner/front_left/raw_data -v
 ros2 topic info /moboterra/scanner/rear_right/raw_data -v
-ros2 topic info /moboterra/odometry -v
+ros2 topic info /moboterra/vehicle/odom -v
 ```
 
 ## Enable policy and commissioning
@@ -147,9 +154,10 @@ right stick translates/crabs, and either L1 or R1 boosts without stacking.
 Management lease loss (0.3 s) stops/disables independently of joint-command loss
 (0.1 s) and decoded CAN feedback loss.
 
-Driver services are available under the robot namespace, e.g.
-`/moboterra/clear_errors`. `enable_all_drives` requires a fresh enable lease.
-`disable_all_drives` is not a persistent override while the supervisor requests enable.
+Public fault reset is `/moboterra/wheel_modules/clear_errors`, owned by the
+supervisor and verified asynchronously. Driver initialization/disable services
+are internal. Initialization rejects enabled drives; a diagnostic disable is
+not a persistent override while the supervisor requests enable.
 
 Verify the node IDs, gearing, geometry, limits, joystick layout, battery participant
 mapping, FlexiSoft telegram and hardware stop/brakes before operating the platform.
@@ -183,7 +191,7 @@ The mock node publishes `battery/system_state`, not public `battery/state`.
 ```bash
 ros2 node list
 ros2 topic list
-ros2 topic echo /moboterra/vehicle/mode_state
+ros2 topic echo /moboterra/vehicle/mode
 ros2 topic echo /moboterra/wheel_modules/status
 ros2 topic echo /moboterra/diagnostics
 rqt_graph

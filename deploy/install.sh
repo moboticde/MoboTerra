@@ -50,7 +50,8 @@ fi
 [[ -r /etc/os-release ]] || die "Cannot identify the operating system"
 source /etc/os-release
 [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "24.04" ]] || die "Ubuntu 24.04 is required"
-[[ "$(dpkg --print-architecture)" == "arm64" ]] || die "This deployment supports ARM64 only"
+platform_arch="$(dpkg --print-architecture)"
+case "${platform_arch}" in arm64|amd64) ;; *) die "Supported architectures: arm64, amd64" ;; esac
 
 existing_value() {
     local key="$1" config=/etc/moboterra/moboterra.env
@@ -165,9 +166,9 @@ commit="$(git -C "${repo_root}" rev-parse --short=12 HEAD 2>/dev/null || printf 
 build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # ZIP downloads have no commit ID; each installation still needs a unique release.
 version="${commit}-$(date -u +%Y%m%d%H%M%S)-$$"
-runtime_image="moboterra:${version}-jazzy-arm64"
-gui_image="moboterra-gui:${version}-jazzy-arm64"
-tools_image="moboterra-tools:${version}-jazzy-arm64"
+runtime_image="moboterra:${version}-jazzy-${platform_arch}"
+gui_image="moboterra-gui:${version}-jazzy-${platform_arch}"
+tools_image="moboterra-tools:${version}-jazzy-${platform_arch}"
 
 echo "Pulling and resolving the ROS 2 Jazzy base image..."
 for attempt in 1 2 3; do
@@ -181,7 +182,7 @@ ros_image="$(docker image inspect --format '{{index .RepoDigests 0}}' ros:jazzy-
 common_build_args=(
     --file "${repo_root}/deploy/Dockerfile"
     --build-arg "ROS_IMAGE=${ros_image}"
-    --build-arg TARGETARCH=arm64
+    --build-arg "TARGETARCH=${platform_arch}"
     --build-arg "VCS_REF=${commit}"
     --build-arg "BUILD_DATE=${build_date}"
 )
@@ -254,6 +255,10 @@ if (( software_only == 1 )); then
     exit 0
 fi
 install -d -m 0750 -o 10001 -g 10001 /var/lib/moboterra/ros-logs
+install -d -m 0750 -o 10001 -g 10001 /var/lib/moboterra/position-state
+if [[ ! -f /etc/moboterra/platform.yaml ]]; then
+    install -m 0644 "${repo_root}/src/mobotic_config/config/platform.yaml" /etc/moboterra/platform.yaml
+fi
 
 config_backup=""
 if [[ -f /etc/moboterra/moboterra.env ]]; then

@@ -29,7 +29,8 @@ void refresh(MoboticDriveCanCommunication& drive, Clock::time_point at)
   drive.update(reply(drive, steering ? MICONTROL_VELOCITY_FEEDBACK : EC_TRACTION_VELOCITY_FEEDBACK,
                      steering ? 1 : 0, 0), at);
   if (steering) { drive.update(reply(drive, POSITION_FEEDBACK, 0, 0), at); }
-  else { drive.update(reply(drive, EC_ERROR_CODE, 0, 0), at); }
+  else { drive.update(reply(drive, EC_ERROR_CODE, 0, 0), at);
+         drive.update(reply(drive, EC_TRACTION_POSITION_FEEDBACK, 0, 0), at); }
 }
 
 bool ready(const MoboticDriveCanCommunication& drive, Clock::time_point at)
@@ -95,6 +96,11 @@ TEST(FeedbackFreshness, PdoMotionDoesNotHideExpiredFaultTelemetry)
   pdo.id = drive.tractionTpdoCobId(); pdo.dlc = 7;
   shortToFrame(pdo, 0, 0x27); pdo.data[2] = VELOCITY;
   drive.update(pdo, later);
+  EXPECT_FALSE(drive.feedbackFreshness().motionFresh(false, 0.3, later));
+  auto position_pdo = pdo;
+  position_pdo.id = drive.telemetryTpdo3CobId(); position_pdo.dlc = 4;
+  intToFrame(position_pdo, 0, 0);
+  drive.update(position_pdo, later);
   EXPECT_TRUE(drive.feedbackFreshness().motionFresh(false, 0.3, later));
   EXPECT_FALSE(ready(drive, later));
   drive.update(reply(drive, EC_ERROR_REGISTER, 0, 0, READ_REPLY_1B), later);

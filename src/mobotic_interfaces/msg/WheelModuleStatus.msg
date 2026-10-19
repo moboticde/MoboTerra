@@ -6,6 +6,15 @@ uint8 CONTROL_MODE_VELOCITY=2
 uint8 CONTROL_MODE_CURRENT=3
 
 string name
+DriveStatus steering
+DriveStatus traction
+bool initialized
+bool position_valid
+string position_reason
+uint64 reset_id
+bool reset_acknowledged
+bool sto_state_known
+bool sto_active
 bool enabled
 # Both drives have fresh status, motion and fault telemetry. Independent of
 # the array publication time. False prohibits motion, including cached enabled.

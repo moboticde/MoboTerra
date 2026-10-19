@@ -1,5 +1,6 @@
 import rclpy
-from mobotic_interfaces.msg import SafetyIOState, SafetyState
+from mobotic_interfaces.msg import SafetyIOState, SafetyState, SafetyTelegram
+from rclpy.time import Time
 from rclpy.node import Node
 from std_msgs.msg import UInt8
 
@@ -50,16 +51,38 @@ class SafetyMonitor(Node):
         self.io_publisher = self.create_publisher(SafetyIOState, 'safety/io_state', 1)
         self.state_publisher = self.create_publisher(SafetyState, 'safety/state', 1)
         self.subscription = self.create_subscription(
-            UInt8, 'flexisoft/status_byte', self._status_callback, 10
+            SafetyTelegram, 'flexisoft/status_byte', self._status_callback, 1
         )
         self.timer = self.create_timer(self.publish_period, self._publish)
 
         self.last_status_time = None
         self.status_byte = 0
+        self.connection_epoch = ''
+        self.last_sequence = 0
+        self.retired_epochs = set()
 
     def _status_callback(self, msg):
-        self.status_byte = int(msg.data)
-        self.last_status_time = self.get_clock().now()
+        now = self.get_clock().now()
+        if msg.header.stamp.sec < 0 or not 0 <= msg.header.stamp.nanosec < 1000000000:
+            return
+        try:
+            stamp = Time.from_msg(msg.header.stamp)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not msg.connection_epoch or stamp.nanoseconds <= 0 or not 0 <= (now - stamp).nanoseconds <= int(self.status_timeout * 1e9):
+            return
+        if msg.connection_epoch in self.retired_epochs:
+            return
+        if msg.connection_epoch != self.connection_epoch:
+            if self.connection_epoch:
+                self.retired_epochs.add(self.connection_epoch)
+            self.connection_epoch = msg.connection_epoch
+            self.last_sequence = 0
+        if msg.telegram_sequence <= self.last_sequence:
+            return
+        self.last_sequence = msg.telegram_sequence
+        self.status_byte = int(msg.status_byte)
+        self.last_status_time = stamp
         self._publish()
 
     def _communication_ok(self, now):
@@ -73,23 +96,26 @@ class SafetyMonitor(Node):
         communication_ok = self._communication_ok(now)
         value = self.status_byte if communication_ok else 0
 
-        front_ossd = communication_ok and bool(value & self.front_ossd_mask)
-        rear_ossd = communication_ok and bool(value & self.rear_ossd_mask)
-        emergency_stop = not communication_ok or bool(value & self.estop_mask)
+        # Every configured OSSD channel must be high, not merely one bit.
+        front_ossd = communication_ok and self.front_ossd_mask != 0 and (value & self.front_ossd_mask) == self.front_ossd_mask
+        rear_ossd = communication_ok and self.rear_ossd_mask != 0 and (value & self.rear_ossd_mask) == self.rear_ossd_mask
+        emergency_stop = communication_ok and bool(value & self.estop_mask)
         safety_override = communication_ok and bool(value & self.override_mask)
         front_warning_clear = communication_ok and not bool(value & self.front_warning_mask)
         rear_warning_clear = communication_ok and not bool(value & self.rear_warning_mask)
         safety_enable = communication_ok and (
             bool(value & self.safety_enable_mask) if self.safety_enable_mask else True
         )
-        sto_active = not communication_ok or (
+        sto_active = communication_ok and (
             bool(value & self.sto_mask) if self.sto_mask else False
         )
         if self.estop_implies_sto and emergency_stop:
             sto_active = True
 
         io_state = SafetyIOState()
-        io_state.header.stamp = now.to_msg()
+        io_state.header.stamp = self.last_status_time.to_msg() if self.last_status_time is not None else now.to_msg()
+        io_state.emergency_stop_state_known = communication_ok and bool(self.estop_mask)
+        io_state.scanner_state_known = communication_ok
         io_state.emergency_stop_active = emergency_stop
         io_state.safety_enable_active = safety_enable
         io_state.sto_active = sto_active
@@ -111,6 +137,7 @@ class SafetyMonitor(Node):
         state = SafetyState()
         state.header = io_state.header
         state.communication_ok = communication_ok
+        state.physical_state_known = communication_ok
         state.system_ready = system_ready
         state.motion_permitted = motion_permitted
         state.protective_stop_active = protective_stop

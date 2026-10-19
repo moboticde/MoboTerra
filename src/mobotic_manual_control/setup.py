@@ -21,6 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             'manual_control = mobotic_manual_control.manual_control:main',
+            'remdevice_control = mobotic_manual_control.remdevice:main',
+            'remdevice_trace = mobotic_manual_control.remdevice_trace:main',
         ],
     },
 )

@@ -17,7 +17,8 @@ POLICY_TYPES = {
         "traction_pdo_enabled": "boolean",
         "telemetry_pdo_enabled": "boolean",
         "telemetry_pdo_sync_divider": "integer",
-        "traction_pdo_period": "number"
+        "traction_pdo_period": "number",
+        "sample_skew_budget": "number"
     },
     "kinematics": {
         "cmd_vel_timeout": "number",
@@ -28,6 +29,9 @@ POLICY_TYPES = {
         "axis_speed": "integer",
         "axis_crab": "integer",
         "axis_steer": "integer",
+        "axis_speed_sign": "integer",
+        "axis_crab_sign": "integer",
+        "axis_steer_sign": "integer",
         "button_deadman": "integer",
         "buttons_boost": "integer_list",
         "button_mode_switch": "integer",
@@ -77,6 +81,10 @@ POLICY_TYPES = {
         "min_intensities": "number"
     },
     "supervisor": {
+        "startup_grace": "number",
+        "reset_timeout": "number",
+        "required_health_sources": "string_list",
+        "health_timeout": "number",
         "initial_mode": "string",
         "control_period": "number",
         "mode_transition_stop_duration": "number",

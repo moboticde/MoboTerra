@@ -53,11 +53,18 @@ class JointState:
         self.effort = []
 
 
-class WheelModuleCommand:
+class WheelModuleOperationCommand:
     def __init__(self):
         self.header = SimpleNamespace(stamp=None)
         self.enable = False
-        self.clear_errors = False
+        self.reset_id = 0
+
+
+class WheelModuleCommandArray:
+    MOTION, CONTROLLED_STOP, HOLD = 0, 1, 2
+    def __init__(self):
+        self.header = SimpleNamespace(stamp=None)
+        self.modules = []
 
 
 class Publisher:
@@ -68,7 +75,7 @@ class Publisher:
         self.messages.append(message)
 
 
-MODES = SimpleNamespace(MANUAL=0, AUTO_VELOCITY=1, AUTO_DIRECT=2, UNKNOWN=255)
+MODES = SimpleNamespace(MANUAL=0, AUTONOMOUS=1, KINEMATICOFF=2, AUTO_VELOCITY=1, AUTO_DIRECT=2, SAFETY=3, ERROR=4, UNKNOWN=255)
 SOURCE = Path(__file__).resolve().parents[1] / 'mobotic_supervisor' / 'supervisor.py'
 tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
 supervisor_class = next(
@@ -85,7 +92,9 @@ namespace = {
     'Time': Time,
     'TwistStamped': TwistStamped,
     'JointState': JointState,
-    'WheelModuleCommand': WheelModuleCommand,
+    'WheelModuleOperationCommand': WheelModuleOperationCommand,
+    'WheelModuleCommandArray': WheelModuleCommandArray,
+    'WheelModuleCommand': SimpleNamespace,
     'VehicleModeState': MODES,
     'math': math,
     'copy': copy,
@@ -129,11 +138,23 @@ class EnableGateTest(unittest.TestCase):
             minimum_percentage=0.8, status_message='',
         )
         node.expected_module_names = ['front', 'rear']
-        node.wheel_status_received = None
-        node.wheel_status = None
+        node.wheel_status_received = self.now
+        node.wheel_status = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()), modules=[
+            SimpleNamespace(name=name, initialized=True, position_valid=True, enabled=False, error_code=0, feedback_fresh=True)
+            for name in node.expected_module_names])
+        node.manual_state = None
+        node.manual_state_received = None
+        node.manual_timeout = node.autonomy_timeout = 0.25
+        node.standstill_joint_velocity = 0.1
+        node.standstill_linear_velocity = node.standstill_angular_velocity = 0.02
+        node.control_period = 0.02
+        node.reset_id = 0
+        node.reset_started_at = None
+        node.fault_codes = set()
+        node.standstill_since = None
         node.get_clock = lambda: SimpleNamespace(now=lambda: self.now)
         node.module_command_publisher = Publisher()
-        node.current_mode = MODES.MANUAL
+        node.selected_mode = MODES.MANUAL
         node.transition_in_progress = False
         node.transition_timeout = 10.0
         node.transition_timed_out = False
@@ -191,7 +212,9 @@ class EnableGateTest(unittest.TestCase):
                 setattr(state, attr, previous)
 
     def test_missing_or_disabled_wheels_block_motion_but_allow_enable(self):
-        self.assertTrue(self.node._enable_gate(self.now)[0])
+        self.node.wheel_status = None
+        self.node.wheel_status_received = None
+        self.assertFalse(self.node._enable_gate(self.now)[0])
         self.assertFalse(self.node._base_gate(self.now)[0])
         self.node.wheel_status_received = self.now
         self.node.wheel_status = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()), modules=[
@@ -226,7 +249,7 @@ class EnableGateTest(unittest.TestCase):
         messages = self.node.module_command_publisher.messages
         self.assertEqual(len(messages), 2)
         self.assertTrue(all(message.enable for message in messages))
-        self.assertTrue(all(not message.clear_errors for message in messages))
+        self.assertTrue(all(message.reset_id == 0 for message in messages))
         self.assertEqual(messages[-1].header.stamp, self.now.to_msg())
 
     def test_control_disables_then_recovers_with_readiness(self):

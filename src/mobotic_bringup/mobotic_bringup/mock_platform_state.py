@@ -38,6 +38,7 @@ class MockPlatformState(Node):
         safety.header.stamp = stamp
         safety.header.frame_id = self.frame_id
         safety.communication_ok = True
+        safety.physical_state_known = True
         safety.system_ready = True
         safety.motion_permitted = True
         safety.protective_stop_active = False
@@ -52,6 +53,8 @@ class MockPlatformState(Node):
         safety_io.header.stamp = stamp
         safety_io.header.frame_id = self.frame_id
         safety_io.emergency_stop_active = False
+        safety_io.emergency_stop_state_known = True
+        safety_io.scanner_state_known = True
         safety_io.safety_enable_active = True
         safety_io.sto_active = False
         safety_io.front_left_protective_field_clear = True

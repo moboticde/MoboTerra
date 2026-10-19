@@ -2,7 +2,7 @@ import math
 
 import rclpy
 from geometry_msgs.msg import TwistStamped
-from mobotic_interfaces.msg import ManualControlState, VehicleModeRequest, VehicleModeState
+from mobotic_interfaces.msg import OperatorState, VehicleModeRequest, VehicleModeState
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
@@ -11,13 +11,17 @@ from sensor_msgs.msg import Joy
 
 class ManualControl(Node):
     def __init__(self):
-        super().__init__('manual_control')
+        super().__init__('operator')
 
         # SDL standardized game_controller_node mapping, F310/F710 USB profile.
         # Face buttons 0..3 are deliberately unused.
         self.declare_parameter('axis_speed', 3)
         self.declare_parameter('axis_steer', 0)
         self.declare_parameter('axis_crab', 2)
+        self.declare_parameter('axis_speed_sign', 1)
+        self.declare_parameter('axis_steer_sign', 1)
+        self.declare_parameter('axis_crab_sign', 1)
+        self.declare_parameter('input_mapping_verified', True)
         self.declare_parameter('button_deadman', -1)
         self.declare_parameter('buttons_boost', [9, 10])
         self.declare_parameter('button_mode_switch', 4)
@@ -38,6 +42,10 @@ class ManualControl(Node):
         self.axis_speed = int(self.get_parameter('axis_speed').value)
         self.axis_steer = int(self.get_parameter('axis_steer').value)
         self.axis_crab = int(self.get_parameter('axis_crab').value)
+        self.axis_speed_sign = int(self.get_parameter('axis_speed_sign').value)
+        self.axis_steer_sign = int(self.get_parameter('axis_steer_sign').value)
+        self.axis_crab_sign = int(self.get_parameter('axis_crab_sign').value)
+        self.input_mapping_verified = bool(self.get_parameter('input_mapping_verified').value)
         self.button_deadman = int(self.get_parameter('button_deadman').value)
         self.buttons_boost = [int(index) for index in self.get_parameter('buttons_boost').value]
         self.button_mode_switch = int(self.get_parameter('button_mode_switch').value)
@@ -58,12 +66,12 @@ class ManualControl(Node):
 
         self._validate_parameters()
 
-        self.command_publisher = self.create_publisher(TwistStamped, 'manual/cmd_vel', 1)
-        self.state_publisher = self.create_publisher(ManualControlState, 'manual/state', 1)
-        self.mode_publisher = self.create_publisher(VehicleModeRequest, 'vehicle/mode_request', 1)
+        self.command_publisher = self.create_publisher(TwistStamped, 'operator/cmd_vel', 1)
+        self.state_publisher = self.create_publisher(OperatorState, 'operator/state', 1)
+        self.mode_publisher = self.create_publisher(VehicleModeRequest, 'operator/mode_request', 1)
         self.joy_subscription = self.create_subscription(Joy, 'joy', self._joy_callback, 1)
         self.mode_subscription = self.create_subscription(
-            VehicleModeState, 'vehicle/mode_state', self._vehicle_mode_callback, 1)
+            VehicleModeState, 'vehicle/mode', self._vehicle_mode_callback, 1)
         self.timer = self.create_timer(self.publish_period, self._publish)
 
         self.last_joy_time = None
@@ -76,10 +84,16 @@ class ManualControl(Node):
         self.last_mode_joy_stamp = None
         self.vehicle_mode_state = None
         self.vehicle_mode_received = None
+        self.rearm_phase = 'neutral'
+        self.last_joy_stamp = None
+        self.controls_neutral = False
         if self.button_mode_switch < 0:
             self.get_logger().warning('RP1 mode switch is unbound; verify the REMdevice receiver mapping.')
 
     def _validate_parameters(self):
+        if any(getattr(self, name, 1) not in (-1, 1)
+               for name in ('axis_speed_sign', 'axis_steer_sign', 'axis_crab_sign')):
+            raise ValueError('axis signs must be -1 or 1')
         indices = [
             self.axis_speed,
             self.axis_steer,
@@ -133,13 +147,17 @@ class ManualControl(Node):
         return min(max(value, previous - delta), previous + delta)
 
     def _manual_enabled(self):
-        return self.button_deadman < 0 or self.deadman_pressed
+        return (getattr(self, 'input_mapping_verified', True)
+                and getattr(self, 'rearm_phase', 'armed') == 'armed'
+                and (self.button_deadman < 0 or self.deadman_pressed))
 
     def _joystick_connected(self, now):
         if self.last_joy_time is None:
             return False
         age = (now - self.last_joy_time).nanoseconds
-        return 0 <= age <= Duration(seconds=self.joystick_timeout).nanoseconds
+        source_stamp = getattr(self, 'last_joy_stamp', None)
+        source_fresh = source_stamp is None or 0 <= (now - Time.from_msg(source_stamp)).nanoseconds <= int(self.joystick_timeout * 1e9)
+        return source_fresh and 0 <= age <= Duration(seconds=self.joystick_timeout).nanoseconds
 
     def _reset_command(self, now):
         self.command = [0.0, 0.0, 0.0]
@@ -149,6 +167,9 @@ class ManualControl(Node):
         self.last_update_time = now
         self.mode_switch_state = None
         self.last_mode_joy_stamp = None
+        self.rearm_phase = 'neutral'
+        self.last_joy_stamp = None
+        self.controls_neutral = False
 
     def _request_joystick_mode(self, mode, now):
         # RP1 can request only modes 0/1; direct control is service-only.
@@ -186,7 +207,7 @@ class ManualControl(Node):
             if previous == 0 and value == 1 and self._vehicle_mode_fresh(now):
                 state = self.vehicle_mode_state
                 if not state.transition_in_progress:
-                    mode = (VehicleModeRequest.AUTO_VELOCITY if state.current_mode == VehicleModeRequest.MANUAL
+                    mode = (VehicleModeRequest.AUTO_VELOCITY if getattr(state, 'selected_mode', state.current_mode) == VehicleModeRequest.MANUAL
                             else VehicleModeRequest.MANUAL)
                     self._request_joystick_mode(mode, now)
         elif previous is not None and value != previous:
@@ -196,14 +217,23 @@ class ManualControl(Node):
 
     def _vehicle_mode_callback(self, msg):
         now = self.get_clock().now()
-        stamp = Time.from_msg(msg.header.stamp).nanoseconds
-        if (msg.current_mode not in (0, 1, 2) or stamp <= 0
+        if hasattr(msg.header.stamp, 'sec') and (msg.header.stamp.sec < 0 or not 0 <= msg.header.stamp.nanosec < 1000000000):
+            return
+        try:
+            stamp = Time.from_msg(msg.header.stamp).nanoseconds
+        except (TypeError, ValueError, OverflowError):
+            return
+        if (msg.current_mode not in (0, 1, 2, 3, 4, 255) or stamp <= 0
                 or not 0 <= now.nanoseconds - stamp <= Duration(seconds=self.mode_state_timeout).nanoseconds):
             return
         if self.vehicle_mode_state is not None:
             previous = Time.from_msg(self.vehicle_mode_state.header.stamp).nanoseconds
             if stamp <= previous and self._vehicle_mode_fresh(now):
                 return
+        if self.vehicle_mode_state is not None and (
+            getattr(msg, 'supervisor_instance', '') != getattr(self.vehicle_mode_state, 'supervisor_instance', '') or
+            getattr(msg, 'authority_generation', 0) != getattr(self.vehicle_mode_state, 'authority_generation', 0)):
+            self._reset_command(now)
         self.vehicle_mode_state = msg
         self.vehicle_mode_received = now
 
@@ -217,6 +247,9 @@ class ManualControl(Node):
 
     def _joy_callback(self, msg):
         now = self.get_clock().now()
+        if not getattr(self, 'input_mapping_verified', True):
+            self._reset_command(now)
+            return
         # Detect a gap before overwriting the last receipt time, even if the
         # publish timer has not run since disconnection. Never ramp from an old
         # target or integrate acceleration over the disconnected interval.
@@ -229,20 +262,44 @@ class ManualControl(Node):
             self._reset_command(now)
             return
 
+        if hasattr(msg.header.stamp, 'sec') and (msg.header.stamp.sec < 0 or not 0 <= msg.header.stamp.nanosec < 1000000000):
+            self._reset_command(now)
+            return
+        try:
+            stamp = Time.from_msg(msg.header.stamp)
+        except (TypeError, ValueError, OverflowError):
+            self._reset_command(now)
+            return
+        if stamp.nanoseconds <= 0 or not 0 <= (now - stamp).nanoseconds <= int(self.joystick_timeout * 1e9):
+            self._reset_command(now)
+            return
+        previous_stamp = getattr(self, 'last_joy_stamp', None)
+        if previous_stamp is not None and stamp.nanoseconds <= Time.from_msg(previous_stamp).nanoseconds:
+            return
+        self.last_joy_stamp = msg.header.stamp
+
         self.warned_invalid_layout = False
         self.last_joy_time = now
         self._mode_switch_callback(msg, now)
         self.deadman_pressed = self.button_deadman >= 0 and bool(msg.buttons[self.button_deadman])
         self.turbo_active = any(msg.buttons[index] for index in self.buttons_boost)
+        self.controls_neutral = all(abs(msg.axes[i]) <= 0.08 for i in (self.axis_speed, self.axis_steer, self.axis_crab))
+        phase = getattr(self, 'rearm_phase', 'neutral')
+        if phase == 'neutral' and self.controls_neutral:
+            self.rearm_phase = 'armed' if self.button_deadman < 0 else 'release'
+        elif phase == 'release' and self.controls_neutral and not self.deadman_pressed:
+            self.rearm_phase = 'press'
+        elif phase == 'press' and self.controls_neutral and self.deadman_pressed:
+            self.rearm_phase = 'armed'
 
         if not self._manual_enabled():
             self.command = [0.0, 0.0, 0.0]
             self.last_update_time = now
             return
 
-        speed = msg.axes[self.axis_speed]
-        steer = msg.axes[self.axis_steer]
-        crab = msg.axes[self.axis_crab]
+        speed = msg.axes[self.axis_speed] * getattr(self, 'axis_speed_sign', 1)
+        steer = msg.axes[self.axis_steer] * getattr(self, 'axis_steer_sign', 1)
+        crab = msg.axes[self.axis_crab] * getattr(self, 'axis_crab_sign', 1)
         linear_scale = 1.0 if self.turbo_active else self.scale_linear
         angular_scale = 1.0 if self.turbo_active else self.scale_angular
 
@@ -273,16 +330,21 @@ class ManualControl(Node):
         command = self.command if active else [0.0, 0.0, 0.0]
 
         twist = TwistStamped()
-        twist.header.stamp = now.to_msg()
+        twist.header.stamp = getattr(self, 'last_joy_stamp', None) or now.to_msg()
         twist.header.frame_id = self.frame_id
         twist.twist.linear.x = command[0]
         twist.twist.linear.y = command[1]
         twist.twist.angular.z = command[2]
         self.command_publisher.publish(twist)
 
-        state = ManualControlState()
+        state = OperatorState()
         state.header = twist.header
         state.connected = connected
+        state.source_id = 'usb_joystick'
+        state.deadman_state_known = self.button_deadman >= 0 and connected
+        state.estop_pressed = False
+        state.estop_state_known = False
+        state.controls_neutral = connected and getattr(self, 'controls_neutral', False)
         state.deadman_pressed = self.deadman_pressed if connected else False
         state.command_active = active
         state.turbo_active = self.turbo_active if connected else False
@@ -292,7 +354,13 @@ class ManualControl(Node):
             state.status_message = 'deadman released'
         else:
             state.status_message = 'manual command active'
+        self._operator_identity(state)
         self.state_publisher.publish(state)
+
+    def _operator_identity(self, state):
+        state.source_id = 'usb_joystick'
+        if not getattr(self, 'input_mapping_verified', True):
+            state.status_message = 'USB mapping unverified; inspect raw joy before enabling motion'
 
 
 def main(args=None):

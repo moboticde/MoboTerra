@@ -96,4 +96,16 @@
   <xacro:module m="${p['modules'][1]}"/>
   <xacro:module m="${p['modules'][2]}"/>
   <xacro:module m="${p['modules'][3]}"/>
+  <xacro:macro name="corner" params="c">
+    <link name="${c['name']}"/>
+    <joint name="${c['name']}_fixed" type="fixed">
+      <parent link="chassis"/><child link="${c['name']}"/>
+      <origin xyz="${c['xyz'][0]} ${c['xyz'][1]} ${c['xyz'][2]}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+  <xacro:property name="corners" value="${p.get('reference_corners', [])}"/>
+  <xacro:if value="${len(corners) == 4}">
+    <xacro:corner c="${corners[0]}"/><xacro:corner c="${corners[1]}"/>
+    <xacro:corner c="${corners[2]}"/><xacro:corner c="${corners[3]}"/>
+  </xacro:if>
 </robot>

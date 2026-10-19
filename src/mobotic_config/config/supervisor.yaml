@@ -1,6 +1,10 @@
 # Node policy only. Shared hardware/geometry/limits are derived from platform.yaml.
 /**:
   ros__parameters:
+    startup_grace: 10.0
+    reset_timeout: 5.0
+    required_health_sources: ['kinematics']
+    health_timeout: 0.3
     initial_mode: "manual"
     control_period: 0.02
     mode_transition_stop_duration: 0.25

@@ -3,8 +3,11 @@
 #include <mobotic_driver/communication.hpp>
 #include <mobotic_driver/management_lease.hpp>
 #include <mobotic_driver/motion_source_gate.hpp>
+#include <mobotic_driver/pdo_configuration.hpp>
+#include <mobotic_driver/traction_position.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
-#include <mobotic_interfaces/msg/wheel_module_command.hpp>
+#include <mobotic_interfaces/msg/wheel_module_operation_command.hpp>
+#include <mobotic_interfaces/msg/wheel_module_command_array.hpp>
 #include <mobotic_interfaces/msg/wheel_module_status_array.hpp>
 #include <mobotic_interfaces/msg/vehicle_mode_state.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -12,6 +15,7 @@
 #include <std_srvs/srv/trigger.hpp>
 
 #include <map>
+#include <set>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -24,8 +28,9 @@ public:
   ~MoboticDriver() override;
   void canFrameCallback(const can_msgs::msg::Frame& frame);
   void feedbackTimerCallback();
-  void jointSetpointsCallback(const sensor_msgs::msg::JointState& msg, MotionSourceGate::Source source);
-  void wheelModuleCommandCallback(const mobotic_interfaces::msg::WheelModuleCommand& msg);
+  bool jointSetpointsCallback(const sensor_msgs::msg::JointState& msg, MotionSourceGate::Source source);
+  void wheelModuleCommandCallback(const mobotic_interfaces::msg::WheelModuleOperationCommand& msg);
+  void finalCommandCallback(const mobotic_interfaces::msg::WheelModuleCommandArray& msg);
   void watchdogTimerCallback();
   void sendStopToAllDrives();
   void disableAllDrives();
@@ -42,7 +47,7 @@ private:
     std::string traction_drive;
   };
 
-  void applyJointSetpoints(const sensor_msgs::msg::JointState& msg);
+  bool applyJointSetpoints(const sensor_msgs::msg::JointState& msg);
   void clearErrorsOnAllDrives();
   void configureWheelModules(const std::vector<std::string>& module_names,
                              const std::vector<std::string>& steering_drives,
@@ -86,13 +91,32 @@ private:
   std::map<std::string, MoboticDriveCanCommunication> drives_;
   std::map<std::string, WheelModuleBinding> wheel_modules_;
   std::map<std::string, double> last_motor_current_ma_;
+  std::map<std::string, PdoConfiguration> configuration_;
+  std::map<std::string, TractionPosition> traction_positions_;
+  std::map<std::string, bool> position_valid_;
+  std::map<std::string, uint64_t> reset_fault_generation_;
+  std::map<std::string, std::array<int64_t, 4>> field_stamp_ns_;
+  std::map<std::string, uint64_t> reset_error_code_generation_;
+  int64_t reset_requested_ns_{0};
+  bool reset_release_sent_{true};
+  bool boot_reconfigure_pending_{false};
+  rclcpp::Subscription<mobotic_interfaces::msg::WheelModuleCommandArray>::SharedPtr sub_final_command_;
+  mobotic_interfaces::msg::VehicleModeState authority_;
+  std::set<std::string> retired_authorities_;
+  std::map<std::string, double> accepted_traction_targets_;
+  int64_t sync_stamp_ns_{0}, published_cycle_ns_{0};
+  int64_t last_final_stamp_ns_{0};
+  bool virtual_position_source_{false};
+  double sample_skew_budget_{0.005};
+  double max_steering_velocity_{4.32}, max_traction_velocity_{11.12};
+  uint64_t reset_id_{0};
   std::map<std::string, rclcpp::Time> last_enable_attempt_, last_initialize_attempt_;
   std::map<std::string, rclcpp::Time> last_error_poll_, last_status_poll_;
-  rclcpp::Subscription<mobotic_interfaces::msg::WheelModuleCommand>::SharedPtr sub_wheel_module_command_;
+  rclcpp::Subscription<mobotic_interfaces::msg::WheelModuleOperationCommand>::SharedPtr sub_wheel_module_command_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_setpoints_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_supervisor_joint_setpoints_;
   rclcpp::Subscription<mobotic_interfaces::msg::VehicleModeState>::SharedPtr sub_mode_state_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_enable_all_drives_, srv_disable_all_drives_, srv_clear_errors_, srv_initialize_all_drives_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_disable_all_drives_, srv_initialize_all_drives_;
   double watchdog_timeout_{0};
   double diagnostic_sdo_period_{1.0};
   double motion_feedback_timeout_{0.3}, status_feedback_timeout_{0.3}, fault_feedback_timeout_{2.5};

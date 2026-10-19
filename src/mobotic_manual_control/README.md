@@ -1,7 +1,21 @@
 # mobotic_manual_control
 
-Converts `sensor_msgs/msg/Joy` into a supervised `manual/cmd_vel` command source for the vehicle
-supervisor. It also publishes `mobotic_interfaces/msg/ManualControlState` on `manual/state`.
+The default provider is the CAN `remdevice_control` node, named `operator`, for
+PAIL/Ecobox node 9 on can0 at 500 kbit/s. Its physical mapping is unverified, so
+it currently captures input and publishes zero motion. No hold-to-drive button
+is assigned. Follow the [capture and commissioning guide](../../docs/remdevice_commissioning.md).
+Select `operator.source: usb` and `operator.usb_driver: joy_node` for the PAIL's
+USB joystick connection. Raw input remains available with
+`operator.usb_mapping_verified: false`; verify the USB indices/polarities before
+enabling motion. Use `game_controller_node` for the Logitech profile described
+below. Launch starts exactly one provider. CAN and USB mappings are independent.
+
+A deadman means hold-to-drive: releasing a configured button outputs zero motion.
+This optional feature is implemented for both transports, but remains disabled
+by default (`button_deadman: -1` for USB, `deadman: null` in a verified CAN map).
+
+Converts `sensor_msgs/msg/Joy` into a supervised `operator/cmd_vel` command source for the vehicle
+supervisor. It also publishes `mobotic_interfaces/msg/OperatorState` on `operator/state`.
 
 The node never calls drive services. A stale joystick or invalid joystick layout immediately produces
 a zero command and an inactive state. The supervisor remains the only component allowed to select this command
@@ -14,10 +28,10 @@ readiness and speed limits; keep sticks neutral during startup and mode changes.
 Joystick timeout/disconnection clears the stored velocity, deadman/turbo flags,
 and acceleration timing. The callback also detects a receipt gap before accepting
 a reconnect message, so timer ordering cannot revive an old command. A neutral
-joystick remains at zero after reconnection; nonzero input starts accelerating
-from zero on subsequent fresh messages. A backward clock jump also clears the
-command and requires fresh joystick input. No deadman release/repress sequence
-is imposed by this reset.
+joystick remains at zero after reconnection. Held nonzero controls cannot rearm:
+fresh neutral input is required before subsequent stick movement is accepted.
+A configured deadman additionally requires release and a new press. A backward
+clock jump, mode/authority change or safety recovery requires this same rearm.
 
 The temporary USB profile is for Logitech F310/F710, using the hardware XInput
 setting and `joy/game_controller_node`. It uses SDL's standardized ROS layout,
@@ -27,10 +41,11 @@ not the manufacturer-dependent ordering of `joy_node`. All four face buttons
 Its `frame_id` must exactly match the supervisor's `output_frame_id` (both default
 to `base_link`); mismatched/empty velocity frames are rejected by the supervisor.
 
-Bringup starts a separate `joystick` node (`game_controller_node`) to publish `joy`.
+With USB selected, bringup starts a separate `joystick` node using the selected
+`joy_node` or `game_controller_node` driver to publish `joy`.
 `mobotic_manual_control` implements the teleop role from the original diagram;
 it is not a replacement name for the joystick driver. The supervisor subscribes
-to manual command/state, not directly to `joy`.
+to operator command/state, not directly to `joy`.
 
 ## Temporary Logitech controls
 
@@ -51,7 +66,7 @@ both does not stack the boost. Releasing them returns to the normal scale withou
 disabling driving. Boost cannot bypass supervisor limits, and USB controls do not
 replace the independent RP2/STOP safety chain.
 
-`manual/state.deadman_pressed` reports an actual configured button, not simulated
+`operator/state.deadman_pressed` reports an actual configured button, not simulated
 permission; it is false with the default disabled deadman. The supervisor requires
 fresh `connected` and `command_active` flags. The manual node includes any optional
 deadman requirement in `command_active`.
@@ -65,8 +80,8 @@ axes on the target Linux machine. Do not use this YAML with raw `joy_node` order
 
 ## Mode selection
 
-Back's rising edge publishes `VehicleModeRequest` on `vehicle/mode_request`,
-independently of boost. It reads fresh `vehicle/mode_state`: MANUAL requests
+Back's rising edge publishes `VehicleModeRequest` on `operator/mode_request`,
+independently of boost. It reads fresh `vehicle/mode`: MANUAL requests
 AUTO_VELOCITY, while AUTO_VELOCITY or AUTO_DIRECT requests MANUAL. It never requests
 AUTO_DIRECT. No local toggle state is assumed after terminal requests.
 During a reported transition, or without fresh supervisor mode feedback, presses
@@ -76,15 +91,16 @@ button cannot change mode. Fresh, nonzero, ordered Joy timestamps are required
 for mode requests. Missing optional mode inputs do not break manual driving.
 
 `button_mode_switch: -1` disables joystick mode requests. `mode_switch_type:
-position` prepares a future two-position RP1 input; verify the receiver index
-and Manual/Auto polarity before setting it. This is not a REMdevice CANopen
-implementation. `MoboTerra_documentation.docx` in the parent folder defines RP1,
-B1, B2, RP2 and STOP roles but does not provide their receiver TPDO/Joy mapping.
+position` supports a two-position RP1 input. The REMdevice provider requires an
+explicitly verified physical mapping for motion; an unverified empty mapping
+runs in capture-only mode. Only one provider starts. USB reports
+`estop_state_known=false`; the physical receiver button must never be inferred
+from another safety signal or guessed bit. Receiver mapping remains pending.
 
 The supervisor stops the platform through the outgoing command path, verifies
 0.25 s measured standstill, then selects exactly one mode and waits for a new
 command. Requests use the same logic as terminal `vehicle/set_mode`; a request
-is not confirmation that the transition completed. Observe `vehicle/mode_state`.
+is not confirmation that the transition completed. Observe `vehicle/mode`.
 AUTO_DIRECT (2) is accepted only by `vehicle/set_mode`, not the mode-request topic:
 
 ```bash
@@ -94,12 +110,16 @@ ros2 service call /moboterra/vehicle/set_mode mobotic_interfaces/srv/SetVehicleM
 This separates supported control APIs; it is not ROS client authentication.
 The physical USB mapping and stop behavior still require hardware validation.
 
-The REMdevice CANopen receiver and B2 fault-reset control are not implemented.
-RP2/STOP remain in the independent safety chain. Global error clearing remains available
-through the driver's namespace-relative `clear_errors` service.
+The CAN provider decodes the documented unsigned-magnitude/direction format and
+supports mapped B2 rising-edge requests to the supervisor's
+`wheel_modules/clear_errors`. RP2/STOP retain their independent safety functions.
+The provider never rewrites PDO mappings, node ID or bitrate. Its explicit
+commissioning service can send targeted NMT start; after mapping verification,
+targeted NMT startup is automatic. See the guide for hardware acceptance.
 
 ROS-free regression tests:
 
 ```powershell
+$env:PYTHONPATH="src/mobotic_config;src/mobotic_manual_control"
 python -m unittest discover -s src/mobotic_manual_control/test -v
 ```

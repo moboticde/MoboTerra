@@ -1,0 +1,10 @@
+uint8 MOTION=0
+uint8 CONTROLLED_STOP=1
+uint8 HOLD=2
+std_msgs/Header header
+builtin_interfaces/Time source_stamp
+string supervisor_instance
+uint64 authority_generation
+uint8 selected_mode
+uint8 purpose
+WheelModuleCommand[] modules

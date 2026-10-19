@@ -60,7 +60,7 @@ class VelocityFrameTest(unittest.TestCase):
         self.assertGreater(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
 
     def test_manual_commands_obey_same_frame_contract(self):
-        self.node.current_mode = harness.MODES.MANUAL
+        self.node.selected_mode = harness.MODES.MANUAL
         command = self.velocity()
         self.node._manual_command_callback(command)
         self.assertIs(self.node.manual_command, command)
@@ -93,7 +93,7 @@ class VelocityFrameTest(unittest.TestCase):
         ):
             with self.subTest(mode=mode):
                 self.setUp()
-                self.node.current_mode = mode
+                self.node.selected_mode = mode
                 command = self.velocity()
                 getattr(self.node, callback_name)(command)
                 command.header.frame_id = 'map'
@@ -104,7 +104,7 @@ class VelocityFrameTest(unittest.TestCase):
                 self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
 
     def test_invalid_inactive_source_does_not_clear_selected_manual_command(self):
-        self.node.current_mode = harness.MODES.MANUAL
+        self.node.selected_mode = harness.MODES.MANUAL
         command = self.velocity()
         self.node._manual_command_callback(command)
         self.node._autonomy_command_callback(self.velocity('map'))

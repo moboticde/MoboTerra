@@ -25,7 +25,7 @@ class DiagnosticHealthTest(unittest.TestCase):
         self.assertEqual(health.battery_health(msg)[0], health.OK)
         for value in (0.199, float('nan'), 1.5):
             msg.minimum_percentage = value
-            self.assertEqual(health.battery_health(msg)[0], health.ERROR)
+            self.assertEqual(health.battery_health(msg)[0], health.WARN if value == 0.199 else health.ERROR)
 
     def test_safety_sto_and_override(self):
         msg = SimpleNamespace(communication_ok=True, system_ready=True, motion_permitted=True,
@@ -35,7 +35,7 @@ class DiagnosticHealthTest(unittest.TestCase):
         msg.safety_override_active = True
         self.assertEqual(health.safety_health(msg)[0], health.WARN)
         msg.sto_active = True
-        self.assertEqual(health.safety_health(msg)[0], health.ERROR)
+        self.assertEqual(health.safety_health(msg)[0], health.WARN)
 
 
 if __name__ == '__main__':

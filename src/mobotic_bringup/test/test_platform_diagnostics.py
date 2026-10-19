@@ -3,7 +3,10 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import tempfile
+import json
 from test_diagnostic_health import health
+from test_host_health import module as host_health
 
 
 class Message:
@@ -11,6 +14,7 @@ class Message:
         self.header = SimpleNamespace(stamp=None)
         self.status = []
         self.values = []
+        self.components = []
 
 
 source = Path(__file__).parents[1] / 'mobotic_bringup' / 'platform_diagnostics.py'
@@ -20,7 +24,9 @@ cls.bases = []
 cls.body = [node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name != '__init__']
 namespace = dict(DiagnosticArray=Message, DiagnosticStatus=Message,
                  KeyValue=lambda **kwargs: SimpleNamespace(**kwargs),
-                 time=SimpleNamespace(monotonic=lambda: 10.0), OK=health.OK, WARN=health.WARN,
+                 time=SimpleNamespace(monotonic=lambda: 10.0, time=lambda: 100.0), OK=health.OK, WARN=health.WARN,
+                 ComponentHealth=Message, ComponentHealthArray=Message,
+                 read_host_health=host_health.read_host_health,
                  ERROR=health.ERROR, freshness=health.freshness,
                  battery_health=health.battery_health, safety_health=health.safety_health)
 exec(compile(ast.Module(body=[cls], type_ignores=[]), str(source), 'exec'), namespace)
@@ -31,6 +37,7 @@ class PlatformDiagnosticsTest(unittest.TestCase):
         self.node = namespace['PlatformDiagnostics']()
         node = self.node
         node.minimum_soc = 0.2
+        node.host_state_path = ''
         node.cache = {}
         node.channels = {'safety/io_state': (None, 0.3), 'scanner/front_left/scan': (None, 0.5)}
         node.get_namespace = lambda: '/moboterra'
@@ -68,6 +75,25 @@ class PlatformDiagnosticsTest(unittest.TestCase):
             header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=0))))
         self.node._publish()
         self.assertEqual(self.outputs[-1].status[0].level, bytes([health.OK]))
+
+    def test_host_fault_is_published_to_supervisor_and_diagnostics_without_can(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / 'state.json'
+            p.write_text(json.dumps({'state': 'ERROR', 'updated_at': 100, 'detail': 'CAN adapter missing'}))
+            self.node.host_state_path = str(p)
+            self.node.channels = {}
+            samples = []
+            self.node.health_publisher = SimpleNamespace(publish=samples.append)
+            self.node._publish_health()
+            record = samples[-1].components[0]
+            self.assertEqual(record.component_id, 'host')
+            self.assertTrue(record.fault_active and record.monitoring_valid)
+            self.node._publish()
+            self.assertIn('CAN adapter missing', self.outputs[-1].status[0].message)
+            self.assertEqual(self.outputs[-1].status[0].level, bytes([health.ERROR]))
+            p.write_text(json.dumps({'state': 'RUNNING', 'updated_at': 100}))
+            self.node._publish_health()
+            self.assertFalse(samples[-1].components[0].fault_active)
 
 
 if __name__ == '__main__':

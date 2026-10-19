@@ -5,6 +5,7 @@ from pathlib import Path
 import socket
 import threading
 import time
+import uuid
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -45,6 +46,9 @@ class NodeAdapter:
 
     def get_logger(self):
         return SimpleNamespace(**{level: self.logs.append for level in ('info', 'warning', 'error')})
+
+    def get_clock(self):
+        return SimpleNamespace(now=lambda: SimpleNamespace(to_msg=lambda: time.time_ns()))
 
     def destroy_node(self):
         self.destroyed = True
@@ -103,6 +107,7 @@ class TcpBridgeTest(unittest.TestCase):
         self.namespace = dict(
             math=math, socket=socket, threading=threading, rclpy=self.ros,
             Node=NodeAdapter, UInt8=SimpleNamespace, UInt8MultiArray=SimpleNamespace,
+            SafetyTelegram=lambda: SimpleNamespace(header=SimpleNamespace(stamp=None)), uuid=uuid,
             Clock=lambda **kwargs: SimpleNamespace(**kwargs),
             ClockType=SimpleNamespace(STEADY_TIME='steady'),
         )
@@ -193,7 +198,7 @@ class TcpBridgeTest(unittest.TestCase):
         with socket.create_connection(('127.0.0.1', replacement.port), timeout=1.0) as client:
             client.sendall(bytes(range(15)))
             self.wait_for(lambda: len(replacement.publisher.messages) == 1)
-        self.assertEqual(replacement.publisher.messages[0].data, 14)
+        self.assertEqual(replacement.publisher.messages[0].status_byte, 14)
         self.assertFalse(replacement.worker_failed.is_set())
         replacement._check_worker()
 
@@ -236,7 +241,7 @@ class TcpBridgeTest(unittest.TestCase):
         first, second = bytes(range(15)), bytes([42] * 15)
         connection = ConnectionAdapter([first[:4], socket.timeout(), first[4:] + second, b''])
         node._read_connection(connection)
-        self.assertEqual([msg.data for msg in node.publisher.messages], [14, 42])
+        self.assertEqual([msg.status_byte for msg in node.publisher.messages], [14, 42])
         self.assertEqual([msg.data for msg in node.telegram_publisher.messages],
                          [list(first), list(second)])
 
@@ -245,7 +250,7 @@ class TcpBridgeTest(unittest.TestCase):
         node._read_connection(ConnectionAdapter([bytes([255] * 10), ConnectionResetError()]))
         self.assertEqual(node.publisher.messages, [])
         node._read_connection(ConnectionAdapter([bytes(range(15)), b'']))
-        self.assertEqual([msg.data for msg in node.publisher.messages], [14])
+        self.assertEqual([msg.status_byte for msg in node.publisher.messages], [14])
 
     def test_loopback_disconnect_then_reconnect_keeps_listener_alive(self):
         node, address = self.loopback_node()
@@ -255,7 +260,7 @@ class TcpBridgeTest(unittest.TestCase):
         with socket.create_connection(address, timeout=1.0) as client:
             client.sendall(bytes(range(15)))
             self.wait_for(lambda: len(node.publisher.messages) == 1)
-        self.assertEqual(node.publisher.messages[0].data, 14)
+        self.assertEqual(node.publisher.messages[0].status_byte, 14)
         self.assertFalse(node.worker_failed.is_set())
         node._check_worker()
 

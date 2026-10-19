@@ -19,17 +19,46 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?ROS_DOMAIN_ID must be set}
       ROS_HOME: /var/log/ros
-      MOBOTERRA_REQUIRED_NODES: ${MOBOTERRA_REQUIRED_NODES:-/moboterra/mobotic_supervisor,/moboterra/platform_diagnostics}
+      ROBOT_NAME: ${ROBOT_NAME-moboterra}
+      MOBOTERRA_REQUIRED_NODES: ${MOBOTERRA_REQUIRED_NODES:-}
     command:
       - ros2
       - launch
       - mobotic_bringup
       - moboterra.launch.py
       - stack_type:=hardware
-      - robot_name:=moboterra
+      - robot_name:=${ROBOT_NAME-moboterra}
+      - platform_config:=/etc/moboterra/platform.yaml
+      - host_state_path:=/run/moboterra-host/state.json
+      - driver_parameters_file:=${DRIVER_PARAMETERS_FILE:-}
+      - supervisor_parameters_file:=${SUPERVISOR_PARAMETERS_FILE:-}
+      - manual_parameters_file:=${MANUAL_PARAMETERS_FILE:-}
+      - safety_parameters_file:=${SAFETY_PARAMETERS_FILE:-}
+      - battery_parameters_file:=${BATTERY_PARAMETERS_FILE:-}
+      - kinematics_parameters_file:=${KINEMATICS_PARAMETERS_FILE:-}
+      - diagnostics_parameters_file:=${DIAGNOSTICS_PARAMETERS_FILE:-}
+      - odometry_parameters_file:=${ODOMETRY_PARAMETERS_FILE:-}
+      - scanner_parameters_file:=${SCANNER_PARAMETERS_FILE:-}
       - can_interface:=can0
       - battery_can_interface:=can1
     volumes:
+      - type: bind
+        source: /run/moboterra-supervisor
+        target: /run/moboterra-host
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/moboterra
+        target: /etc/moboterra
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/moboterra/position-state
+        target: /var/lib/moboterra/position-state
+        bind:
+          create_host_path: false
       - type: bind
         source: /var/lib/moboterra/ros-logs
         target: /var/log/ros

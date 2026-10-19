@@ -1,11 +1,13 @@
 import math
 import socket
 import threading
+import uuid
 
 import rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
-from std_msgs.msg import UInt8, UInt8MultiArray
+from std_msgs.msg import UInt8MultiArray
+from mobotic_interfaces.msg import SafetyTelegram
 
 
 class FlexiSoftTcpBridge(Node):
@@ -31,7 +33,7 @@ class FlexiSoftTcpBridge(Node):
         if not math.isfinite(self.accept_timeout) or self.accept_timeout <= 0.0:
             raise ValueError('accept_timeout must be finite and positive')
 
-        self.publisher = self.create_publisher(UInt8, 'flexisoft/status_byte', 10)
+        self.publisher = self.create_publisher(SafetyTelegram, 'flexisoft/status_byte', 1)
         self.telegram_publisher = self.create_publisher(UInt8MultiArray, 'flexisoft/telegram', 10)
         self.stop_event = threading.Event()
         self.worker_failed = threading.Event()
@@ -99,6 +101,8 @@ class FlexiSoftTcpBridge(Node):
 
     def _read_connection(self, connection):
         buffered = bytearray()
+        epoch = str(uuid.uuid4())
+        sequence = 0
         while not self.stop_event.is_set():
             try:
                 data = connection.recv(4096)
@@ -112,8 +116,12 @@ class FlexiSoftTcpBridge(Node):
             while not self.stop_event.is_set() and len(buffered) >= self.telegram_size:
                 telegram = buffered[:self.telegram_size]
                 del buffered[:self.telegram_size]
-                output = UInt8()
-                output.data = telegram[self.status_byte_offset]
+                sequence += 1
+                output = SafetyTelegram()
+                output.header.stamp = self.get_clock().now().to_msg()
+                output.connection_epoch = epoch
+                output.telegram_sequence = sequence
+                output.status_byte = telegram[self.status_byte_offset]
                 raw = UInt8MultiArray()
                 raw.data = list(telegram)
                 self.telegram_publisher.publish(raw)

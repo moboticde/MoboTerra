@@ -32,7 +32,7 @@ def main():
                    lambda msg, key=key: samples.update({key: msg}), 10)
                    for kind, topic, key in (
                        (JointState, '/moboterra/joint_states', 'joints'),
-                       (Odometry, '/moboterra/odometry', 'odom'),
+                       (Odometry, '/moboterra/vehicle/odom', 'odom'),
                        (WheelModuleStatusArray, '/moboterra/wheel_modules/status', 'modules'),
                        (DiagnosticArray, '/moboterra/diagnostics', 'diagnostics'))]
         try:

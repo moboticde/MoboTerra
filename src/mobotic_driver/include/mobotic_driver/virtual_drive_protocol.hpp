@@ -23,7 +23,8 @@ public:
   }
   void advance(double dt)
   {
-    if (!std::isfinite(dt) || dt <= 0 || !enabled_ || traction_) { return; }
+    if (!std::isfinite(dt) || dt <= 0 || !enabled_) { return; }
+    if (traction_) { position_ += static_cast<double>(velocity_) * dt; return; }
     const double previous = position_;
     if (mode_ == POSITION)
     {
@@ -121,7 +122,9 @@ private:
       case 0x6041: return result(statusword_, 2);
       case 0x6060: case 0x6061: return result(mode_, 1);
       case 0x606C: return result(velocity_, 4);
+      case 0x6064: return result(static_cast<int64_t>(std::llround(position_)), 4);
       case 0x6078: return result(current_, 2);
+      case 0x6075: return result(1000, 4);  // 1 A reference, so existing virtual samples retain their scale.
       case 0x22A2: return result(25, 2); // Synthetic temperature, no thermal model.
       default: break;
       }

@@ -13,3 +13,4 @@
     telemetry_pdo_enabled: true
     telemetry_pdo_sync_divider: 1
     traction_pdo_period: 0.02
+    sample_skew_budget: 0.005

@@ -21,6 +21,15 @@ namespace = {'generate_launch_description': resolved_factory(SOURCE)}
 
 
 class SocketCanLaunchTest(unittest.TestCase):
+    def test_managed_host_state_is_required_and_virtual_launch_has_no_host_dependency(self):
+        actions, _ = resolve(factory(SOURCE)(), {'host_state_path': '/run/moboterra-host/state.json'})
+        supervisor = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_supervisor')
+        self.assertIn('host', supervisor.kwargs['parameters'][0]['required_health_sources'])
+        diagnostics = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'platform_diagnostics')
+        self.assertEqual(diagnostics.kwargs['parameters'][1]['host_state_path'], '/run/moboterra-host/state.json')
+        actions, _ = resolve(factory(SOURCE)(), {'stack_type': 'virtual'})
+        supervisor = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_supervisor')
+        self.assertNotIn('host', supervisor.kwargs['parameters'][0]['required_health_sources'])
     def setUp(self):
         description = namespace['generate_launch_description']()
         self.actions = description.args[0]
@@ -164,7 +173,8 @@ class SocketCanLaunchTest(unittest.TestCase):
         nodes = [action for action in namespace['generate_launch_description']().args[0]
                  if action.kind == 'Node' and action.kwargs.get('executable') == 'mobotic_driver']
         self.assertEqual(len(nodes), 2)
-        self.assertEqual(nodes[0].kwargs['parameters'], nodes[1].kwargs['parameters'])
+        self.assertEqual(nodes[0].kwargs['parameters'][0], nodes[1].kwargs['parameters'][0])
+        self.assertEqual(nodes[1].kwargs['parameters'][1], {'virtual_position_source': True})
 
     def test_standalone_virtual_launch_has_explicit_roles_and_reversed_can_topics(self):
         source = SOURCE.parents[2] / 'mobotic_driver' / 'launch' / 'mobotic_drive_virtual.launch.py'

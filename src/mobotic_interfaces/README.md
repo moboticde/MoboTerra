@@ -1,29 +1,22 @@
 # mobotic_interfaces
 
-Shared ROS 2 messages for MoboTerra's driver, supervisor, manual control, safety
-and battery monitoring, plus the `SetVehicleMode` service.
+Shared ROS 2 messages and services for the MoboTerra operator, vehicle supervisor, wheel modules, safety and battery interfaces. Rebuild this package and every dependent after message changes; mixed old/new schemas are unsupported.
 
 ## Interface rules
 
-- `WheelModuleCommand` contains a header, `enable` and `clear_errors`; it manages
-  **all** configured units together. No joint setpoints or `brake_release` field.
-- `WheelModuleStatusArray` identifies modules by `name`; order has no meaning.
-  Its header is report time, not proof of simultaneous/fresh CAN acquisition.
-- Each `WheelModuleStatus.feedback_fresh` explicitly describes required decoded
-  feedback validity. A new array containing stale cached values cannot authorize motion.
-- `brake_state_known=false` means brake release cannot be confirmed from feedback.
-- Motion uses standard `sensor_msgs/msg/JointState` on dedicated kinematics/supervisor
-  inputs; driver feedback uses `joint_states` with the oldest required motion sample timestamp.
-- `SafetyState` is the high-level ROS motion-permission result.
-  `SafetyIOState` exposes decoded inputs, raw FlexiSoft status and
-  `sto_state_known` / `safety_enable_state_known`. Unknown signals must not be
-  presented as verified hardware safety.
-- Battery percentages, including aggregate `minimum_percentage`, are fractions:
-  `0.2` means 20%. Missing/invalid telemetry blocks readiness.
-- Missing/stale safety data is handled conservatively. Hardware STO remains independent.
+- `OperatorState` describes physical inputs, connection, source identity and neutral/rearm state. E-stop and deadman have explicit known flags.
+- `VehicleModeState` describes effective and selected modes, error/safety overlap, readiness, reset progress and supervisor authority.
+- `WheelModuleCommandArray` is final motion: four named module records, steering position/profile speed, traction velocity and provenance. No current command is exposed.
+- `WheelModuleOperationCommand` is internal management: enable and one idempotent reset ID, bound to supervisor instance/generation. It has no motion targets or clear-errors boolean.
+- `WheelModuleStatusArray` contains four named module records with separate `DriveStatus` for steering and traction. Currents are amperes; unknown values have known flags and NaN where appropriate.
+- Native device-state/control-mode values are controller-family-specific. Status/position readiness must not be interpreted as physical E-stop, brake or STO.
+- `ScannerSafetyState` exposes generic field/OSSD state and unknown field-set metadata. `SafetyTelegram` preserves gateway receipt time, connection epoch and sequence.
+- `ComponentHealthArray` carries typed required-component health internally; it is not derived from the public mode's diagnostic severity.
+- `joint_states` uses standard JointState for actual joint position [rad] and velocity [rad/s]. Effort is empty: amperes are not torque.
+- Battery SOC/percentages are fractions (0.2 means 20%). Missing data does not mean zero or healthy.
 
-See the [supervisor contract](../../docs/supervisor_interfaces.md).
-Rebuild this package **and its dependents** after message changes.
+Legacy mode aliases and ManualControlState remain generated for source compatibility only; there is no legacy runtime topic bridge. Brake/STO unknown flags are not permission to invent physical state.
 
-This package declares Apache-2.0. Retain each package's own license/copyright
-notices. The placeholder maintainer address must be replaced before release.
+See the [supervisor contract](../../docs/supervisor_interfaces.md) and [implementation plan](../../docs/implementation_plan.md). Hardware safety remains independent.
+
+This package declares Apache-2.0. Retain package license/copyright notices and replace the placeholder maintainer address before release.

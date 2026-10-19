@@ -55,7 +55,10 @@ void refresh(MoboticDriveCanCommunication& drive, int64_t source, Clock::time_po
   drive.update(reply(drive, steering ? MICONTROL_VELOCITY_FEEDBACK : EC_TRACTION_VELOCITY_FEEDBACK,
                      steering ? 1 : 0, 0, source), at);
   if (steering) { drive.update(reply(drive, POSITION_FEEDBACK, 0, 0, source), at); }
-  else { drive.update(reply(drive, EC_ERROR_CODE, 0, 0, source), at); }
+  else {
+    drive.update(reply(drive, EC_TRACTION_POSITION_FEEDBACK, 0, 0, source), at);
+    drive.update(reply(drive, EC_ERROR_CODE, 0, 0, source), at);
+  }
 }
 
 void exactSourceOrdering()
@@ -158,7 +161,7 @@ void tractionPdoMergesPerField()
 {
   auto drive = makeDrive(false);
   drive.update(reply(drive, EC_STATUSWORD, 0, 0, source_start + 4), start);
-  drive.update(reply(drive, EC_TRACTION_MODE_OF_OPERATION, 0, CURRENT, source_start + 4, READ_REPLY_1B), start);
+  drive.update(reply(drive, EC_TRACTION_MODE_DISPLAY, 0, CURRENT, source_start + 4, READ_REPLY_1B), start);
   drive.update(reply(drive, EC_TRACTION_VELOCITY_FEEDBACK, 0, 10, source_start + 1), start);
   auto pdo = tractionPdo(drive, 0x27, VELOCITY, 20, source_start + 2);
   drive.update(pdo, start + std::chrono::milliseconds(1));

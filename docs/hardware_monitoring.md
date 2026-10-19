@@ -1,5 +1,12 @@
 # Hardware monitoring and commissioning
 
+The updated contract is [supervisor_interfaces.md](supervisor_interfaces.md).
+Physical position continuity remains uncommissioned and motion is inhibited;
+read Elmo 6064 at startup and through PDOs without accessing/changing the encoder.
+The durable recovery helper is not yet a complete hardware recovery backend.
+Older test descriptions below are commissioning scenarios, not completed checks
+of the updated interface. Full Jazzy/ROS/SocketCAN validation remains required.
+
 ROS observes the hardware safety chain. ELMO/FlexiSoft perform physical STO;
 none of the changes here implement or replace a safety-rated stop function.
 A driver/OS/CAN failure cannot be handled by a watchdog inside that failed process.
@@ -29,7 +36,8 @@ The scanner API/remappings follow the [SICK ROS 2 driver documentation](https://
 Both nodes publish separate scan/raw/output-path topics. They do not feed a new
 ROS safety algorithm: protective fields still reach the supervisor through FlexiSoft.
 Autonomy can subscribe to the laser scans; no autonomy implementation was added.
-Scanner transforms remain a separate URDF/TF task.
+Scanner transforms and CAD-envelope corner frames are integrated through the
+shared description; physical extrinsic calibration remains a commissioning task.
 
 The reference battery is a single **system** containing a controller and four
 configured internal participants. Every configured participant must send all
@@ -97,7 +105,7 @@ are performed, and no new enable prerequisite on an unmapped register is added.
 Driver management and motion watchdogs are separate:
 
 - `watchdog_timeout: 0.1`: missing accepted joint setpoints request zero motion.
-- `supervisor_timeout: 0.3`: missing accepted `wheel_modules/command` requests
+- `supervisor_timeout: 0.3`: missing accepted `wheel_modules/operation_command` requests
   stop + disable and cancels initialization/enable retries, independently of
   continued joint commands. A steady-clock timer checks the lease every 20 ms.
 - Commands must be timestamped and fresh. Replayed/non-increasing management
@@ -150,11 +158,12 @@ cached commands and readiness. A recently delivered old sample expires at its
 original timestamp plus timeout, not receipt plus timeout. Safety/battery expiry
 disables drives; wheel/direct-joint feedback expiry inhibits motion while retaining
 the safety/battery-only enable policy. Negative receipt age fails closed. Header
-checks retain the existing 100 ms future-skew allowance; standstill remains strict.
+monitoring checks retain the bounded future-skew allowance; external commands and
+standstill/reset proof must not be future-dated.
 
 `joint_states` is published only for a complete fresh motion sample set and its
 timestamp reflects the oldest required motion sample, not the aggregation time.
-Optional effort is omitted if any current sample is unavailable/stale. CAN bridge
+Effort is always empty; amperes are published only in drive status. CAN bridge
 acquisition timestamps, when supplied, contribute to sample age; zero timestamps
 fall back to local reception time. Do not use a CAN transport that repeatedly
 replays unstamped old payloads, which cannot be distinguished from real samples.
@@ -183,10 +192,10 @@ An external bridge used with `start_socketcan:=false` must opt in similarly.
 No observed error frames must not be treated as proof of bus health.
 
 The platform node subscribes to `battery/system_state` (0.6 s), `safety/state`,
-`safety/io_state` and `vehicle/mode_state` (0.3 s), optionally `manual/state`
+`safety/io_state` and `vehicle/mode` (0.3 s), optionally `operator/state`
 (0.3 s) and both `scanner/<location>/scan` streams (0.5 s). It publishes at 2 Hz.
 It does not directly subscribe to `joint_states`, `wheel_modules/status`,
-`battery/state`, `agv_vel` or CAN; driver diagnostics cover CAN/wheel freshness.
+`battery/state`, `vehicle/measured_velocity` or CAN; driver diagnostics cover CAN/wheel freshness.
 Scan loss raises diagnostics only; FlexiSoft protective fields remain the
 supervisor's scanner-related motion interlock.
 
@@ -407,8 +416,8 @@ worker termination is checked every 0.1 s using steady time even if ROS time pau
 
 ## Wheel odometry commissioning
 
-Bringup now starts `mobotic_odometry` from measured `agv_vel`, producing
-`/moboterra/odometry` and optional `odom -> base_link` on `/moboterra/tf`.
+Bringup now starts `mobotic_odometry` from measured `vehicle/measured_velocity`, producing
+`/moboterra/vehicle/odom` and optional `odom -> base_link` on `/moboterra/tf`.
 No command velocity is integrated. The local odom plane starts at base_link
 height; the URDF's chassis/floor offsets are not applied a second time.
 
@@ -420,7 +429,7 @@ body twist must remain in base_link while pose is expressed in odom.
 Run only one broadcaster for this TF edge; use `publish_odom_tf:=false` when
 an external EKF/localization system owns it. RViz needs namespaced TF remappings.
 
-Interrupt measured `agv_vel`: odometry and TF publication must stop, and both
+Interrupt measured `vehicle/measured_velocity`: odometry and TF publication must stop, and both
 node/platform diagnostics must age stale. Restore feedback: the first new sample
 must hold the previous pose, increase uncertainty and establish a new integration
 baseline, without guessing missing motion. The node reports persistent WARN for
@@ -429,7 +438,7 @@ Test paused ROS time, delayed delivery, a backward clock jump and source loss
 without disabling the independent hardware stop chain.
 
 The node is intentionally not automatically respawned: a restart or approved
-`odometry/reset` changes the origin, which downstream consumers must handle.
+`vehicle/reset_odometry` changes the origin, which downstream consumers must handle.
 Reset requires fresh measured standstill and does not replay prior samples.
 Defaults are uncalibrated wheel-only uncertainty, not safety-rated accuracy.
 See [odometry interfaces and limitations](../src/mobotic_odometry/README.md).

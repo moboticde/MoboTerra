@@ -4,6 +4,7 @@
 std_msgs/Header header
 
 bool communication_ok
+bool physical_state_known
 bool system_ready
 bool motion_permitted
 bool protective_stop_active

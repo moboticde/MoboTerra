@@ -19,6 +19,18 @@ this launch. Xacro output is expanded in memory and passed as a typed string to
 `robot_state_publisher`. Offline previews accept `--platform-config` too.
 Default geometry and floor semantics below are preserved.
 
+Integrated bringup now starts this description by default. Disable its
+start_description option when a separate robot_state_publisher already owns the
+same transforms; never run duplicate TF owners.
+
+Four fixed vehicle_*_corner frames describe ground projections of the CAD
+physical envelope including scanner arms, not chassis-only corners or a
+navigation footprint. Their configured coordinates use the chassis/CAD floor
+datum (+X forward, +Y left, +Z up); the existing chassis transform relates this
+datum to base_link. Mount frames remain <module>_steering_mount; scanner frames
+remain front_left_scan and rear_right_scan. Frame IDs are unprefixed even when
+topics are namespaced, so multi-robot TF requires an explicit frame-ID policy.
+
 ## CAD placement and joint origins
 
 The user confirmed **CAD Z=0 is the floor** and chose to align the wheels with

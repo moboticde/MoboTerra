@@ -1,0 +1,22 @@
+string name
+bool initialized
+bool enabled
+bool status_known
+uint16 status_word
+bool status_word_known
+uint8 control_mode
+bool control_mode_known
+int32 native_control_mode
+# Native state register: MiControl 3004 or Elmo 6041; not physical STO/brake.
+int32 device_state
+bool device_state_known
+int32 error_register
+int32 error_code
+bool fault_known
+float64 motor_current
+bool current_known
+float64 temperature
+bool temperature_known
+builtin_interfaces/Time status_stamp
+builtin_interfaces/Time fault_stamp
+builtin_interfaces/Time current_stamp
