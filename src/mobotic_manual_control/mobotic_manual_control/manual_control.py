@@ -233,7 +233,13 @@ class ManualControl(Node):
         if self.vehicle_mode_state is not None and (
             getattr(msg, 'supervisor_instance', '') != getattr(self.vehicle_mode_state, 'supervisor_instance', '') or
             getattr(msg, 'authority_generation', 0) != getattr(self.vehicle_mode_state, 'authority_generation', 0)):
+            # Authority changes require a new neutral/rearm sequence, but do
+            # not disconnect a fresh physical joystick. Clearing its receipt
+            # time would make the enable interlock drop and change authority
+            # again before the next joystick sample arrived.
+            receipt, source_stamp = self.last_joy_time, getattr(self, 'last_joy_stamp', None)
             self._reset_command(now)
+            self.last_joy_time, self.last_joy_stamp = receipt, source_stamp
         self.vehicle_mode_state = msg
         self.vehicle_mode_received = now
 

@@ -54,6 +54,7 @@ Types in the following table use ROS 2 `package/msg/Type` notation.
 | Relative topic | Message type | Owner and purpose |
 | --- | --- | --- |
 | `operator/cmd_vel` | geometry_msgs/msg/TwistStamped | Operator provider; candidate body velocity |
+| `operator/steering_setpoints` | sensor_msgs/msg/JointState | Virtual PAIL operator; stationary steering request with zero traction, checked by the supervisor |
 | `operator/state` | mobotic_interfaces/msg/OperatorState | Operator provider; physical inputs and source validity |
 | `operator/mode_request` | mobotic_interfaces/msg/VehicleModeRequest | Operator request for modes 0/1 only |
 | `autonomy/cmd_vel` | geometry_msgs/msg/TwistStamped | External autonomy; candidate for AUTONOMOUS |

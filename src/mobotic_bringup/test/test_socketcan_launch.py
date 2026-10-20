@@ -21,6 +21,24 @@ namespace = {'generate_launch_description': resolved_factory(SOURCE)}
 
 
 class SocketCanLaunchTest(unittest.TestCase):
+    def test_stationary_pail_steering_is_enabled_only_for_virtual_can_operator(self):
+        for stack in ('hardware', 'virtual'):
+            actions, _ = resolve(factory(SOURCE)(), {'stack_type': stack})
+            operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
+            supervisor = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_supervisor')
+            self.assertEqual(operator.kwargs['parameters'][0].get('stationary_steering_enabled', False), stack == 'virtual')
+            self.assertEqual(supervisor.kwargs['parameters'][0].get('manual_stationary_steering_enabled', False), stack == 'virtual')
+
+    def test_virtual_pail_topics_stay_isolated_without_a_physical_receiver(self):
+        actions, context = resolve(factory(SOURCE)(), {'stack_type': 'virtual', 'operator_can_interface': ''})
+        operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
+        self.assertEqual(operator.kwargs['remappings'], [
+            ('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx')])
+        receiver = next(a for a in actions if a.kind == 'GroupAction' and any(
+            child.kind == 'PushRosNamespace' and child.args == ('operator_can',)
+            for child in a.kwargs['actions']))
+        self.assertFalse(receiver.kwargs['condition'].perform(context))
+
     def test_managed_host_state_is_required_and_virtual_launch_has_no_host_dependency(self):
         actions, _ = resolve(factory(SOURCE)(), {'host_state_path': '/run/moboterra-host/state.json'})
         supervisor = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_supervisor')
@@ -59,6 +77,46 @@ class SocketCanLaunchTest(unittest.TestCase):
         self.assertEqual(arguments['battery_can_interface']['default_value'], 'auto')
         self.assertEqual(resolve(factory(SOURCE)())[1]['battery_can_interface'], 'can1')
         self.assertEqual(arguments['start_battery_socketcan']['default_value'], 'true')
+
+    def test_physical_operator_receiver_is_opt_in_and_virtual_only(self):
+        for stack in ('hardware', 'virtual'):
+            for manual in ('true', 'false'):
+                for interface in ('', 'can0'):
+                    actions, context = resolve(factory(SOURCE)(), {
+                        'stack_type': stack, 'start_manual_interface': manual,
+                        'operator_can_interface': interface,
+                    })
+                    group = next(a for a in actions if a.kind == 'GroupAction' and any(
+                        child.kind == 'PushRosNamespace' and child.args == ('operator_can',)
+                        for child in a.kwargs['actions']))
+                    with self.subTest(stack=stack, manual=manual, interface=interface):
+                        self.assertEqual(group.kwargs['condition'].perform(context),
+                                         stack == 'virtual' and manual == 'true' and bool(interface))
+
+    def test_virtual_can_operator_cannot_forward_simulated_drive_frames_to_hardware(self):
+        actions, _ = resolve(factory(SOURCE)(), {
+            'stack_type': 'virtual', 'operator_can_interface': 'can0',
+        })
+        group = next(a for a in actions if a.kind == 'GroupAction' and any(
+            child.kind == 'PushRosNamespace' and child.args == ('operator_can',)
+            for child in a.kwargs['actions']))
+        includes = [a for a in group.kwargs['actions'] if a.kind == 'IncludeLaunchDescription']
+        self.assertEqual(len(includes), 1)
+        include = includes[0]
+        self.assertEqual(include.args[0].args[0].args[0][-1], 'socket_can_receiver.launch.py')
+        arguments = dict(include.kwargs['launch_arguments'])
+        self.assertEqual(arguments['interface'], 'can0')
+        self.assertEqual(arguments['use_bus_time'], 'true')
+        self.assertNotIn('to_can_bus_topic', arguments)
+        operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
+        self.assertEqual(operator.kwargs['remappings'], [
+            ('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx')])
+        for action in actions:
+            if action.kind == 'Node' and action.kwargs.get('executable') == 'virtual_mobotic_drive':
+                self.assertEqual(action.kwargs['remappings'], [('can_rx', 'can_tx'), ('can_tx', 'can_rx')])
+        hardware, _ = resolve(factory(SOURCE)(), {'operator_can_interface': 'can0'})
+        operator = next(a for a in hardware if a.kind == 'Node' and a.kwargs['name'] == 'operator')
+        self.assertEqual(operator.kwargs['remappings'], [])
 
     def test_battery_transport_is_receiver_only_with_acquisition_timestamps(self):
         group, include, arguments = self.battery_receiver()

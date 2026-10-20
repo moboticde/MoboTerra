@@ -14,6 +14,100 @@ It cannot issue mode/reset requests or automatic NMT while unverified. The USB
 driver is not launched alongside the CAN provider.
 The ROS node is named `operator` (`/moboterra/operator` in the default namespace).
 
+## Current receiver for the virtual test: node 10, 250 kbit/s
+
+The user confirmed that the joystick receiver currently uses **node 10 at
+250 kbit/s**. The shared-hardware node-9/500-kbit/s values below describe the
+planned hardware profile, not its current settings. Virtual joystick testing
+does not require writing a new node ID or bitrate to the receiver.
+
+Use an isolated joystick CAN bus at 250000 bit/s and the separate virtual
+platform profile described in the [virtual CAN/RViz instructions](commands.md#pail-can-joystick-and-rviz-in-virtual-mode).
+The profile uses receiver node 10 and simulated master node 11; the optional
+operator receiver never forwards simulated drive commands to physical CAN.
+
+Capture the current receiver with `--node-id 10`, for example:
+
+```bash
+PYTHONPATH=src/mobotic_manual_control python3 -m mobotic_manual_control.remdevice_trace \
+  --interface can0 --node-id 10 --output pail.jsonl --label neutral --seconds 8
+```
+
+Its expected IDs are TPDO1 `18A`, TPDO2 `28A`, TPDO3 `38A`, heartbeat `70A` and
+EMCY `08A`. If needed on that isolated bus, `cansend can0 000#010A` starts only
+node 10. This is an explicit NMT transmission, not a receive-only capture.
+Axis/button assignments still need measurement before joystick motion is enabled.
+
+### Guided mapping recorder
+
+With the isolated joystick bus up at 250000 bit/s, run from the repository root:
+
+```bash
+python3 deploy/checks/map_pail.py --interface can0 --node-id 10
+```
+
+This requires no ROS installation, Docker or CAN transmission. It prompts for
+neutral, both directions of the cross joystick and paddle, RP1 Manual/Auto,
+B1 boost and B2 reset. Before each step, return other controls to neutral; press
+Enter, then hold the requested control until COMPLETE. The default recording is
+six seconds per step. Leave the transmitter's normal radio link established.
+
+Raw labelled frames, decoder output and a per-step JSON summary are saved in
+`can_telemetry_records/pail-mapping-<timestamp>.*`. Completed data survives Ctrl+C.
+The recorder stops if digital TPDO1 or analog TPDO2 is absent. If the receiver
+is Pre-Operational, use the explicit node-10 NMT command above, then rerun.
+The recorder does not change or verify the mapping automatically. Review its
+labelled directions, ranges and switch polarities, then populate only the
+virtual profile for the first simulation test.
+
+The completed capture `pail-mapping-20261020-110023.jsonl` measured these
+assignments for the node-10/250-kbit/s **virtual test profile**:
+
+| Physical control | Signal | Calibration/polarity |
+| --- | --- | --- |
+| Cross joystick forward/reverse | A3, U3/D3 | Neutral 0, full scale 255; U3 is forward |
+| Cross joystick left/right | A4, U4/D4 | Neutral 0, full scale 255; U4 is left |
+| Paddle left/right | A2, U2/D2 | Neutral 0, full scale 255; U2 is left |
+| RP1 Manual/Auto | U5 | High = Manual; low = Auto |
+| B1 boost | SP3 | High while pressed |
+| B2 reset | SP4 | High while pressed |
+| Hold-to-drive | Unassigned | `deadman: null` |
+
+The confirmed physical layout is **left paddle = steering (A2)** and **right
+two-axis stick = forward/reverse (A3), crab left/right (A4)**. The virtual profile
+therefore uses `speed.channel: 3`, `steer.channel: 2`, `crab.channel: 4`, with no
+inversion. With the left paddle centred, right-stick sideways movement commands
+translation and zero yaw. The left paddle can pre-steer the wheels while stopped;
+moving the right stick forward/backward with the paddle deflected produces a turn.
+
+Stationary steering is enabled by the virtual CAN launch only. The operator sends
+timestamped `operator/steering_setpoints`; the supervisor accepts only zero
+traction and checks the normal motion gate, actual standstill, current command
+sample and feedback freshness. Recovery/mode changes discard pending requests.
+Hardware launches leave this feature disabled.
+
+For zero-yaw virtual manual translations, traction waits until all steering
+angles are aligned within 0.01 rad, then the usual acceleration ramp begins.
+This prevents a transient heading change while the wheels turn into crab mode.
+
+A pending PDO preserves the last complete input only until its original deadline;
+it cannot renew the source timestamp. Fresh digital STOP/link-loss flags still
+inhibit immediately. Supervisor authority changes clear motion and require
+neutral rearm while preserving the physical input's actual connection age.
+
+The virtual profile lives at `~/.config/moboterra/platform-virtual-pail.yaml`.
+This control assignment capture does not establish physical STOP/RP2, radio-loss
+or motor commissioning. U5 and D5 were both high in Manual; channel 5 is a
+discrete switch channel, not a mapped motion axis. The mapping permits spare
+U1..8/D1..8 bits as buttons but rejects reuse of a configured motion axis's
+direction bits. No receiver or physical robot configuration is written by
+applying this virtual profile.
+
+`--interface` is required: choose the current CAN interface actually wired to
+the joystick. Any supported USB-to-CAN adapter may be used for this capture,
+regardless of its previous platform/battery assignment. Interface names in
+these examples are examples of current Linux names, not fixed adapter roles.
+
 ## Select CAN or USB
 
 The same PAIL can be selected through its CAN receiver or its USB joystick
@@ -182,7 +276,7 @@ The software combines them, applies measured zero/full-scale calibration and
 an explicit inversion. Normalized magnitudes within the 0.08 neutral threshold
 produce exactly zero motion. Both direction bits together invalidate input.
 No direction means neutral. Capture and decoding also expose TPDO3 A9..12 and
-SA17..32; command mappings currently accept A1..8 and TPDO1 SP/SA1..16.
+SA17..32; command mappings accept A1..8, TPDO1 SP/SA1..16 and spare U/D1..8 bits.
 If the customized controls use TPDO3, extend the required PDO set before use.
 
 Replace the empty profile only after identifying the physical controls:

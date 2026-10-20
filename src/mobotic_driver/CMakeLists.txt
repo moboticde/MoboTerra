@@ -49,6 +49,12 @@ install(TARGETS
 
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
+  add_executable(test_virtual_sync test/test_virtual_sync.cpp)
+  target_include_directories(test_virtual_sync PRIVATE include)
+  ament_add_test(test_virtual_sync
+    COMMAND "$<TARGET_FILE:test_virtual_sync>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
   add_executable(test_update_protocol test/test_update_protocol.cpp)
   target_include_directories(test_update_protocol PRIVATE include)
   ament_target_dependencies(test_update_protocol can_msgs)

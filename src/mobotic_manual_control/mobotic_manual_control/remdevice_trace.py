@@ -9,6 +9,11 @@ import time
 from .remdevice_protocol import decode_auxiliary, decode_digital
 
 
+# Standard data frames only. CAN_ERR_FLAG must not be included here: Linux
+# registers masks containing that bit on its error-frame receive list.
+STANDARD_DATA_MASK = 0x80000000 | 0x40000000 | 0x7FF  # EFF flag, RTR flag, SFF ID.
+
+
 def decode_frame(cob_id, data, node_id):
     if cob_id == 0x180 + node_id and len(data) == 8:
         return decode_digital(data)
@@ -51,7 +56,7 @@ def capture(interface, path, node_id, label, seconds):
     # Linux classic CAN frame: can_id, length, padding, eight data bytes.
     wire = struct.Struct('=IB3x8s')
     ids = [base + node_id for base in (0x180, 0x280, 0x380, 0x700, 0x80)]
-    filters = b''.join(struct.pack('=II', cob, 0xE00007FF) for cob in ids)
+    filters = b''.join(struct.pack('=II', cob, STANDARD_DATA_MASK) for cob in ids)
     previous = {}
     count = 0
     with socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW) as bus:
@@ -84,7 +89,8 @@ def capture(interface, path, node_id, label, seconds):
                         print(f'{cob:03X}', json.dumps(delta, sort_keys=True))
     print(f'Captured {count} frames; appended to {path}.')
     if not count:
-        raise RuntimeError('No receiver frames. Check interface, 500 kbit/s, node 9, power and NMT state.')
+        raise RuntimeError(f'No receiver frames on {interface} for node {node_id}. '
+                           'Check the configured bitrate, receiver power and NMT state.')
 
 
 def main():

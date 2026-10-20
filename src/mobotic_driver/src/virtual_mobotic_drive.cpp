@@ -36,7 +36,13 @@ void VirtualMoboticDriveCanCommunication::canFrameCallback(const can_msgs::msg::
   for (auto reply : protocol_->handle(request))
   {
     reply.header.frame_id = "can";
-    reply.header.stamp = now();
+    // Every synchronous sample belongs to the same simulated acquisition
+    // instant. Per-process response times add scheduling skew between drives.
+    const auto& stamp = request.header.stamp;
+    const bool stamped_sync = request.id == 0x80 && request.dlc == 0 &&
+        stamp.sec >= 0 && stamp.nanosec < 1000000000u && (stamp.sec != 0 || stamp.nanosec != 0);
+    if (stamped_sync) { reply.header.stamp = stamp; }
+    else { reply.header.stamp = now(); }
     pub_can_frames_->publish(reply);
   }
 }

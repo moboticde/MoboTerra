@@ -154,6 +154,19 @@ configuration. No fake adapter serials are generated.
 The file is world-readable because the desktop GUI launcher needs the image and
 ROS domain values; do not place credentials or other secrets in it.
 
+Adapter hardware has no permanent battery or platform role. Any supported
+SocketCAN USB-to-CAN adapter with a unique serial can be assigned to either bus
+during setup. `PLATFORM_CAN_SERIAL` and `BATTERY_CAN_SERIAL` record this
+installation's assignments; they are not vendor/model restrictions or built-in
+device identities. USB port order and the kernel's initial `can0`/`can1` names
+do not determine the roles. The supervisor resolves the saved assignments first,
+then gives the selected interfaces their runtime names.
+
+When an adapter is replaced or moved to the other bus, repeat role selection
+with `sudo bash ./deploy/install.sh --reconfigure-can --no-start`. Select the
+adapter by the bus it is wired to. A standalone joystick capture uses the
+explicit `--interface` selection and does not inherit hardware service roles.
+
 Assign a different ROS domain ID to robots that share a network. After changing
 configuration, validate the file and restart the supervisor:
 

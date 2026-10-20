@@ -15,10 +15,10 @@ class ScannerSafetyAdapter(Node):
             raise ValueError('status timeout must be positive')
         self.state = None
         self.subscription = self.create_subscription(SafetyIOState, 'safety/io_state', self._receive, 1)
-        self.publishers = {name: self.create_publisher(ScannerSafetyState, f'scanner/{name}/safety_zone_status', 1)
+        self.scanner_publishers = {name: self.create_publisher(ScannerSafetyState, f'scanner/{name}/safety_zone_status', 1)
                            for name in ('front_left', 'rear_right')}
         self.diagnostics = {name: self.create_publisher(DiagnosticArray, f'scanner/{name}/diagnostics', 1)
-                            for name in self.publishers}
+                            for name in self.scanner_publishers}
         self.timer = self.create_timer(0.05, self._publish)
 
     def _receive(self, message):
@@ -34,7 +34,7 @@ class ScannerSafetyAdapter(Node):
         now = self.get_clock().now()
         valid = (self.state is not None and self.state.scanner_state_known and
                  0 <= (now - Time.from_msg(self.state.header.stamp)).nanoseconds <= int(self.timeout * 1e9))
-        for name, publisher in self.publishers.items():
+        for name, publisher in self.scanner_publishers.items():
             output = ScannerSafetyState()
             output.header = self.state.header if self.state is not None else output.header
             output.scanner_id = name

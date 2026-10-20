@@ -44,9 +44,11 @@ class RemdeviceMapping:
             if (not isinstance(button, dict) or set(button) != {'signal', 'active_high'}
                     or type(button['active_high']) is not bool
                     or not isinstance(button['signal'], str)
-                    or not re.fullmatch(r'(SP|SA)([1-9]|1[0-6])', button['signal'])
+                    or not re.fullmatch(r'(?:(?:SP|SA)(?:[1-9]|1[0-6])|[UD][1-8])', button['signal'])
                     or button['signal'] in signals):
-                raise ValueError('buttons require distinct SP1..16/SA1..16 signals and boolean polarity')
+                raise ValueError('buttons require distinct SP1..16/SA1..16/U1..8/D1..8 signals and boolean polarity')
+            if button['signal'][0] in ('U', 'D') and int(button['signal'][1:]) in channels:
+                raise ValueError('button direction signal cannot overlap a configured motion axis')
             signals.add(button['signal'])
 
     def button(self, role, digital):

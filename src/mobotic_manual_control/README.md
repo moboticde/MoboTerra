@@ -49,6 +49,13 @@ to operator command/state, not directly to `joy`.
 
 ## Temporary Logitech controls
 
+For the measured PAIL CAN receiver in virtual mode, the left paddle (A2) steers,
+including pre-steering at standstill. The right cross stick uses A3 for
+forward/reverse and A4 for crab left/right, with zero yaw when the paddle is
+centred. These CAN channel numbers are independent of the USB indices below.
+Stationary angle requests pass through the supervisor and are disabled by
+default outside the virtual CAN launch.
+
 | Physical control | ROS index | Role |
 |:--|:--|:--|
 | Left stick horizontal | axis 0 | Steering while moving; yaw reverses with travel direction |

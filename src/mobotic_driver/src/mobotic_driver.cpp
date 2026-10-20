@@ -16,6 +16,7 @@
 #include <can_msgs/msg/frame.hpp>
 #include <mobotic_driver/communication.hpp>
 #include <mobotic_driver/mobotic_driver.h>
+#include <mobotic_driver/virtual_sync.hpp>
 
 namespace
 {
@@ -782,6 +783,11 @@ void MoboticDriver::tractionPdoTimerCallback()
 
 void MoboticDriver::publishTractionPdoCycle()
 {
+  // Stop/enable paths can request extra cycles between timer ticks. In the
+  // software simulator, allow the outstanding synchronous sample to complete
+  // before replacing its acquisition window. A missing reply still times out.
+  if (virtualSyncPending(virtual_position_source_, sync_stamp_ns_, published_cycle_ns_,
+                         this->now().nanoseconds(), motion_feedback_timeout_)) { return; }
   bool published_traction_command = false;
 
   for (auto& [name, drive] : drives_)
@@ -821,6 +827,15 @@ void MoboticDriver::feedbackTimerCallback()
   {
     initializeAllDrives();
     boot_reconfigure_pending_ = false;
+  }
+  // Volatile ROS discovery can lose the first virtual SDO exchange. Retry a
+  // failed simulated startup while disabled; physical controllers never use
+  // this retry path and all initialization/feedback gates remain in force.
+  if (virtual_position_source_ && !enable_all_drives_requested_ &&
+      std::none_of(drives_.begin(), drives_.end(), [](const auto& item) { return item.second.enabled(); }) &&
+      std::any_of(configuration_.begin(), configuration_.end(), [](const auto& item) { return item.second.failed(); }))
+  {
+    initializeAllDrives();
   }
   const auto shouldPoll = [now](std::map<std::string, rclcpp::Time>& attempts,
                                 const std::string& name,

@@ -1,11 +1,12 @@
 """PAIL/Ecobox operator provider using the documented CANopen TPDO layout."""
 import json
+import math
 
 import rclpy
 from can_msgs.msg import Frame
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import Joy
+from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -19,7 +20,24 @@ class RemdeviceControl(ManualControl):
         super().__init__()
         self.declare_parameter('remdevice_mapping', '{}')
         self.mapping = RemdeviceMapping(json.loads(self.get_parameter('remdevice_mapping').value))
+        self.declare_parameter('stationary_steering_enabled', False)
+        self.declare_parameter('stationary_steering_geometry', '{}')
+        self.stationary_steering_enabled = bool(self.get_parameter('stationary_steering_enabled').value)
+        self.steering_geometry = json.loads(self.get_parameter('stationary_steering_geometry').value)
+        self.steering_publisher = None
+        if self.stationary_steering_enabled:
+            geometry = self.steering_geometry
+            count = len(geometry.get('steering_joint_names', []))
+            if (count < 2 or any(len(geometry.get(key, [])) != count for key in
+                    ('traction_joint_names', 'wheels_x', 'wheels_y', 'wheel_mount_angles'))
+                    or not all(math.isfinite(v) for key in ('wheels_x', 'wheels_y', 'wheel_mount_angles')
+                               for v in geometry[key])
+                    or not math.isfinite(geometry.get('max_steering_velocity', 0))
+                    or geometry.get('max_steering_velocity', 0) <= 0):
+                raise ValueError('Complete finite wheel geometry is required for stationary steering')
+            self.steering_publisher = self.create_publisher(JointState, 'operator/steering_setpoints', 1)
         self.decoder = RemdeviceReceiver(self.mapping.node_id, timeout_ns=int(self.joystick_timeout * 1e9))
+        self.last_complete_sample = None
         self.destroy_subscription(self.joy_subscription)
         # Internal normalized Joy layout, independent of the USB profile.
         self.axis_steer, self.axis_crab, self.axis_speed = 0, 2, 3
@@ -62,13 +80,22 @@ class RemdeviceControl(ManualControl):
     def _drop_input(self, now):
         self._reset_command(now)
         self.last_reset = None
+        self.last_complete_sample = None
 
     def _healthy(self, now):
         if not hasattr(self, 'decoder') or not self.mapping.verified or self.input_error:
             return False
         sample = self.decoder.snapshot(now.nanoseconds)
-        return (sample is not None and sample.digital['LINK'] and sample.digital['EMGY']
-                and not sample.digital['STOP'])
+        if sample is None:
+            sample = getattr(self, 'last_complete_sample', None)
+            if (sample is not None and (sample.stamp_ns < self.decoder.epoch_ns
+                    or not 0 <= now.nanoseconds - sample.stamp_ns <= self.decoder.timeout_ns)):
+                sample = None
+        # A newly arrived digital PDO must stop us immediately, even while an
+        # analog PDO is pending. A pending pair cannot renew the last Joy stamp.
+        digital = self.decoder.digital(now.nanoseconds)
+        return (sample is not None and digital is not None and digital['LINK']
+                and digital['EMGY'] and not digital['STOP'])
 
     def _joystick_connected(self, now):
         return self._healthy(now) and super()._joystick_connected(now)
@@ -92,7 +119,10 @@ class RemdeviceControl(ManualControl):
                 self._drop_input(now)
             return
         before_epoch = self.decoder.epoch_ns
-        accepted = self.decoder.update(frame.id, frame.dlc, frame.data, stamp, now.nanoseconds,
+        # ROS fixed-size uint8 arrays use NumPy scalars. Normalize at this
+        # boundary; the protocol decoder deliberately validates Python bytes.
+        data = frame.data.tolist() if hasattr(frame.data, 'tolist') else frame.data
+        accepted = self.decoder.update(frame.id, frame.dlc, data, stamp, now.nanoseconds,
                                        is_extended=frame.is_extended, is_rtr=frame.is_rtr, is_error=frame.is_error)
         if self.decoder.epoch_ns != before_epoch:
             self._drop_input(now)
@@ -105,6 +135,7 @@ class RemdeviceControl(ManualControl):
         sample = self.decoder.snapshot(now.nanoseconds, consume=True)
         if sample is None or not self._healthy(now):
             return
+        self.last_complete_sample = sample
         axes = {}
         try:
             for role, spec in self.mapping.axes.items():
@@ -129,12 +160,34 @@ class RemdeviceControl(ManualControl):
             joy.buttons[index] = int(self.mapping.button(role, sample.digital))
         self.joy_publisher.publish(joy)
         self._joy_callback(joy)
+        self._publish_stationary_steering(joy, axes)
         reset = self.mapping.button('reset', sample.digital)
         if reset and self.last_reset is False and self.controls_neutral:
             if (self.reset_future is None or self.reset_future.done()) and self.reset_client.service_is_ready():
                 self.reset_future = self.reset_client.call_async(Trigger.Request())
                 self.reset_future.add_done_callback(self._reset_done)
         self.last_reset = reset
+
+    def _publish_stationary_steering(self, joy, axes):
+        # A source request, never a direct motor command. The supervisor checks
+        # standstill, freshness and authority before applying any angle.
+        if (not getattr(self, 'stationary_steering_enabled', False)
+                or axes['speed'] != 0.0 or axes['crab'] != 0.0
+                or any(abs(v) > 1e-9 for v in self.command)
+                or not self._manual_enabled()):
+            return
+        geometry = self.steering_geometry
+        curvature = axes['steer'] * self.max_velocity_angular / self.max_velocity_linear
+        output = JointState()
+        output.header = joy.header
+        output.name = geometry['steering_joint_names'] + geometry['traction_joint_names']
+        count = len(geometry['steering_joint_names'])
+        output.position = [math.atan2(curvature * x, 1.0 - curvature * y) - mount
+                           for x, y, mount in zip(geometry['wheels_x'], geometry['wheels_y'],
+                                                  geometry['wheel_mount_angles'])] + [0.0] * count
+        output.velocity = [geometry['max_steering_velocity']] * count + [0.0] * count
+        output.effort = []
+        self.steering_publisher.publish(output)
 
     def _reset_done(self, future):
         try:
@@ -173,6 +226,9 @@ class RemdeviceControl(ManualControl):
             self._drop_input(now)
         super()._publish()
         raw = String()
+        # The base publisher also checks decoder freshness with later clock
+        # reads. Reusing the earlier timestamp would look like a clock rollback.
+        now = self.get_clock().now()
         sample = self.decoder.snapshot(now.nanoseconds)
         raw.data = json.dumps({
             'node_id': self.mapping.node_id, 'mapping_verified': self.mapping.verified,

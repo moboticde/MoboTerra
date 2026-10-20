@@ -38,6 +38,11 @@ class MappingTest(unittest.TestCase):
                      lambda m: m['axes']['speed'].update(invert=1),
                      lambda m: m['buttons']['reset'].update(signal='SP1'),
                      lambda m: m['buttons']['mode'].update(signal='STOP'),
+                     lambda m: m['buttons']['mode'].update(signal='U1'),
+                     lambda m: m['buttons']['mode'].update(signal='D2'),
+                     lambda m: m['buttons']['mode'].update(signal='U9'),
+                     lambda m: m['buttons']['mode'].update(signal='D0'),
+                     lambda m: m['buttons']['mode'].update(signal='SP17'),
                      lambda m: m['buttons']['boost'].update(active_high=1),
                      lambda m: m['buttons'].pop('deadman'),
                      lambda m: m['axes'].pop('steer')]
@@ -45,3 +50,18 @@ class MappingTest(unittest.TestCase):
             mapping = copy.deepcopy(example_mapping()); change(mapping)
             with self.subTest(mapping=mapping), self.assertRaises(ValueError):
                 RemdeviceMapping(mapping)
+
+    def test_spare_direction_bit_supports_measured_active_low_rp1(self):
+        value = example_mapping()
+        value['node_id'] = 10
+        value['axes']['speed']['channel'] = 3
+        value['axes']['steer']['channel'] = 2
+        value['axes']['crab']['channel'] = 4
+        value['buttons']['mode'] = {'signal': 'U5', 'active_high': False}
+        value['buttons']['boost'] = {'signal': 'SP3', 'active_high': True}
+        value['buttons']['reset'] = {'signal': 'SP4', 'active_high': True}
+        mapping = RemdeviceMapping(value)
+        self.assertFalse(mapping.button('mode', {'U5': True}))  # Recorded MANUAL.
+        self.assertTrue(mapping.button('mode', {'U5': False}))  # Recorded AUTO.
+        self.assertTrue(mapping.button('boost', {'SP3': True}))
+        self.assertTrue(mapping.button('reset', {'SP4': True}))

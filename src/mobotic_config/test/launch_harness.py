@@ -1,5 +1,6 @@
 """Execute real launch factories with recording entities; never start ROS nodes."""
 import ast
+import json
 import os
 from pathlib import Path
 import warnings
@@ -37,7 +38,7 @@ def environment():
              'AnyLaunchDescriptionSource', 'LaunchConfiguration', 'PathJoinSubstitution',
              'PythonExpression', 'Node', 'PushRosNamespace', 'FindPackageShare', 'ParameterValue')
     env = {name: constructor(name) for name in names}
-    env.update(os=os, warnings=warnings, yaml=yaml, Configuration=Configuration,
+    env.update(os=os, json=json, warnings=warnings, yaml=yaml, Configuration=Configuration,
                ConfigurationError=ConfigurationError, default_platform_path=default_platform_path,
                validate_platform=validate_platform, render_description=render_description)
     path = PACKAGES / 'mobotic_config/mobotic_config/launching.py'

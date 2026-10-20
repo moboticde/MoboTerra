@@ -1,0 +1,6 @@
+# Optional virtual-only rates for a Raspberry Pi running RViz on the same host.
+/**:
+  ros__parameters:
+    feedback_request_period: 0.05
+    traction_pdo_period: 0.05
+    can_heartbeat_period: 0.1

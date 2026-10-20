@@ -38,6 +38,7 @@ class MoboticSupervisor(Node):
         self.declare_parameter('required_health_sources', Parameter.Type.STRING_ARRAY)
         self.declare_parameter('health_timeout', 0.3)
         self.declare_parameter('require_operator_interlock', False)
+        self.declare_parameter('manual_stationary_steering_enabled', False)
         # Required topology is supplied by mobotic_config, not duplicated here.
         self.declare_parameter('expected_module_names', Parameter.Type.STRING_ARRAY)
         self.declare_parameter(
@@ -163,6 +164,8 @@ class MoboticSupervisor(Node):
         self.required_health_sources = list(self.get_parameter('required_health_sources').value)
         self.health_timeout = float(self.get_parameter('health_timeout').value)
         self.require_operator_interlock = bool(self.get_parameter('require_operator_interlock').value)
+        self.manual_stationary_steering_enabled = bool(self.get_parameter('manual_stationary_steering_enabled').value)
+        self.manual_steering_requests = {}
         self.last_final = {}
         self.requested_mode = initial_mode
         self.transition_in_progress = False
@@ -266,6 +269,9 @@ class MoboticSupervisor(Node):
         )
         self.kinematics_subscription = self.create_subscription(
             JointState, 'kinematics/joint_setpoints', self._kinematics_candidate_callback, 1)
+        if self.manual_stationary_steering_enabled:
+            self.manual_steering_subscription = self.create_subscription(
+                JointState, 'operator/steering_setpoints', self._manual_steering_callback, 1)
         self.reset_service = self.create_service(
             Trigger, 'wheel_modules/clear_errors', self._reset_errors_service)
         self.health_subscription = self.create_subscription(
@@ -413,6 +419,31 @@ class MoboticSupervisor(Node):
         if self._stamp_valid(msg.header.stamp, self.manual_timeout):
             self.manual_state = msg
             self.manual_state_received = self.get_clock().now()
+
+    def _manual_steering_callback(self, msg):
+        if (not getattr(self, 'manual_stationary_steering_enabled', False)
+                or msg.header.frame_id != self.output_frame_id
+                or not self._command_stamp_valid(msg.header.stamp, self.manual_timeout)
+                or not self._joint_feedback_valid(msg) or msg.effort):
+            self.manual_steering_requests = {}
+            return
+        indices = {name: i for i, name in enumerate(msg.name)}
+        if (any(msg.velocity[indices[name]] != 0.0 or msg.position[indices[name]] != 0.0
+                for name in self.expected_traction_joint_names)
+                or any(not 0.0 <= msg.velocity[indices[name]] <= self.max_direct_steering_velocity
+                       for name in self.expected_steering_joint_names)):
+            self.manual_steering_requests = {}
+            return
+        now = self.get_clock().now()
+        # Requests and velocity publications arrive on independent DDS topics.
+        # Retain the bounded source-stamped history so a newer request cannot
+        # hide the request belonging to the current supervised velocity tick.
+        requests = {stamp: value for stamp, value in getattr(self, 'manual_steering_requests', {}).items()
+                    if 0 <= now.nanoseconds - stamp <= int(self.manual_timeout * 1e9)}
+        requests[Time.from_msg(msg.header.stamp).nanoseconds] = (msg, now)
+        while len(requests) > 16:
+            del requests[min(requests)]
+        self.manual_steering_requests = requests
 
     def _autonomy_command_callback(self, msg):
         self._refresh_motion_readiness(self.get_clock().now())
@@ -741,6 +772,7 @@ class MoboticSupervisor(Node):
             self.command_accept_after = now
         self.manual_command = None
         self.manual_command_received = None
+        self.manual_steering_requests = {}
         self.autonomy_command = None
         self.autonomy_command_received = None
         self.autonomy_joint_command = None
@@ -1251,7 +1283,9 @@ class MoboticSupervisor(Node):
             purpose = (WheelModuleCommandArray.CONTROLLED_STOP if self.transition_in_progress else
                        WheelModuleCommandArray.MOTION if source is not None else WheelModuleCommandArray.HOLD)
             self.velocity_ledger[now.nanoseconds] = (self.authority_generation, purpose,
-                source.header.stamp if source is not None and not self.transition_in_progress else now.to_msg())
+                source.header.stamp if source is not None and not self.transition_in_progress else now.to_msg(),
+                all(v == 0.0 for v in (output.twist.linear.x, output.twist.linear.y, output.twist.angular.z)),
+                output.twist.angular.z == 0.0)
             self.velocity_ledger = {k: v for k, v in self.velocity_ledger.items() if now.nanoseconds - k <= int(self.control_period * 10 * 1e9)}
         self.cmd_vel_publisher.publish(output)
 
@@ -1264,7 +1298,70 @@ class MoboticSupervisor(Node):
             return
         if entry[1] == WheelModuleCommandArray.MOTION and not self._source_gate(now)[0]:
             return
+        msg = self._manual_stationary_candidate(msg, entry, now)
+        msg = self._aligned_manual_candidate(msg, entry, now)
         self._emit_final(msg, entry[2], now, entry[1])
+
+    def _aligned_manual_candidate(self, msg, entry, now):
+        # A virtual zero-yaw translation starts only after all wheels face its
+        # direction. Otherwise asynchronous steering creates a yaw transient.
+        if (not getattr(self, 'manual_stationary_steering_enabled', False)
+                or self.selected_mode != VehicleModeState.MANUAL
+                or entry[1] != WheelModuleCommandArray.MOTION
+                or len(entry) < 5 or entry[3] or not entry[4]):
+            return msg
+        aligned = False
+        if self._message_fresh(self.joint_state, self.joint_state_received, self.wheel_status_timeout, now):
+            feedback = dict(zip(self.joint_state.name, self.joint_state.position))
+            indices = {name: i for i, name in enumerate(msg.name)}
+            aligned = all(abs(math.remainder(msg.position[indices[name]] - feedback[name],
+                                            2.0 * math.pi)) <= 0.01
+                          for name in self.expected_steering_joint_names)
+        if aligned:
+            return msg
+        output = copy.deepcopy(msg)
+        for i, name in enumerate(output.name):
+            if name in self.expected_traction_joint_names:
+                output.velocity[i] = 0.0
+        # Begin the normal acceleration ramp when alignment is achieved,
+        # rather than accumulating a full-speed target while traction is held.
+        self.last_output = [0.0, 0.0, 0.0]
+        self.last_control_time = now
+        return output
+
+    def _manual_stationary_candidate(self, msg, entry, now):
+        request, received = getattr(self, 'manual_steering_requests', {}).get(
+            Time.from_msg(entry[2]).nanoseconds, (None, None))
+        if (not getattr(self, 'manual_stationary_steering_enabled', False)
+                or self.selected_mode != VehicleModeState.MANUAL
+                or entry[1] != WheelModuleCommandArray.MOTION
+                or len(entry) < 4 or not entry[3]
+                or request is None
+                or not self._message_fresh(request, received, self.manual_timeout, now)
+                or Time.from_msg(request.header.stamp).nanoseconds != Time.from_msg(entry[2]).nanoseconds
+                or not self._message_fresh(self.joint_state, self.joint_state_received, self.wheel_status_timeout, now)
+                or not self._message_fresh(self.measured_velocity, self.measured_velocity_received, self.velocity_feedback_timeout, now)):
+            return msg
+        velocity = self.measured_velocity.twist
+        feedback_indices = {name: i for i, name in enumerate(self.joint_state.name)}
+        if (math.hypot(velocity.linear.x, velocity.linear.y) > self.standstill_linear_velocity
+                or abs(velocity.angular.z) > self.standstill_angular_velocity
+                or any(abs(self.joint_state.velocity[feedback_indices[name]]) > self.standstill_joint_velocity
+                       for name in self.expected_traction_joint_names)):
+            return msg
+        output = copy.deepcopy(msg)
+        indices = {name: i for i, name in enumerate(output.name)}
+        requested = {name: i for i, name in enumerate(request.name)}
+        for name in self.expected_steering_joint_names:
+            position = self.joint_state.position[feedback_indices[name]]
+            # A stationary wheel's heading is equivalent modulo pi. Select the
+            # closest angle so pre-steering cannot cause an unnecessary sweep.
+            output.position[indices[name]] = position + math.remainder(
+                request.position[requested[name]] - position, math.pi)
+            output.velocity[indices[name]] = request.velocity[requested[name]]
+        for name in self.expected_traction_joint_names:
+            output.velocity[indices[name]] = 0.0
+        return output if self._steering_positions_valid(output) else msg
 
     def _emit_final(self, msg, source_stamp, now, purpose):
         if not hasattr(self, 'final_command_publisher'):

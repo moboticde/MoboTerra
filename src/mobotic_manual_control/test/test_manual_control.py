@@ -411,6 +411,38 @@ class ManualControlTest(unittest.TestCase):
         self.switch(1)
         self.assertEqual(len(self.node.mode_publisher.messages), 1)
 
+    def test_authority_change_preserves_input_age_but_requires_neutral_rearm(self):
+        def mode(generation):
+            self.node._vehicle_mode_callback(SimpleNamespace(
+                header=SimpleNamespace(stamp=self.now.to_msg()), current_mode=0,
+                transition_in_progress=False, supervisor_instance='supervisor',
+                authority_generation=generation))
+        mode(1)
+        self.node._joy_callback(self.joy())
+        self.now = Time(10.1)
+        self.node._joy_callback(self.joy(moving=True))
+        old_stamp = self.node.last_joy_stamp
+        self.now = Time(10.2)
+        mode(2)
+        self.node._publish()
+        state = self.node.state_publisher.messages[-1]
+        self.assertTrue(state.connected)
+        self.assertFalse(state.command_active)
+        self.assertEqual(state.header.stamp, old_stamp)
+        self.assertEqual(self.node.command, [0.0, 0.0, 0.0])
+        self.now = Time(10.21)
+        self.node._joy_callback(self.joy(moving=True))
+        self.assertFalse(self.node._manual_enabled())
+        self.now = Time(10.22)
+        self.node._joy_callback(self.joy())
+        self.now = Time(10.23)
+        self.node._joy_callback(self.joy(moving=True))
+        self.assertTrue(self.node._manual_enabled())
+        self.now = Time(10.5)
+        mode(3)
+        self.node._publish()
+        self.assertFalse(self.node.state_publisher.messages[-1].connected)
+
     def test_invalid_or_replayed_mode_feedback_cannot_change_toggle_target(self):
         self.node.mode_switch_type = 'toggle'
         self.mode_feedback(1)

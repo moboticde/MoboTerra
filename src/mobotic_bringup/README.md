@@ -85,6 +85,7 @@ have not changed. `check_config` is read-only and does not configure OS interfac
 | `start_safety` | `true` | Start hardware FlexiSoft monitoring |
 | `start_battery` | `true` | Start hardware Vanguard monitor |
 | `start_scanners` | `true` | Start hardware scanners and scan-health monitoring |
+| `operator_can_interface` | empty | Optional receive-only PAIL CAN input in virtual mode, isolated from simulated drive traffic |
 | `start_odometry` | `true` | Start measured wheel odometry in either profile |
 | `publish_odom_tf` | `auto` → true | Publish odom-to-base TF; disable if an external estimator owns it |
 | `front_scanner_ip` | `auto` → 10.60.20.52 | Front scanner address |
@@ -185,6 +186,38 @@ brake or STO model. Protocol unit tests pass, but full ROS build/runtime testing
 is still required before calling this a successful end-to-end motion test.
 Raw ELMO safety-register warnings are expected.
 The mock node publishes `battery/system_state`, not public `battery/state`.
+Virtual telemetry uses the triggering SYNC's acquisition timestamp across all
+eight simulated drives. Extra stop/enable requests wait for the pending sample
+to finish (at most 100 ms, bounded by half the motion-feedback timeout), rather
+than invalidating it mid-batch. This guard applies only to the virtual position
+source; hardware keeps its configured cyclic timing.
+
+### Drive the virtual platform with a PAIL CAN joystick
+
+The confirmed receiver for this test is node 10 at 250 kbit/s. Use the separate
+virtual profile prepared in the [command guide](../../docs/commands.md#pail-can-joystick-and-rviz-in-virtual-mode),
+with simulated master node 11 and the measured PAIL axis/button mapping.
+With its physical CAN interface already configured:
+
+```bash
+ros2 launch mobotic_bringup moboterra.launch.py \
+  stack_type:=virtual robot_name:=moboterra_test \
+  operator_can_interface:=can0 start_scanners:=false \
+  platform_config:="$HOME/.config/moboterra/platform-virtual-pail.yaml"
+```
+
+The optional receiver publishes only to `operator_can/can_rx`. The operator's
+CAN input/output are remapped to this separate namespace; virtual drive frames
+remain on the local `can_rx`/`can_tx` topics. No physical CAN sender is launched,
+so neither simulated drive commands nor operator NMT requests reach the bus.
+The Ecobox must already transmit PDOs. If it is Pre-Operational, explicitly start
+node 10 on the isolated joystick bus with `cansend can0 000#010A`.
+The option has no effect in hardware mode or when the manual interface is disabled.
+
+Physical scanners, FlexiSoft and batteries are unnecessary for this virtual
+profile: mock readiness supplies those inputs. The generic scanner adapter
+reports the mock I/O status; it does not connect to scanners. An unverified PAIL
+mapping still inhibits joystick motion. See the [Docker and RViz commands](../../docs/commands.md#pail-can-joystick-and-rviz-in-virtual-mode).
 
 ## Inspect the system
 

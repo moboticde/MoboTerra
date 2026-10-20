@@ -1,3 +1,5 @@
+import json
+
 from mobotic_config.launching import common_arguments, load_from_context, deployment_actions
 from mobotic_config.description import render_description
 from launch import LaunchDescription
@@ -54,9 +56,19 @@ def _launch_setup(context):
     kinematics_config = cfg.parameters('kinematics')
     manual_config = cfg.parameters('manual')
     operator_source = cfg.platform.get('operator', {'source': 'usb'})['source']
+    operator_can_interface = LaunchConfiguration('operator_can_interface').perform(context)
+    virtual_operator = (LaunchConfiguration('stack_type').perform(context) == 'virtual'
+                        and operator_source == 'remdevice')
+    virtual_can_operator = virtual_operator and bool(operator_can_interface)
     safety_config = cfg.parameters('safety')
     battery_config = cfg.parameters('battery')
     supervisor_config = cfg.parameters('supervisor')
+    if virtual_operator:
+        manual_config['stationary_steering_enabled'] = True
+        manual_config['stationary_steering_geometry'] = json.dumps({key: kinematics_config[key] for key in (
+            'steering_joint_names', 'traction_joint_names', 'wheels_x', 'wheels_y',
+            'wheel_mount_angles', 'max_steering_velocity')})
+        supervisor_config['manual_stationary_steering_enabled'] = True
     if LaunchConfiguration('start_odometry').perform(context) == 'true':
         supervisor_config['required_health_sources'] = ['kinematics', 'odometry']
     host_state_path = LaunchConfiguration('host_state_path').perform(context)
@@ -202,6 +214,29 @@ def _launch_setup(context):
         parameters=[cfg.platform['usb_joystick']],
         output='screen',
     )
+    # Physical operator input is isolated from the simulated drive CAN topics.
+    # No sender is attached: virtual drive commands and operator NMT stay local.
+    operator_socketcan = GroupAction(
+        condition=IfCondition(PythonExpression([
+            "'", stack_type, "' == 'virtual' and '", start_manual_interface,
+            "' == 'true' and '", str(virtual_can_operator).lower(), "' == 'true'",
+        ])),
+        actions=[
+            PushRosNamespace(robot_name),
+            PushRosNamespace('operator_can'),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(PathJoinSubstitution([
+                    FindPackageShare('ros2_socketcan'), 'launch', 'socket_can_receiver.launch.py',
+                ])),
+                launch_arguments={
+                    'interface': operator_can_interface,
+                    'from_can_bus_topic': 'can_rx',
+                    'enable_can_fd': 'false', 'filters': '0:0,#1FFFFFFF',
+                    'interval_sec': '0.01', 'use_bus_time': 'true',
+                }.items(),
+            ),
+        ],
+    )
     manual_control = Node(
         condition=IfCondition(start_manual_interface),
         package='mobotic_manual_control',
@@ -209,6 +244,8 @@ def _launch_setup(context):
         name='operator',
         namespace=robot_name,
         parameters=[manual_config],
+        remappings=[('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx')]
+                   if virtual_operator else [],
         output='screen',
         respawn=True,
     )
@@ -293,6 +330,7 @@ def _launch_setup(context):
         kinematics,
         odometry,
         joystick,
+        operator_socketcan,
         manual_control,
         flexisoft_bridge,
         safety_monitor,
@@ -347,6 +385,11 @@ def generate_launch_description():
             default_value='true',
             choices=['true', 'false'],
             description='Start the battery CAN receiver when hardware battery monitoring is enabled',
+        ),
+        DeclareLaunchArgument(
+            'operator_can_interface',
+            default_value='',
+            description='Optional receive-only physical CAN input for a PAIL operator in virtual mode; never connects simulated drive traffic to CAN',
         ),
         DeclareLaunchArgument(
             'start_manual_interface',

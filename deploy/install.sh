@@ -129,7 +129,7 @@ identify_one() {
     local role="$1" serials=()
     [[ -t 0 ]] || die "${role} serial is required for non-interactive installation"
     echo >&2
-    echo "Disconnect other USB-to-CAN adapters, connect only the ${role} adapter, then press Enter." >&2
+    echo "Disconnect other USB-to-CAN adapters, connect only an adapter wired to the ${role} bus, then press Enter." >&2
     read -r
     udevadm settle
     mapfile -t serials < <(connected_serials | sort -u)

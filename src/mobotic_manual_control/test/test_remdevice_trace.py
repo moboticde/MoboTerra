@@ -23,7 +23,13 @@ class TraceTest(unittest.TestCase):
         class ReceiveOnlyBus:
             def __enter__(self): return self
             def __exit__(self, *args): pass
-            def setsockopt(self, *args): pass
+            def setsockopt(self, level, option, filters):
+                self.filters = list(struct.iter_unpack('=II', filters))
+                for cob, mask in self.filters:
+                    if mask & 0x20000000:
+                        raise AssertionError('CAN_ERR_FLAG routes the filter away from normal data frames')
+                    if mask != 0xC00007FF:
+                        raise AssertionError('expected an exact standard data-frame filter')
             def settimeout(self, *args): pass
             def bind(self, *args): pass
             def send(self, *args): raise AssertionError('capture must never transmit')

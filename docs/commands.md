@@ -90,6 +90,144 @@ Run that GUI command on the **host**, not inside the container shell. Stop the
 foreground virtual stack with Ctrl+C. Virtual tests do not verify actual CAN,
 scanner protective stops, brakes, encoder recovery or physical E-stop behavior.
 
+### PAIL CAN joystick and RViz in virtual mode
+
+After source changes, rebuild the software images with
+`sudo bash ./deploy/install.sh --software-only`. This does not start the hardware
+service. Reload `MOBOTERRA_IMAGE` from section 2 after a successful installation.
+
+The confirmed PAIL/Ecobox settings for this virtual test are **node 10 at
+250 kbit/s**. Drives, safety and battery readiness are virtual. Use a CAN adapter
+connected to the Ecobox separately from physical drives. The installed hardware
+profile still describes the planned shared node-9/500-kbit/s bus; keep a separate
+virtual profile so this test does not change that installation.
+
+Keep the physical robot service stopped during this joystick test. Virtual drive
+frames are exchanged only inside `/moboterra_test/can_rx` and `can_tx`; the
+physical joystick has a separate receive-only bridge in `operator_can`. There is
+no CAN sender connecting either virtual drive commands or mocked readiness to
+the physical bus. The virtual ROS domain is 142, separate from the normal
+hardware domain in the installed configuration.
+
+For a new setup, create the virtual profile once (Python and PyYAML are required).
+An existing file is preserved by exclusive creation:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import yaml
+
+profile = yaml.safe_load(Path('/etc/moboterra/platform.yaml').read_text())
+profile['can']['master_node_id'] = '0x0B'  # Simulated master, node 11.
+profile['can']['drives']['bitrate'] = 250000
+profile['operator']['source'] = 'remdevice'
+profile['operator']['mapping']['node_id'] = 10
+output = Path.home() / '.config/moboterra/platform-virtual-pail.yaml'
+output.parent.mkdir(parents=True, exist_ok=True)
+with output.open('x') as stream:
+    stream.write('# VIRTUAL PAIL TEST ONLY; do not deploy as hardware configuration.\n')
+    yaml.safe_dump(profile, stream, sort_keys=False)
+print(output)
+PY
+```
+
+Node 11 avoids the configuration's node-10 master collision. Its heartbeat stays
+inside the virtual CAN topics; the physical receiver remains node 10. Configure
+the adapter on the isolated joystick bus (these commands assume it is `can0`):
+
+```bash
+sudo ip link set can0 down
+sudo ip link set can0 type can bitrate 250000 listen-only off
+sudo ip link set can0 up
+ip -details link show can0
+```
+
+The virtual launch does not configure the host interface. Its optional operator
+receiver has no physical CAN sender, so simulated drive traffic stays inside ROS.
+The virtual profile must contain the measured PAIL axis/button mapping.
+The supplied empty `mapping.verified: false` profile permits inspection but
+intentionally cannot move even the virtual platform. Follow the
+[PAIL capture guide](remdevice_commissioning.md#capture-the-customized-control-assignments)
+to determine the real axes/buttons; do not substitute assumed gamepad indices.
+The receive-only capture tool also runs on this host without ROS:
+
+```bash
+PYTHONPATH=src/mobotic_manual_control python3 -m mobotic_manual_control.remdevice_trace \
+  --interface can0 --node-id 10 --output pail.jsonl --label neutral --seconds 8
+```
+
+Once the interface is up and the receiver is transmitting PDOs, launch the
+virtual stack from a host terminal:
+
+```bash
+MOBOTERRA_IMAGE="$(python3 -c \
+  'import json; print(json.load(open("/opt/moboterra/software/release.json"))["runtime_image"])')"
+sudo docker run --rm -it --init --name moboterra-virtual \
+  --network host --cap-drop ALL --security-opt no-new-privileges:true \
+  --env ROS_DOMAIN_ID=142 --env ROS_LOCALHOST_ONLY=1 \
+  --volume "$HOME/.config/moboterra/platform-virtual-pail.yaml:/etc/moboterra/platform.yaml:ro" \
+  --volume "$PWD/deploy/config:/etc/moboterra/virtual-policy:ro" \
+  "$MOBOTERRA_IMAGE" \
+  ros2 launch mobotic_bringup moboterra.launch.py \
+  stack_type:=virtual robot_name:=moboterra_test \
+  platform_config:=/etc/moboterra/platform.yaml \
+  start_manual_interface:=true start_scanners:=false operator_can_interface:=can0 \
+  driver_parameters_file:=/etc/moboterra/virtual-policy/virtual-pi-driver.yaml \
+  supervisor_parameters_file:=/etc/moboterra/virtual-policy/virtual-pi-supervisor.yaml \
+  manual_parameters_file:=/etc/moboterra/virtual-policy/virtual-pi-manual.yaml
+```
+
+The operator receives physical frames on `operator_can/can_rx`; its outgoing
+`operator_can/can_tx` has no physical sender. Its start-receiver service and
+automatic NMT therefore cannot start the physical Ecobox in this mode. If the
+receiver is Pre-Operational, explicitly start node 10 on the isolated joystick
+bus with `cansend can0 000#010A`. This sends NMT Start only to node 10; it does not
+change its node ID, bitrate or stored configuration. Never use a broadcast start
+for this test. Expect TPDO1 `18A`, TPDO2 `28A`, TPDO3 `38A`, heartbeat `70A` and
+EMCY `08A` for node 10.
+
+In another **host desktop** terminal, start RViz:
+
+```bash
+MOBOTERRA_GUI_DRI=1 moboterra-gui env ROS_DOMAIN_ID=142 ROS_LOCALHOST_ONLY=0 \
+  ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT \
+  FASTRTPS_DEFAULT_PROFILES_FILE=/opt/moboterra-checks/virtual-fastdds.xml \
+  rviz2 -d /opt/moboterra-checks/virtual-pail.rviz --ros-args \
+  -r /tf:=/moboterra_test/tf -r /tf_static:=/moboterra_test/tf_static
+```
+
+The saved view follows `base_link`, shows the robot and ground grid, and disables
+the odometry arrows/covariance overlay that can obscure the platform. Its fixed
+frame is `odom`. To configure an empty RViz window manually, add **RobotModel**,
+choose **Topic** as its description source and
+`/moboterra_test/robot_description` as the topic; use
+**Transient Local** durability. Add **Odometry** with
+`/moboterra_test/vehicle/odom` if desired. Mock scanner readiness is available,
+but no laser scans or obstacle world are simulated. Keep controls neutral until
+MANUAL readiness and complete joint feedback are established, then move the
+PAIL sticks. Missing feedback still blocks motion; removing scanner hardware
+does not bypass that gate.
+
+The left paddle steers the wheels, including while stationary. The right stick
+commands forward/reverse and left/right crab translation; with the left paddle
+centred it does not request yaw. Keep both controls centred for initial rearm.
+
+The GUI command selects loopback-only UDP discovery because RViz and the runtime
+use separate container shared-memory namespaces and user IDs. With Jazzy,
+`ROS_LOCALHOST_ONLY=1` installs a shared-memory transport even when
+an XML transport is set, so both discovery overrides above are
+needed for the GUI. The supplied XML disables built-in transports and permits
+only `127.0.0.1`. The runtime stays localhost-only on its separate domain.
+`MOBOTERRA_GUI_DRI=1` enables the Pi GPU when `/dev/dri` is available. With software
+rendering, set RViz's **Frame Rate** to 10. After a transient startup
+fault, centre the controls and press B2 to request the supervisor's normal reset;
+motion remains blocked if feedback is still stale.
+
+The optional `virtual-pi-*` overlays above run control and synchronous feedback at
+20 Hz to reduce CPU load when RViz shares the Pi. They retain the default
+watchdog, input and feedback deadlines. Omit the mount and three policy arguments
+to use the default 50 Hz policy. Use these overlays only for `stack_type:=virtual`.
+
 ## 3. Configure the real adapters without starting motion
 
 Secure the platform and make the independent hardware stop available first.
