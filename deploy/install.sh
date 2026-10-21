@@ -93,6 +93,7 @@ ensure_prerequisites() {
     command -v ip >/dev/null 2>&1 || host_packages+=(iproute2)
     command -v udevadm >/dev/null 2>&1 || host_packages+=(udev)
     command -v python3 >/dev/null 2>&1 || host_packages+=(python3)
+    python3 -c 'import yaml' >/dev/null 2>&1 || host_packages+=(python3-yaml)
     command -v candump >/dev/null 2>&1 || host_packages+=(can-utils)
     [[ -r /etc/ssl/certs/ca-certificates.crt ]] || host_packages+=(ca-certificates)
     if (( docker_missing == 1 )); then
@@ -213,6 +214,10 @@ install -m 0755 "${script_dir}/host/moboterra_supervisor.py" "${staging}/moboter
 install -m 0755 "${script_dir}/host/moboterra_ctl.py" "${staging}/moboterra-ctl"
 install -m 0755 "${script_dir}/host/moboterra-gui" "${staging}/moboterra-gui"
 install -m 0755 "${script_dir}/host/moboterra-tools" "${staging}/moboterra-tools"
+# The host and container validate the same platform schema and policy defaults.
+install -d -m 0755 "${staging}/mobotic_config" "${staging}/config"
+install -m 0644 "${repo_root}"/src/mobotic_config/mobotic_config/*.py "${staging}/mobotic_config/"
+install -m 0644 "${repo_root}"/src/mobotic_config/config/*.yaml "${staging}/config/"
 python3 - "${staging}/release.json" "${version}" "${runtime_image}" "${gui_image}" "${tools_image}" <<'PY'
 import json
 from pathlib import Path
@@ -269,7 +274,6 @@ config_tmp="$(mktemp /etc/moboterra/moboterra.env.XXXXXX)"
 cat >"${config_tmp}" <<EOF
 PLATFORM_CAN_SERIAL=${platform_serial}
 BATTERY_CAN_SERIAL=${battery_serial}
-CAN_BITRATE=500000
 ROS_DOMAIN_ID=${ros_domain_id}
 INPUT_GID=${input_gid}
 MOBOTERRA_IMAGE=${runtime_image}

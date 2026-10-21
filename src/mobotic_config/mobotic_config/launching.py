@@ -83,7 +83,9 @@ def _standalone_setup(context, component):
         return actions + [Node(package='mobotic_safety', executable=executable, name=executable,
                                namespace=namespace, parameters=[cfg.parameters('safety')],
                                output='screen', respawn=True, respawn_delay=1.0)
-                          for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter')]
+                          for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter')
+                          if executable != 'flexisoft_tcp_bridge' or
+                          cfg.platform['safety'].get('source', 'flexisoft') == 'flexisoft']
     parameters = cfg.parameters(component)
     if component == 'driver':
         legacy = {}
@@ -143,6 +145,8 @@ def standalone_launch(component):
 def _virtual_setup(context):
     cfg = Configuration(value(context, 'platform_config'))
     module = value(context, 'module_name')
+    if module == 'auto':
+        module = cfg.platform['modules'][0]['name']
     role = value(context, 'drive_type')
     record = next((m for m in cfg.platform['modules'] if m['name'] == module), None)
     if record is None:
@@ -166,7 +170,7 @@ def _virtual_setup(context):
 
 
 def virtual_launch():
-    arguments = common_arguments() + [DeclareLaunchArgument('module_name', default_value='front_left'),
+    arguments = common_arguments() + [DeclareLaunchArgument('module_name', default_value='auto'),
         DeclareLaunchArgument('drive_type', default_value='steering', choices=['steering', 'traction'])]
     for key in ('can_node_id', 'encoder_resolution', 'gear_ratio'):
         arguments.append(DeclareLaunchArgument(key, default_value='auto'))

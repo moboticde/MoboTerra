@@ -291,8 +291,12 @@ class SocketCanLaunchTest(unittest.TestCase):
         self.assertEqual(len(scanners), 2)
         for node, location in zip(scanners, ('front_left', 'rear_right')):
             remappings = dict(node.kwargs['remappings'])
-            self.assertEqual(remappings['~/raw_data'], f'scanner/{location}/raw_data')
-            self.assertEqual(remappings['~/scan'], f'scanner/{location}/scan')
+            # The installed SICK driver publishes relative names, not private
+            # ~/scan topics; private remaps leave both sensors on one topic.
+            self.assertEqual(remappings['raw_data'], f'scanner/{location}/raw_data')
+            self.assertEqual(remappings['scan'], f'scanner/{location}/scan')
+            self.assertEqual(remappings['extended_scan'], f'scanner/{location}/extended_laser_scan')
+            self.assertEqual(remappings['/diagnostics'], 'diagnostics')
 
 
 if __name__ == '__main__':

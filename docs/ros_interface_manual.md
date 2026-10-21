@@ -61,7 +61,7 @@ Types in the following table use ROS 2 `package/msg/Type` notation.
 | `autonomy/joint_setpoints` | sensor_msgs/msg/JointState | External autonomy; candidate for KINEMATICOFF |
 | `vehicle/cmd_vel` | geometry_msgs/msg/TwistStamped | Supervisor to kinematics; internal candidate |
 | `kinematics/joint_setpoints` | sensor_msgs/msg/JointState | Kinematics back to supervisor; not directly to driver |
-| `wheel_modules/command` | mobotic_interfaces/msg/WheelModuleCommandArray | Supervisor only; final motion for all four modules |
+| `wheel_modules/command` | mobotic_interfaces/msg/WheelModuleCommandArray | Supervisor only; final motion for all configured modules |
 | `wheel_modules/operation_command` | mobotic_interfaces/msg/WheelModuleOperationCommand | Supervisor; internal enable/reset transaction |
 | `vehicle/mode` | mobotic_interfaces/msg/VehicleModeState | Supervisor; effective mode, selected mode and readiness |
 | `joint_states` | sensor_msgs/msg/JointState | Driver; authoritative measured joint state |
@@ -130,14 +130,16 @@ cleared causes. Old motion is not replayed after reset or reconnection.
 
 ## Joint commands and actual feedback
 
-The four modules are `front_left`, `front_right`, `rear_left` and `rear_right`.
+The default four modules are `front_left`, `front_right`, `rear_left` and `rear_right`.
 Their eight names end in `_steering` and `_traction`, for example
 `front_left_steering` and `front_left_traction`. Use message `name` values to
 associate arrays; do not assume a positional ordering from an earlier worksheet.
+The [two-module profile](two_module_setup.md) selects only `front_right` and
+`rear_left`, so its feedback and command contract contains four joints.
 
 For actual `joint_states`, `position` contains steering angles and wheel rotation
 angles [rad], and `velocity` contains steering and traction rotational velocities
-[rad/s]. The driver synchronizes all eight joints within the configured SYNC
+[rad/s]. The driver synchronizes all configured joints within the configured SYNC
 window and preserves acquisition time. `effort` is empty; electrical motor
 current is not torque and is not placed in JointState.effort.
 
@@ -221,7 +223,7 @@ Capture the actual graph with `moboterra-gui rqt_graph` while the target is
 running. A source-defined architecture is not a captured live ROS graph.
 
 Verify that only the supervisor publishes `wheel_modules/command`, the driver
-does not subscribe directly to kinematics joint candidates, all eight measured
+does not subscribe directly to kinematics joint candidates, all configured measured
 joints are coherent, current units/known flags are correct, and safety/fault
 recovery never replays stale motion. Hardware commissioning remains necessary
 after source integration and a ROS 2 Jazzy build/test run.

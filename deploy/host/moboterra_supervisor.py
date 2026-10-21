@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -48,6 +49,12 @@ class DeploymentConfig:
     stable_seconds: float = 3.0
     poll_seconds: float = 2.0
     start_timeout: float = 120.0
+    battery_bitrate: int | None = None
+    platform_digest: str = ""
+
+    @property
+    def effective_battery_bitrate(self) -> int:
+        return self.bitrate if self.battery_bitrate is None else self.battery_bitrate
 
     @classmethod
     def from_values(cls, values: Mapping[str, str]) -> "DeploymentConfig":
@@ -162,7 +169,24 @@ class HostBackend:
         self.runner = runner or CommandRunner()
 
     def read_config(self) -> DeploymentConfig:
-        return DeploymentConfig.from_values(parse_env(self.config_path.read_text(encoding="utf-8")))
+        # Use the same validator/profile as ROS. Adapter serial assignments and
+        # host lifecycle policy remain in the env file; bus rates do not.
+        from mobotic_config.configuration import Configuration as PlatformConfiguration
+        from mobotic_config.configuration import ConfigurationError as PlatformConfigurationError
+        try:
+            platform = PlatformConfiguration(self.config_path.with_name("platform.yaml")).platform
+        except PlatformConfigurationError as exc:
+            raise ConfigurationError(f"Invalid platform profile: {exc}") from exc
+        if (platform['can']['drives']['interface'] != 'can0'
+                or platform['can']['battery']['interface'] != 'can1'):
+            raise ConfigurationError('Managed hardware requires platform can0 and battery can1')
+        values = parse_env(self.config_path.read_text(encoding="utf-8"))
+        # Supersede the legacy shared CAN_BITRATE, including on old installs.
+        values['CAN_BITRATE'] = str(platform['can']['drives']['bitrate'])
+        config = DeploymentConfig.from_values(values)
+        digest = hashlib.sha256(json.dumps(platform, sort_keys=True).encode()).hexdigest()
+        return dataclasses.replace(config, battery_bitrate=platform['can']['battery']['bitrate'],
+                                   platform_digest=digest)
 
     def list_can_devices(self) -> list[CanDevice]:
         devices: list[CanDevice] = []
@@ -241,12 +265,13 @@ class HostBackend:
             return False
         platform_details = self.link_details("can0")
         battery_details = self.link_details("can1")
-        bitrate = re.compile(rf"\bbitrate\s+{config.bitrate}\b")
+        platform_bitrate = re.compile(rf"\bbitrate\s+{config.bitrate}\b")
+        battery_bitrate = re.compile(rf"\bbitrate\s+{config.effective_battery_bitrate}\b")
         battery_listen_only = "listen-only on" in battery_details.lower() or "LISTEN-ONLY" in battery_details
         platform_listen_only = "listen-only on" in platform_details.lower() or "LISTEN-ONLY" in platform_details
         return bool(
-            bitrate.search(platform_details)
-            and bitrate.search(battery_details)
+            platform_bitrate.search(platform_details)
+            and battery_bitrate.search(battery_details)
             and battery_listen_only
             and not platform_listen_only
         )
@@ -289,7 +314,7 @@ class HostBackend:
         ])
         self.runner.run([
             "ip", "link", "set", "dev", "can1", "type", "can",
-            "bitrate", str(config.bitrate), "listen-only", "on",
+            "bitrate", str(config.effective_battery_bitrate), "listen-only", "on",
         ])
         self.runner.run(["ip", "link", "set", "dev", "can0", "up"])
         self.runner.run(["ip", "link", "set", "dev", "can1", "up"])
@@ -312,7 +337,7 @@ class Supervisor:
         self.state = "INITIALIZING"
         self.detail = "Starting"
         self.stable_identity: tuple[str, str] | None = None
-        self.config_identity: tuple[str, str, int, int] | None = None
+        self.config_identity: tuple | None = None
         self.stable_since = 0.0
         self.start_deadline: float | None = None
         self.last_bus_off_count: int | None = None
@@ -364,7 +389,8 @@ class Supervisor:
         issues = []
         try:
             mapping = select_devices(self.backend.list_can_devices(), config)
-            identity = (config.platform_serial, config.battery_serial, config.bitrate, config.ros_domain_id)
+            identity = (config.platform_serial, config.battery_serial, config.bitrate,
+                        config.effective_battery_bitrate, config.ros_domain_id, config.platform_digest)
             if self.config_identity is not None and identity != self.config_identity:
                 # Do not silently apply new deployment identity to live processes.
                 issues.append("Deployment configuration changed; explicit service restart required")

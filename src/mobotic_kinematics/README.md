@@ -2,12 +2,15 @@
 
 Kinematics bridge between supervised vehicle velocity commands and the MoboTerra wheel-module interface.
 
-Configured modules are `front_left`, `front_right`, `rear_left` and `rear_right`,
-each with steering and traction. There are no casters. The user-confirmed module
+The default modules are `front_left`, `front_right`, `rear_left` and `rear_right`,
+each with steering and traction. The default has no casters. The user-confirmed module
 spacing follows actual CAD steering axes: 1.69 m front–rear / 0.99 m left–right,
 with the restored four-wheel radius 0.325 m. All mounting yaws use the four-wheel
-hardware reference, not the different two-diagonal platform's calibration. Both kinematic directions
-use all four modules, and command publication requires all eight feedback joints.
+hardware reference. Selecting fewer modules does not recalibrate a different
+mechanical layout. Both kinematic directions use every selected module, and
+command publication requires fresh feedback from both joints of each one.
+The [front-right/rear-left profile](../../docs/two_module_setup.md) selects two
+modules and requires four feedback joints; the default requires all eight.
 
 The node subscribes to:
 

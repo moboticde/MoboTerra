@@ -18,9 +18,9 @@ class SoftwareInstallationTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.deploy = self.root / 'repo' / 'deploy'
         shutil.copytree(DEPLOY, self.deploy)
-        profile = self.root / 'repo/src/mobotic_config/config/platform.yaml'
-        profile.parent.mkdir(parents=True)
-        shutil.copyfile(DEPLOY.parent / 'src/mobotic_config/config/platform.yaml', profile)
+        for folder in ('config', 'mobotic_config'):
+            shutil.copytree(DEPLOY.parent / 'src/mobotic_config' / folder,
+                            self.root / 'repo/src/mobotic_config' / folder)
         text = (self.deploy / 'install.sh').read_text()
         # Only the test copy bypasses root authentication; every filesystem write
         # is redirected to this temporary root and external operations are fake.
@@ -88,6 +88,8 @@ if name == 'docker' and args[:1] == ['build'] and os.environ.get('FAIL_BUILD'):
         release = self.root / 'opt/moboterra/software'
         self.assertTrue(release.is_symlink())
         self.assertIn('tools_image', json.loads((release / 'release.json').read_text()))
+        self.assertTrue((release / 'mobotic_config/configuration.py').is_file())
+        self.assertTrue((release / 'config/platform.yaml').is_file())
         self.assertTrue((self.root / 'usr/local/bin/moboterra-tools').is_symlink())
         self.assertTrue((self.root / 'usr/local/bin/moboterra-ctl').is_symlink())
 

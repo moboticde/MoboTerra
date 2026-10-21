@@ -16,6 +16,10 @@ owner.
 For copyable commands, isolated virtual testing, ROS inspection/services and
 rebuilding after code changes, use the [command reference](../docs/commands.md).
 
+For a robot with only front-right and rear-left powered steering/traction
+modules, use the [two-module setup guide](../docs/two_module_setup.md). Select the
+same profile for every component; physical commissioning restrictions still apply.
+
 ## Prerequisites
 
 The interface update is not a hardware-ready release: Elmo position continuity,
@@ -25,7 +29,8 @@ health is not proof that the robot is ready to move.
 
 The host platform file is /etc/moboterra/platform.yaml and is mounted read-only;
 the installer preserves an existing file. Optional *_PARAMETERS_FILE values in
-moboterra.env select policy overlays inside that same mount. Calibration state is
+moboterra.env select policy overlays inside that same mount. Unset or empty overlay
+values use the bundled policy files so ROS receives valid launch arguments. Calibration state is
 reserved under /var/lib/moboterra/position-state, owned by UID/GID 10001 and mounted
 writable separately. Recovery integration is pending: do not delete or copy
 calibration state between robots, and do not infer persistence from the mount alone.
@@ -33,13 +38,15 @@ calibration state between robots, and do not infer persistence from the mount al
 - ARM64 (including Raspberry Pi 5) or AMD64 PC with Ubuntu 24.04.
 - Two SocketCAN-compatible USB adapters with different `ID_SERIAL_SHORT` values.
 - Internet access while building ROS and apt dependencies.
-- Platform and battery CAN buses configured for 500 kbit/s.
+- CAN devices configured for the bitrates selected in `platform.yaml` (the
+  default profile uses 500 kbit/s on both buses; the two-module example uses
+  platform 250 kbit/s and battery 500 kbit/s).
 - The scanner/safety Ethernet interface configured for the addresses documented
   in the main project README; the installer deliberately does not modify host
   Ethernet or safety wiring.
 
 The installer installs missing Docker, Compose, `can-utils`, `iproute2`, udev,
-Python and CA certificates. If Docker is already installed from Ubuntu or Docker
+Python, PyYAML and CA certificates. If Docker is already installed from Ubuntu or Docker
 CE packages, it installs the matching Compose package when needed. It refuses to
 guess the package source for an unknown Docker installation.
 
@@ -141,10 +148,16 @@ The installed configuration is `/etc/moboterra/moboterra.env`:
 ```ini
 PLATFORM_CAN_SERIAL=...
 BATTERY_CAN_SERIAL=...
-CAN_BITRATE=500000
 ROS_DOMAIN_ID=42
 INPUT_GID=...
 ```
+
+Wheel modules and both CAN bitrates are defined only in
+`/etc/moboterra/platform.yaml`. The host uses the same configuration validator as
+ROS and configures each bus independently from `can.drives.bitrate` and
+`can.battery.bitrate`. A legacy `CAN_BITRATE` env entry is ignored. Changing the
+profile requires an explicit hardware service restart; a running stack is kept
+in ERROR rather than silently switching its topology or bus configuration.
 
 Software-only image selections and ROS domain are stored separately in
 `/etc/moboterra/software.env`. GUI launchers use hardware configuration when it
@@ -189,8 +202,8 @@ When both serials remain present through the debounce interval, it can rename
 and configure the recovered interfaces while keeping ROS alive:
 
 ```text
-platform adapter -> can0, 500000 bit/s, automatic bus-off restart
-battery adapter  -> can1, 500000 bit/s, listen-only
+platform adapter -> can0, can.drives.bitrate, automatic bus-off restart
+battery adapter  -> can1, can.battery.bitrate, listen-only
 ```
 
 Adapter loss, invalid CAN setup, BUS-OFF, repeated bus-off events, unhealthy

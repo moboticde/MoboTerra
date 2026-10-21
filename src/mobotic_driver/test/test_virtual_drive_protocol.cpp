@@ -177,6 +177,10 @@ void mappingAndNmt()
 {
   auto driver = backend(2, true); VirtualDriveProtocol drive(2, true);
   configure(drive, driver.tractionPdoConfigurationRequests(1)); enable(drive, 2, true);
+  check(reply(drive, request(2, 0x1400, 1, 4, 0x40000202)).data[0] == ABORT_REPLY,
+        "RTR prohibition is reserved on RPDO COB-IDs");
+  check(reply(drive, request(2, 0x1800, 1, 4, 0x20000182)).data[0] == ABORT_REPLY,
+        "unsupported extended TPDO identifiers remain rejected");
   check(reply(drive, request(2, 0x1A00, 1, 4, 0xDEAD0020)).data[0] == ABORT_REPLY, "live mapping edits rejected");
   write(drive, 2, 0x1A00, 0, 1, 0); write(drive, 2, 0x1A00, 1, 4, 0xDEAD0020);
   check(reply(drive, request(2, 0x1A00, 0, 1, 1)).data[0] == ABORT_REPLY, "unknown mapping activation rejected");

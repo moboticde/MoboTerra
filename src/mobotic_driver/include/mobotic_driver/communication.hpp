@@ -224,6 +224,7 @@ enum ParameterIds
 constexpr unsigned CANOPEN_NMT_START_REMOTE_NODE = 0x01;
 constexpr unsigned CANOPEN_NMT_ENTER_PRE_OPERATIONAL = 0x80;
 constexpr unsigned CANOPEN_PDO_COB_ID_INVALID_BIT = 0x80000000;
+constexpr unsigned CANOPEN_TPDO_COB_ID_NO_RTR_BIT = 0x40000000;
 constexpr unsigned CANOPEN_SYNCHRONOUS_EVERY_SYNC = 0x01;
 
 constexpr std::uint32_t EC_TRACTION_RPDO_CONTROLWORD_MAPPING = 0x60400010;
@@ -382,9 +383,12 @@ public:
     };
 
     const std::uint32_t rpdo_cob_id = tractionRpdoCobId();
-    const std::uint32_t tpdo_cob_id = tractionTpdoCobId();
-    const std::uint32_t telemetry_tpdo_cob_id = telemetryTpdo2CobId();
-    const std::uint32_t position_tpdo_cob_id = telemetryTpdo3CobId();
+    // Gold drives retain bit 30 (RTR unsupported) in TPDO COB-ID readback.
+    // Request that capability explicitly so strict verification also succeeds
+    // on the physical controller, without masking any configuration mismatch.
+    const std::uint32_t tpdo_cob_id = CANOPEN_TPDO_COB_ID_NO_RTR_BIT | tractionTpdoCobId();
+    const std::uint32_t telemetry_tpdo_cob_id = CANOPEN_TPDO_COB_ID_NO_RTR_BIT | telemetryTpdo2CobId();
+    const std::uint32_t position_tpdo_cob_id = CANOPEN_TPDO_COB_ID_NO_RTR_BIT | telemetryTpdo3CobId();
 
     return {
       nmtPreOperationalRequest(),

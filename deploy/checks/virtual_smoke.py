@@ -1,4 +1,5 @@
 """Validate ROS integration without CAN devices or motion commands."""
+import argparse
 import os
 from pathlib import Path
 import signal
@@ -11,9 +12,16 @@ from diagnostic_msgs.msg import DiagnosticArray
 from mobotic_interfaces.msg import WheelModuleStatusArray
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
+from mobotic_config.configuration import Configuration
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--platform-config', help='Optional platform profile to validate in virtual mode')
+    args = parser.parse_args()
+    cfg = Configuration(args.platform_config)
+    expected_joints = set(cfg.parameters('driver')['drives.names'])
+    expected_modules = set(cfg.parameters('supervisor')['expected_module_names'])
     # Keep build-time discovery local even when the Docker build has networking.
     os.environ['ROS_LOCALHOST_ONLY'] = '1'
     os.environ.setdefault('ROS_DOMAIN_ID', '42')
@@ -24,7 +32,8 @@ def main():
             'ros2', 'launch', 'mobotic_bringup', 'moboterra.launch.py',
             'stack_type:=virtual', 'robot_name:=moboterra',
             'start_manual_interface:=false',
-        ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        ] + ([f'platform_config:={cfg.path}'] if args.platform_config else []),
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         rclpy.init()
         node = rclpy.create_node('installation_smoke_check')
         samples = {}
@@ -46,8 +55,12 @@ def main():
                          if namespace == '/moboterra'}
                 ready = expected <= names and len(samples) == 4
                 if ready:
-                    if len(samples['joints'].name) != 8:
-                        raise RuntimeError('Expected feedback for all eight joints')
+                    if (len(samples['joints'].name) != len(expected_joints)
+                            or set(samples['joints'].name) != expected_joints):
+                        raise RuntimeError('Expected feedback for every configured joint')
+                    if (len(samples['modules'].modules) != len(expected_modules)
+                            or {m.name for m in samples['modules'].modules} != expected_modules):
+                        raise RuntimeError('Expected status for every configured module')
                     if not samples['diagnostics'].status:
                         raise RuntimeError('Empty diagnostic publication')
                     ready_since = ready_since or time.monotonic()
@@ -61,7 +74,8 @@ def main():
             healthcheck = Path('/usr/local/bin/moboterra-healthcheck')
             if healthcheck.exists():
                 subprocess.run([str(healthcheck)], check=True, timeout=15)
-            print('PASS: virtual nodes, eight joints, wheel status, odometry and diagnostics',
+            print(f'PASS: virtual nodes, {len(expected_joints)} joints, '
+                  f'{len(expected_modules)} wheel modules, odometry and diagnostics',
                   flush=True)
         except Exception:
             log.seek(0)

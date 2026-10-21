@@ -31,6 +31,19 @@ settings, not automatically recalculated from a geometry edit. Recalibrate them
 when changing gearing, resolution or tyre dimensions. Software ceilings must fit
 the controller's raw velocity/current ceilings.
 
+Profiles may select two to four powered modules, using a unique subset in the
+order `front_left`, `front_right`, `rear_left`, `rear_right`. Each selected module
+must have both steering and traction, with distinct steering-axis XY coordinates.
+`platform-front-right-rear-left.yaml` is the reference diagonal two-module profile
+(drive IDs 3/4 and 7/8). See the [two-module setup guide](../../docs/two_module_setup.md)
+for preserving installed calibration, testing and hardware readiness limits.
+
+The number of modules is inferred from the `modules` list. There is no separate
+two/four mode, node implementation or manually maintained joint-count setting.
+Both layouts use the same application and image. The managed host also reads
+each CAN bus bitrate from this selected profile; adapter serial assignments and
+host lifecycle settings remain in `moboterra.env`.
+
 ## Use
 
 Build and source the ROS workspace first:

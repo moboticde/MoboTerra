@@ -61,6 +61,7 @@ def _launch_setup(context):
                         and operator_source == 'remdevice')
     virtual_can_operator = virtual_operator and bool(operator_can_interface)
     safety_config = cfg.parameters('safety')
+    flexisoft_enabled = cfg.platform['safety'].get('source', 'flexisoft') == 'flexisoft'
     battery_config = cfg.parameters('battery')
     supervisor_config = cfg.parameters('supervisor')
     if virtual_operator:
@@ -289,11 +290,11 @@ def _launch_setup(context):
             package='sick_safetyscanners2', executable='sick_safetyscanners2_node',
             name=f'{location}_scanner', namespace=robot_name, output='screen', respawn=True,
             parameters=[cfg.scanner_parameters(location)],
-            remappings=[('~/scan', f'scanner/{location}/scan'),
-                        ('~/raw_data', f'scanner/{location}/raw_data'),
-                        ('~/output_paths', f'scanner/{location}/output_paths'),
-                        ('~/extended_laser_scan', f'scanner/{location}/extended_laser_scan'),
-                        ('~/diagnostics', 'diagnostics')],
+            remappings=[('scan', f'scanner/{location}/scan'),
+                        ('raw_data', f'scanner/{location}/raw_data'),
+                        ('output_paths', f'scanner/{location}/output_paths'),
+                        ('extended_scan', f'scanner/{location}/extended_laser_scan'),
+                        ('/diagnostics', 'diagnostics')],
         )
         for location, ip_argument in (('front_left', 'front_scanner_ip'), ('rear_right', 'rear_scanner_ip'))
     ]
@@ -332,7 +333,7 @@ def _launch_setup(context):
         joystick,
         operator_socketcan,
         manual_control,
-        flexisoft_bridge,
+        *([flexisoft_bridge] if flexisoft_enabled else []),
         safety_monitor,
         battery_monitor,
         *scanners,

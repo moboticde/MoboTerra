@@ -167,7 +167,9 @@ private:
       const unsigned expected = comm ? (sub == 1 ? 4 : sub == 2 ? 1 : 0) : (sub == 0 ? 1 : sub <= 8 ? 4 : 0);
       if (!expected) { return 0x06090011; }
       if (size != expected) { return 0x06070010; }
-      if (comm && sub == 1 && (value & ~0x800007FFu)) { return 0x06090030; }
+      // Standard TPDOs may prohibit RTR via bit 30; it is reserved for RPDOs.
+      const uint32_t cob_mask = index == 0x1400 ? 0x800007FFu : 0xC00007FFu;
+      if (comm && sub == 1 && (value & ~cob_mask)) { return 0x06090030; }
       if (index == 0x1400 && sub == 1) { pending_rpdo_.reset(); }
       if (mapping && sub > 0 && objects_[key(index, 0)] != 0) { return 0x06010000; }
       if (mapping && sub == 0)

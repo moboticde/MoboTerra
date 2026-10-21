@@ -23,6 +23,10 @@ class PlatformDiagnostics(Node):
         self.declare_parameter('monitor_scanners', True)
         self.declare_parameter('monitor_odometry', True)
         self.declare_parameter('host_state_path', '')
+        self.declare_parameter('safety_source', 'flexisoft')
+        self.safety_source = str(self.get_parameter('safety_source').value)
+        if self.safety_source not in ('flexisoft', 'hardwired_sto'):
+            raise ValueError('unsupported safety_source')
         self.host_state_path = str(self.get_parameter('host_state_path').value)
         self.declare_parameter('minimum_battery_percentage', 0.2)
         self.minimum_soc = float(self.get_parameter('minimum_battery_percentage').value)
@@ -45,6 +49,11 @@ class PlatformDiagnostics(Node):
             'safety/io_state': (SafetyIOState, deadlines['safety_timeout']),
             'vehicle/mode': (VehicleModeState, deadlines['mode_timeout']),
         }
+        if self.safety_source == 'hardwired_sto':
+            # Hardware STO is independent of PLC Ethernet telemetry. Do not
+            # diagnose an intentionally absent PLC stream as a communication fault.
+            del self.channels['safety/state']
+            del self.channels['safety/io_state']
         if self.get_parameter('monitor_manual').value:
             self.channels['operator/state'] = (OperatorState, deadlines['manual_timeout'])
         if self.get_parameter('monitor_scanners').value:
@@ -99,6 +108,13 @@ class PlatformDiagnostics(Node):
     def _publish(self):
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()
+        if getattr(self, 'safety_source', 'flexisoft') == 'hardwired_sto':
+            status = DiagnosticStatus()
+            status.name = f'{self.get_namespace().rstrip("/")}/platform/hardware_sto'
+            status.hardware_id = 'Siemens hardware STO'
+            status.level = bytes([WARN])
+            status.message = 'Hardware STO circuit; PLC telemetry not used; scanner/enable states unknown to ROS'
+            array.status.append(status)
         if self.host_state_path:
             valid, fault, reason = read_host_health(self.host_state_path, time.time())
             status = DiagnosticStatus()

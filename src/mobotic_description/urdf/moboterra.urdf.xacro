@@ -56,7 +56,7 @@
   <xacro:scanner s="${p['scanners']['units'][0]}"/>
   <xacro:scanner s="${p['scanners']['units'][1]}"/>
 
-  <!-- Four powered modules, no casters. Fixed CAD mounts, geometry-free moving
+  <!-- Powered modules selected by the profile. Fixed CAD mounts, geometry-free moving
        steering frames, and floor-aligned tyre axes. Meshes are not recalibrated
        or resized when a custom platform profile is selected. -->
   <xacro:macro name="module" params="m">
@@ -92,10 +92,13 @@
       <origin xyz="0 0 ${radius - m['cad_steering_xyz'][2]}" rpy="0 0 0"/><axis xyz="0 1 0"/>
     </joint>
   </xacro:macro>
-  <xacro:module m="${p['modules'][0]}"/>
-  <xacro:module m="${p['modules'][1]}"/>
-  <xacro:module m="${p['modules'][2]}"/>
-  <xacro:module m="${p['modules'][3]}"/>
+  <xacro:macro name="selected_modules" params="items">
+    <xacro:if value="${len(items) > 0}">
+      <xacro:module m="${items[0]}"/>
+      <xacro:selected_modules items="${items[1:]}"/>
+    </xacro:if>
+  </xacro:macro>
+  <xacro:selected_modules items="${p['modules']}"/>
   <xacro:macro name="corner" params="c">
     <link name="${c['name']}"/>
     <joint name="${c['name']}_fixed" type="fixed">

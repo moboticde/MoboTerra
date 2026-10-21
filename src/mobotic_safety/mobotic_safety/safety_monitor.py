@@ -1,5 +1,5 @@
 import rclpy
-from mobotic_interfaces.msg import SafetyIOState, SafetyState, SafetyTelegram
+from mobotic_interfaces.msg import SafetyIOState, SafetyState, SafetyTelegram, WheelModuleStatusArray
 from rclpy.time import Time
 from rclpy.node import Node
 from std_msgs.msg import UInt8
@@ -8,6 +8,17 @@ from std_msgs.msg import UInt8
 class SafetyMonitor(Node):
     def __init__(self):
         super().__init__('safety_monitor')
+
+        self.declare_parameter('source', 'flexisoft')
+        self.declare_parameter('expected_module_names', [''])
+        self.source = str(self.get_parameter('source').value)
+        self.expected_modules = list(self.get_parameter('expected_module_names').value)
+        if self.source not in ('flexisoft', 'hardwired_sto'):
+            raise ValueError('unsupported safety source')
+        if self.source == 'hardwired_sto' and (
+                not self.expected_modules or any(not name for name in self.expected_modules)
+                or len(set(self.expected_modules)) != len(self.expected_modules)):
+            raise ValueError('hardwired STO requires the configured module names')
 
         self.declare_parameter('status_timeout', 0.25)
         self.declare_parameter('publish_period', 0.05)
@@ -51,8 +62,9 @@ class SafetyMonitor(Node):
         self.io_publisher = self.create_publisher(SafetyIOState, 'safety/io_state', 1)
         self.state_publisher = self.create_publisher(SafetyState, 'safety/state', 1)
         self.subscription = self.create_subscription(
-            SafetyTelegram, 'flexisoft/status_byte', self._status_callback, 1
-        )
+            WheelModuleStatusArray if self.source == 'hardwired_sto' else SafetyTelegram,
+            'wheel_modules/status' if self.source == 'hardwired_sto' else 'flexisoft/status_byte',
+            self._module_callback if self.source == 'hardwired_sto' else self._status_callback, 1)
         self.timer = self.create_timer(self.publish_period, self._publish)
 
         self.last_status_time = None
@@ -60,6 +72,57 @@ class SafetyMonitor(Node):
         self.connection_epoch = ''
         self.last_sequence = 0
         self.retired_epochs = set()
+        self.last_modules = None
+        self.last_module_time = None
+
+    def _module_callback(self, msg):
+        now = self.get_clock().now()
+        try:
+            stamp = Time.from_msg(msg.header.stamp)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if (stamp.nanoseconds <= 0 or not 0 <= (now - stamp).nanoseconds <= int(self.status_timeout * 1e9)
+                or (self.last_module_time is not None and stamp.nanoseconds <= self.last_module_time.nanoseconds)):
+            return
+        self.last_modules, self.last_module_time = msg, stamp
+        self._publish()
+
+    def _publish_hardwired(self, now):
+        stamp = self.last_module_time
+        fresh = stamp is not None and 0 <= (now - stamp).nanoseconds <= int(self.status_timeout * 1e9)
+        modules = self.last_modules.modules if fresh else []
+        names = [module.name for module in modules]
+        complete = len(names) == len(self.expected_modules) and set(names) == set(self.expected_modules)
+        # A known active STO on any configured drive inhibits immediately.
+        active = any(module.name in self.expected_modules and module.sto_state_known and module.sto_active
+                     for module in modules)
+        clear = complete and all(module.sto_state_known and not module.sto_active and module.feedback_fresh
+                                 for module in modules)
+        known = active or clear
+        io = SafetyIOState()
+        io.header.stamp = stamp.to_msg() if stamp is not None else now.to_msg()
+        io.sto_state_known, io.sto_active = known, active
+        # There is no Siemens telemetry mapping for these individual signals.
+        io.emergency_stop_state_known = io.scanner_state_known = io.safety_enable_state_known = False
+        io.emergency_stop_active = io.safety_enable_active = False
+        io.front_left_protective_field_clear = io.rear_right_protective_field_clear = False
+        io.front_left_warning_field_clear = io.rear_right_warning_field_clear = False
+        io.front_left_ossd_active = io.rear_right_ossd_active = False
+        io.flexisoft_status_raw = 0
+        self.io_publisher.publish(io)
+        state = SafetyState()
+        state.header = io.header
+        state.communication_ok = state.physical_state_known = known
+        state.system_ready = state.motion_permitted = clear
+        state.protective_stop_active = not clear
+        state.sto_active = active
+        state.emergency_stop_active = state.safety_override_active = False
+        # Unknown warning-field state retains reduced speed and inhibits AUTO_DIRECT.
+        state.warning_field_active = True
+        state.status_message = ('Siemens hardwired STO active' if active else
+                                'Siemens hardwired STO clear; individual scanner/E-stop signals unavailable' if clear else
+                                'Siemens hardwired STO feedback unknown or stale; motion inhibited')
+        self.state_publisher.publish(state)
 
     def _status_callback(self, msg):
         now = self.get_clock().now()
@@ -93,6 +156,9 @@ class SafetyMonitor(Node):
 
     def _publish(self):
         now = self.get_clock().now()
+        if getattr(self, 'source', 'flexisoft') == 'hardwired_sto':
+            self._publish_hardwired(now)
+            return
         communication_ok = self._communication_ok(now)
         value = self.status_byte if communication_ok else 0
 

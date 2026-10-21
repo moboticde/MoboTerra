@@ -25,7 +25,7 @@ def battery_health(msg, minimum=0.2):
 
 def safety_health(msg):
     if not msg.communication_ok:
-        return ERROR, 'FlexiSoft telemetry missing/stale'
+        return ERROR, msg.status_message or 'Safety telemetry missing/stale'
     if msg.emergency_stop_active or msg.sto_active or not msg.system_ready:
         return WARN, msg.status_message or 'Safety inhibition'
     if not msg.motion_permitted or msg.warning_field_active or msg.safety_override_active:

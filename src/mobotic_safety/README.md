@@ -2,6 +2,22 @@
 
 Provides the monitoring boundary between the SICK FlexiSoft safety controller and the MoboTerra supervisor.
 
+The two-module Siemens chassis selects `safety.source: hardwired_sto`. Integrated
+and safety-only launch omit the FlexiSoft TCP bridge while retaining both safety
+monitoring nodes. The monitor consumes the configured wheel modules' STO status;
+missing, partial, duplicate, stale or unknown feedback cannot confirm a clear STO.
+A known active STO on any configured module immediately reports inhibition.
+Individual scanner, E-stop and safety-enable inputs remain explicitly unknown,
+and warning-field telemetry remains conservatively restricted in the diagnostic
+messages. For this explicit two-module profile, the supervisor does not use PLC
+telemetry for readiness, faults, speed scaling or direct-mode selection. The
+physical Siemens/scanner/STO circuit operates independently; known active drive
+STO still inhibits software enable. Battery, operator, drive feedback/faults and
+position continuity checks remain. The driver currently exposes raw Elmo safety
+registers but does not yet commission per-module STO feedback. `hardwired_sto`
+is rejected for any layout other than exactly two modules. Four-module profiles
+require FlexiSoft and retain its communication and safety-state checks.
+
 `flexisoft_tcp_bridge` accepts fixed-size Ethernet telegrams and publishes the configured status byte on
 `flexisoft/status_byte`. `safety_monitor` decodes that byte into `safety/io_state` and a fail-safe `safety/state`.
 Communication loss inhibits motion and marks physical safety states unknown; it does not fabricate a confirmed E-stop or STO.
@@ -24,8 +40,10 @@ The current bridge listens on TCP `0.0.0.0:9100` and reads byte 14 of each
 override `0x20`, and front/rear warnings `0x80`/`0x40`. These are reference
 mappings, not a substitute for checking the installed FlexiSoft project.
 
-Both `safety/state` and `safety/io_state` feed the supervisor and platform
-diagnostics. Native laser scans are monitored separately for stream health;
+For FlexiSoft profiles, both `safety/state` and `safety/io_state` feed the supervisor
+and platform diagnostics. Hardware-STO diagnostics explicitly report that PLC
+telemetry is unused and physical scanner/enable states are unknown to ROS.
+Native laser scans are monitored separately for stream health;
 they do not implement a new ROS protective-field algorithm. Missing FlexiSoft
 status (default 0.25 s) produces conservative ROS inhibition.
 See [hardware monitoring](../../docs/hardware_monitoring.md).

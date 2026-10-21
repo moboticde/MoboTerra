@@ -1,8 +1,12 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src/mobotic_config'))
+from mobotic_config.configuration import Configuration
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "host" / "moboterra_supervisor.py"
@@ -14,6 +18,38 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ConfigurationTest(unittest.TestCase):
+    def test_host_reads_per_bus_bitrates_and_topology_from_shared_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = root / 'moboterra.env'
+            env.write_text('PLATFORM_CAN_SERIAL=p\nBATTERY_CAN_SERIAL=b\nROS_DOMAIN_ID=42\n')
+            profile = Configuration().platform
+            profile['can']['drives']['bitrate'] = 250000
+            backend = MODULE.HostBackend(env, root / 'compose.yaml', FakeRunner())
+            digests = []
+            for names in (['front_left', 'front_right', 'rear_left', 'rear_right'],
+                          ['front_right', 'rear_left']):
+                selected = dict(profile, modules=[m for m in profile['modules'] if m['name'] in names])
+                (root / 'platform.yaml').write_text(json.dumps(selected))
+                config = backend.read_config()
+                self.assertEqual(config.bitrate, 250000)
+                self.assertEqual(config.effective_battery_bitrate, 500000)
+                digests.append(config.platform_digest)
+            self.assertNotEqual(*digests)
+            env.write_text(env.read_text() + 'CAN_BITRATE=125000\n')
+            self.assertEqual(backend.read_config().bitrate, 250000)
+
+    def test_host_rejects_missing_invalid_or_duplicate_platform_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = root / 'moboterra.env'
+            env.write_text('PLATFORM_CAN_SERIAL=p\nBATTERY_CAN_SERIAL=b\nROS_DOMAIN_ID=42\n')
+            backend = MODULE.HostBackend(env, root / 'compose.yaml', FakeRunner())
+            for content in (None, '{}', 'can: {}\ncan: {}\n'):
+                if content is not None: (root / 'platform.yaml').write_text(content)
+                with self.subTest(content=content), self.assertRaises(MODULE.ConfigurationError):
+                    backend.read_config()
+
     def test_parse_and_validate(self):
         values = MODULE.parse_env(
             "PLATFORM_CAN_SERIAL=platform-1\n"
@@ -106,6 +142,21 @@ class BackendTest(unittest.TestCase):
         self.assertTrue(self.backend.links_ready(self.mapping, self.config))
         details["can1"] = "can state ERROR-ACTIVE bitrate 500000 listen-only off"
         self.assertFalse(self.backend.links_ready(self.mapping, self.config))
+
+    def test_independent_platform_and_battery_bitrates_are_verified_and_configured(self):
+        config = MODULE.dataclasses.replace(self.config, bitrate=250000, battery_bitrate=500000)
+        details = {'can0': 'can state ERROR-ACTIVE bitrate 250000 listen-only off',
+                   'can1': 'can state ERROR-ACTIVE bitrate 500000 listen-only on'}
+        self.backend.link_details = lambda name: details[name]
+        self.assertTrue(self.backend.links_ready(self.mapping, config))
+        details['can1'] = 'can state ERROR-ACTIVE bitrate 250000 listen-only on'
+        self.assertFalse(self.backend.links_ready(self.mapping, config))
+        self.backend._link_exists = lambda name: name in {'can0', 'can1'}
+        self.backend.configure_links(self.mapping, config)
+        self.assertIn(['ip', 'link', 'set', 'dev', 'can0', 'type', 'can', 'bitrate',
+                       '250000', 'restart-ms', '100', 'listen-only', 'off'], self.backend.runner.commands)
+        self.assertIn(['ip', 'link', 'set', 'dev', 'can1', 'type', 'can', 'bitrate',
+                       '500000', 'listen-only', 'on'], self.backend.runner.commands)
 
     def test_link_verification_rejects_listen_only_platform(self):
         details = {
@@ -223,6 +274,18 @@ class ErrorModeLifecycleTest(unittest.TestCase):
         self.supervisor.step(100)
         self.assertEqual(self.supervisor.state, 'ERROR')
         self.assertEqual(self.backend.calls, [])
+
+    def test_profile_or_battery_bitrate_change_requires_explicit_restart(self):
+        for change in ({'platform_digest': 'changed-topology'}, {'battery_bitrate': 250000}):
+            with self.subTest(change=change):
+                self.setUp()
+                self.supervisor.step(100)
+                self.backend.config = MODULE.dataclasses.replace(self.backend.config, **change)
+                self.backend.ready = False
+                self.supervisor.step(102)
+                self.assertEqual(self.supervisor.state, 'ERROR')
+                self.assertIn('explicit service restart', self.supervisor.detail)
+                self.assertEqual(self.backend.calls, [])
 
     def test_start_once_without_adapters_but_do_not_recreate_crashed_container(self):
         self.backend.devices = []

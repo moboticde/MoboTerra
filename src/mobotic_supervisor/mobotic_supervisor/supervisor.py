@@ -61,6 +61,7 @@ class MoboticSupervisor(Node):
         self.declare_parameter('manual_timeout', 0.25)
         self.declare_parameter('autonomy_timeout', 0.25)
         self.declare_parameter('safety_timeout', 0.3)
+        self.declare_parameter('safety_source', 'flexisoft')
         self.declare_parameter('battery_timeout', 0.6)
         self.declare_parameter('wheel_status_timeout', 0.3)
         self.declare_parameter('minimum_battery_percentage', 0.2)
@@ -115,6 +116,9 @@ class MoboticSupervisor(Node):
         self.manual_timeout = float(self.get_parameter('manual_timeout').value)
         self.autonomy_timeout = float(self.get_parameter('autonomy_timeout').value)
         self.safety_timeout = float(self.get_parameter('safety_timeout').value)
+        self.safety_source = str(self.get_parameter('safety_source').value)
+        if self.safety_source not in ('flexisoft', 'hardwired_sto'):
+            raise ValueError('unsupported safety source')
         self.battery_timeout = float(self.get_parameter('battery_timeout').value)
         self.wheel_status_timeout = float(
             self.get_parameter('wheel_status_timeout').value
@@ -325,6 +329,8 @@ class MoboticSupervisor(Node):
         ):
             raise ValueError('expected_module_names must be non-empty and unique')
         module_count = len(self.expected_module_names)
+        if self.safety_source == 'hardwired_sto' and module_count != 2:
+            raise ValueError('hardwired_sto requires exactly two wheel modules')
         joint_names = (
             self.expected_steering_joint_names
             + self.expected_traction_joint_names
@@ -632,14 +638,26 @@ class MoboticSupervisor(Node):
             and self._stamp_valid(message.header.stamp, timeout, now)
         )
 
-    def _enable_gate(self, now):
-        if 'host' in getattr(self, 'required_health_sources', []):
-            health, received = self.component_health.get('host', (None, None))
-            if (not self._message_fresh(health, received, self.health_timeout, now)
-                    or not health.monitoring_valid or health.fault_active):
-                return False, 'host deployment fault or monitoring unavailable'
-        # Drive enable depends only on safety and battery readiness. Requiring
-        # enabled wheel feedback here would prevent disabled drives from starting.
+    def _requires_safety_telemetry(self):
+        # Only the configured two-module Siemens chassis uses a direct
+        # scanner -> controller -> drive STO chain without PLC network data.
+        # All other layouts retain the FlexiSoft telemetry prerequisite.
+        return not (getattr(self, 'safety_source', 'flexisoft') == 'hardwired_sto'
+                    and len(self.expected_module_names) == 2)
+
+    def _safety_monitors(self):
+        if not self._requires_safety_telemetry():
+            return ()
+        return (
+            (self.safety_state, self.safety_received, self.safety_timeout, 'SAFETY_MONITOR_LOST'),
+            (self.safety_io_state, self.safety_io_received, self.safety_timeout, 'SAFETY_IO_LOST'),
+        )
+
+    def _safety_gate(self, now):
+        if not self._requires_safety_telemetry():
+            # Do not invent healthy PLC signals. Real drive feedback and the
+            # hardware STO circuit remain independent prerequisites/protection.
+            return True, 'two-module hardware STO; PLC telemetry not required'
         if not self._message_fresh(
             self.safety_state, self.safety_received, self.safety_timeout, now
         ):
@@ -678,6 +696,17 @@ class MoboticSupervisor(Node):
             return False, 'protective stop active in safety I/O state'
         if not self.safety_state.motion_permitted:
             return False, self.safety_state.status_message or 'motion prohibited by safety system'
+        return True, 'FlexiSoft ready'
+
+    def _enable_gate(self, now):
+        if 'host' in getattr(self, 'required_health_sources', []):
+            health, received = self.component_health.get('host', (None, None))
+            if (not self._message_fresh(health, received, self.health_timeout, now)
+                    or not health.monitoring_valid or health.fault_active):
+                return False, 'host deployment fault or monitoring unavailable'
+        safety_ready, reason = self._safety_gate(now)
+        if not safety_ready:
+            return False, reason
 
         if not self._message_fresh(
             self.battery_state, self.battery_received, self.battery_timeout, now
@@ -708,6 +737,15 @@ class MoboticSupervisor(Node):
         if self.wheel_status is not None:
             if not self._message_fresh(self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now):
                 return False, 'driver status stale'
+            if not self._requires_safety_telemetry():
+                names = [m.name for m in self.wheel_status.modules]
+                if len(names) != len(self.expected_module_names) or set(names) != set(self.expected_module_names):
+                    return False, 'wheel-module status does not match configured modules'
+                if any(not m.feedback_fresh for m in self.wheel_status.modules):
+                    return False, 'driver feedback stale or missing'
+                if any(getattr(m, 'sto_state_known', False) and m.sto_active
+                       for m in self.wheel_status.modules):
+                    return False, 'safe torque off active in drive feedback'
             if any(not getattr(m, 'initialized', True) or not getattr(m, 'position_valid', True)
                    or m.error_code != 0 for m in self.wheel_status.modules):
                 return False, 'driver initialization/position/fault prevents enable'
@@ -750,7 +788,7 @@ class MoboticSupervisor(Node):
             return False, reason
 
         if self.selected_mode == VehicleModeState.AUTO_DIRECT:
-            if (
+            if self._requires_safety_telemetry() and (
                 self.safety_state.warning_field_active
                 or self._io_warning_active()
                 or self.safety_state.safety_override_active
@@ -860,12 +898,14 @@ class MoboticSupervisor(Node):
         return self._steering_positions_valid(msg)
 
     def _io_warning_active(self):
-        return self.safety_io_state is not None and not (
+        return self._requires_safety_telemetry() and self.safety_io_state is not None and not (
             self.safety_io_state.front_left_warning_field_clear
             and self.safety_io_state.rear_right_warning_field_clear
         )
 
     def _speed_scale(self):
+        if not self._requires_safety_telemetry():
+            return 1.0
         scale = 1.0
         if (
             self.safety_state is not None
@@ -1014,10 +1054,8 @@ class MoboticSupervisor(Node):
             getattr(m, 'initialized', True) and getattr(m, 'position_valid', True)
             and m.feedback_fresh and m.error_code == 0 for m in self.wheel_status.modules)
         monitors_known = all(self._message_fresh(message, received, timeout, now)
-                             for message, received, timeout in (
-                                 (self.safety_state, self.safety_received, self.safety_timeout),
-                                 (self.safety_io_state, self.safety_io_received, self.safety_timeout),
-                                 (self.battery_state, self.battery_received, self.battery_timeout)))
+                             for message, received, timeout, _ in self._safety_monitors() + (
+                                 (self.battery_state, self.battery_received, self.battery_timeout, 'BMS_MONITOR_LOST'),))
         if state.ready_to_drive and monitors_known:
             self.startup_complete = True
         if not getattr(self, 'startup_complete', False) and not state.error_active and not safety:
@@ -1163,16 +1201,15 @@ class MoboticSupervisor(Node):
         errors = []
         started = getattr(self, 'started_at', now)
         grace = (now - started).nanoseconds < int(getattr(self, 'startup_grace', 10.0) * 1e9)
-        for message, received, timeout, code in (
-                (self.safety_state, self.safety_received, self.safety_timeout, 'SAFETY_MONITOR_LOST'),
-                (self.safety_io_state, self.safety_io_received, self.safety_timeout, 'SAFETY_IO_LOST'),
+        for message, received, timeout, code in self._safety_monitors() + (
                 (self.battery_state, self.battery_received, self.battery_timeout, 'BMS_MONITOR_LOST'),
                 (self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, 'DRIVER_MONITOR_LOST')):
             if not self._message_fresh(message, received, timeout, now) and not grace:
                 errors.append(code)
         safety = self.safety_state
         io = self.safety_io_state
-        safety_fresh = self._message_fresh(safety, self.safety_received, self.safety_timeout, now)
+        safety_fresh = self._requires_safety_telemetry() and self._message_fresh(
+            safety, self.safety_received, self.safety_timeout, now)
         confirmed_stop = bool(safety_fresh and safety.communication_ok and
             ((safety.emergency_stop_active and getattr(io, 'emergency_stop_state_known', False))
              or (safety.sto_active and getattr(io, 'sto_state_known', False))
@@ -1196,6 +1233,11 @@ class MoboticSupervisor(Node):
         if battery is not None and getattr(battery, 'faulted_batteries', []):
             errors.append('BMS_FAULT')
         if self.wheel_status is not None:
+            if (not self._requires_safety_telemetry()
+                    and self._message_fresh(self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now)
+                    and any(m.name in self.expected_module_names and getattr(m, 'sto_state_known', False) and m.sto_active
+                            for m in self.wheel_status.modules)):
+                confirmed_stop = True
             names = [m.name for m in self.wheel_status.modules]
             if not grace and (len(names) != len(self.expected_module_names) or set(names) != set(self.expected_module_names)):
                 errors.append('DRIVER_STATUS_INVALID')

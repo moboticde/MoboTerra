@@ -252,8 +252,10 @@ sudo bash ./deploy/install.sh --no-start \
   --ros-domain-id 42
 ```
 
-The host supervisor assigns the platform adapter to `can0` at 500000 bit/s and
-the battery adapter to `can1` at 500000 bit/s, listen-only. It owns link naming,
+The host supervisor assigns the platform adapter to `can0` at
+`can.drives.bitrate` and the battery adapter to `can1` at
+`can.battery.bitrate`, listen-only. Both values come from the selected
+`/etc/moboterra/platform.yaml`; legacy env `CAN_BITRATE` is ignored. It owns link naming,
 configuration and container lifecycle; do not bring CAN up in the container.
 There is no automatic USB-port fallback when serials are missing or duplicated.
 

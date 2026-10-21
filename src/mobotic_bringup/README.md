@@ -117,7 +117,7 @@ controller profile and per-drive limits consistently.
 
 ## Odometry and scanner data
 
-`mobotic_odometry` integrates measured `vehicle/measured_velocity` (derived from all four modules),
+`mobotic_odometry` integrates measured `vehicle/measured_velocity` (derived from all configured modules),
 including sideways crab motion and yaw, and publishes `/moboterra/vehicle/odom`.
 The `odom -> base_link` transform carries the same pose/acquisition timestamp,
 on `/moboterra/tf`. Never run another broadcaster for that transform unless
@@ -171,7 +171,7 @@ ros2 launch mobotic_bringup moboterra.launch.py \
   stack_type:=virtual robot_name:=moboterra start_manual_interface:=false
 ```
 
-This starts the normal driver with the same PDO configuration as hardware mode, eight local
+With the default profile this starts the normal driver with the same PDO configuration as hardware mode, eight local
 `virtual_mobotic_drive` nodes and `mock_platform_state` publishing ready safety
 and aggregate battery state. CAN topics are connected locally; no SocketCAN bridge,
 physical safety/battery monitor or scanner is launched. It does not command
@@ -185,9 +185,11 @@ aligned when using custom driver configuration. There is no physical motor,
 brake or STO model. Protocol unit tests pass, but full ROS build/runtime testing
 is still required before calling this a successful end-to-end motion test.
 Raw ELMO safety-register warnings are expected.
+For the [front-right/rear-left profile](../../docs/two_module_setup.md), the same
+launch creates only four drive simulators and expects four feedback joints.
 The mock node publishes `battery/system_state`, not public `battery/state`.
 Virtual telemetry uses the triggering SYNC's acquisition timestamp across all
-eight simulated drives. Extra stop/enable requests wait for the pending sample
+configured simulated drives. Extra stop/enable requests wait for the pending sample
 to finish (at most 100 ms, bounded by half the motion-feedback timeout), rather
 than invalidating it mid-batch. This guard applies only to the virtual position
 source; hardware keeps its configured cyclic timing.

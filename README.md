@@ -5,11 +5,16 @@ autonomy. Autonomous planning/navigation is outside this project's scope.
 
 The implementation is present in `src/`; it is not yet hardware-commissioned.
 ROS integration and C++ build/test validation remain required before operation.
-MoboTerra has four powered steering/traction modules (`front_left`, `front_right`,
+MoboTerra defaults to four powered steering/traction modules (`front_left`, `front_right`,
 `rear_left`, `rear_right`), eight actuator joints and no casters. User-confirmed
 spacing follows actual CAD axes: 1.69 m front–rear / 0.99 m left–right, with the
 old four-wheel radius 0.325 m and width 0.31 m. CAD Z=0 is confirmed as the floor.
 CAN bindings and reference mounting offsets still require hardware checks.
+The same application also supports two powered modules: select the required
+records in the platform config's `modules` list. Driver bindings, feedback gates,
+kinematics, odometry, virtual drives and the robot model follow that list.
+See the [configuration and two-module setup](docs/two_module_setup.md); the
+prepared front-right/rear-left profile uses a 250-kbit/s platform bus.
 
 The default `/moboterra/operator` provider uses PAIL/Ecobox CANopen node 9 on
 `can0` at 500 kbit/s, without a hold-to-drive button. Physical control mapping
@@ -117,8 +122,9 @@ and their dependencies. Bringup launches the current stack automatically; it doe
 not configure the OS CAN interface, NIC address or hardware safety wiring. Scanner
 TF is supplied by integrated `robot_state_publisher` (`start_description:=true` by default), not by the scanners. Do not start a second description owner.
 The drive bridge uses `can0`; a separate receive-only battery receiver uses
-`can1` and publishes `battery_can/can_rx`. Configure both OS interfaces at
-500 kbit/s, with the battery adapter in listen-only mode, as in the reference.
+`can1` and publishes `battery_can/can_rx`. Use each bus's bitrate from the selected
+platform config, with the battery adapter in listen-only mode. The managed host
+applies those rates; a direct ROS launch does not configure host interfaces.
 No battery operating-consent/HV control is added.
 
 Bringup now also starts measured wheel odometry:

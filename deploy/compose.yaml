@@ -30,15 +30,15 @@ services:
       - robot_name:=${ROBOT_NAME-moboterra}
       - platform_config:=/etc/moboterra/platform.yaml
       - host_state_path:=/run/moboterra-host/state.json
-      - driver_parameters_file:=${DRIVER_PARAMETERS_FILE:-}
-      - supervisor_parameters_file:=${SUPERVISOR_PARAMETERS_FILE:-}
-      - manual_parameters_file:=${MANUAL_PARAMETERS_FILE:-}
-      - safety_parameters_file:=${SAFETY_PARAMETERS_FILE:-}
-      - battery_parameters_file:=${BATTERY_PARAMETERS_FILE:-}
-      - kinematics_parameters_file:=${KINEMATICS_PARAMETERS_FILE:-}
-      - diagnostics_parameters_file:=${DIAGNOSTICS_PARAMETERS_FILE:-}
-      - odometry_parameters_file:=${ODOMETRY_PARAMETERS_FILE:-}
-      - scanner_parameters_file:=${SCANNER_PARAMETERS_FILE:-}
+      - driver_parameters_file:=${DRIVER_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/driver.yaml}
+      - supervisor_parameters_file:=${SUPERVISOR_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/supervisor.yaml}
+      - manual_parameters_file:=${MANUAL_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/manual_control.yaml}
+      - safety_parameters_file:=${SAFETY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/safety.yaml}
+      - battery_parameters_file:=${BATTERY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/battery.yaml}
+      - kinematics_parameters_file:=${KINEMATICS_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/kinematics.yaml}
+      - diagnostics_parameters_file:=${DIAGNOSTICS_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/diagnostics.yaml}
+      - odometry_parameters_file:=${ODOMETRY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/odometry.yaml}
+      - scanner_parameters_file:=${SCANNER_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/scanners.yaml}
       - can_interface:=can0
       - battery_can_interface:=can1
     volumes:
@@ -82,7 +82,7 @@ services:
     healthcheck:
       test: ["CMD", "/usr/local/bin/moboterra-healthcheck"]
       interval: 10s
-      timeout: 10s
+      timeout: 20s
       retries: 3
       start_period: 90s
     logging:

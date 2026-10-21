@@ -110,6 +110,7 @@ class EnableGateTest(unittest.TestCase):
         self.now = Time(10.0)
         self.node = Supervisor()
         node = self.node
+        node.safety_source = 'flexisoft'
         node.safety_timeout = 0.3
         node.battery_timeout = 0.6
         node.wheel_status_timeout = 0.3
@@ -170,6 +171,13 @@ class EnableGateTest(unittest.TestCase):
         node._publish_velocity = lambda *args, **kwargs: None
         node._publish_direct_stop = lambda *args: None
         node._publish_mode_state = lambda *args: None
+
+    def test_two_module_hardwired_profile_has_no_plc_telemetry_prerequisite(self):
+        node = self.node
+        node.safety_source = 'hardwired_sto'
+        node.safety_state = node.safety_io_state = None
+        node.safety_received = node.safety_io_received = None
+        self.assertTrue(node._enable_gate(self.now)[0])
 
     def test_soc_boundary_and_invalid_values(self):
         for soc, expected in [

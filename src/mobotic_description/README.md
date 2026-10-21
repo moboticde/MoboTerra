@@ -102,6 +102,10 @@ Verify all offsets, traction direction and CAN addresses on secured hardware.
 Driver, kinematics, supervisor configuration/defaults and virtual launch bindings
 now describe four modules/eight actuators consistently. This changes the public
 joint/module names; external autonomy must use the new eight-joint contract.
+These counts describe the default profile. The
+[front-right/rear-left profile](../../docs/two_module_setup.md) generates only its
+two selected steering mounts, two wheels and four moving joints. Reference CAD
+chassis geometry remains unchanged.
 
 Each of `front_left`, `front_right`, `rear_left` and `rear_right` has a continuous
 `<module>_steering` and `<module>_traction` joint, matching the driver's eight
@@ -116,7 +120,7 @@ which created oversized rods protruding 155 mm beyond each wheel side. These
 values are not measured steering-unit dimensions and must not be restored as
 physical steering geometry. Joint origins, rotation axes and tyre dimensions
 are unchanged by this visual cleanup.
-There is no fake joint-state publisher; all eight moving joints need real feedback.
+There is no fake joint-state publisher; all selected moving joints need actual feedback.
 `meshes/moboterra_urdf_preview.png` shows the actual assembled URDF at zero joint
 positions, including all four wheels and blue CAD steering housings. Its top view makes
 the chassis translucent for inspection only; the URDF itself remains opaque.

@@ -1,6 +1,6 @@
 # mobotic_driver
 
-C++ ROS 2 driver for MoboTerra's four powered steering/traction modules. Steering uses MiControl; traction uses Elmo CANopen/DS402. Hardware configuration, scale/reference, gearing, limits and safety/brake behavior require commissioning.
+C++ ROS 2 driver for MoboTerra's configured powered steering/traction modules (four by default). Steering uses MiControl; traction uses Elmo CANopen/DS402. Hardware configuration, scale/reference, gearing, limits and safety/brake behavior require commissioning.
 
 The update configures and monitors drives while disabled, performs acknowledged PDO writes with readback, and accepts one final supervised motion array. Physical enable and authoritative joint publication remain inhibited pending verified Elmo position continuity; the synthetic position flag is only for virtual launch.
 
@@ -23,9 +23,11 @@ There are no ordinary driver subscriptions to kinematics/joint_setpoints or supe
 
 ## Feedback and protocol
 
+Elmo TPDO communication setup explicitly requests COB-ID bit 30 (RTR disabled), which Gold controllers retain in readback. Every configuration write still requires an exact acknowledged readback; PDO setup leaves motor operation disabled.
+
 Elmo position is read immediately at initialization through 6064:0, then through configured TPDO3. No direct encoder access, encoder/firmware changes or automatic reference zeroing are performed. Raw readback is exposed as position_0x6064_raw in diagnostics. EDS mapping support does not prove the installed reference survives a full power cycle.
 
-A joint publication requires position and velocity for all eight joints within one SYNC window and the configured sample-skew budget (5 ms by default). Its stamp is the oldest required motion acquisition, not report time. Traction counters are unwrapped with jump rejection; this alone cannot recover unpowered movement after a drive coordinate reset. See [controller object mapping](../../docs/controller_object_mapping.md).
+A joint publication requires position and velocity for every configured steering and traction joint within one SYNC window and the configured sample-skew budget (5 ms by default). Its stamp is the oldest required motion acquisition, not report time. Traction counters are unwrapped with jump rejection; this alone cannot recover unpowered movement after a drive coordinate reset. See [controller object mapping](../../docs/controller_object_mapping.md).
 
 Elmo 6078 current is per-mille of rated current 6075, not milliamps. The driver reads the rating and converts to amperes; stale/zero/absent rating yields unknown current. Steering uses the existing MiControl current conversion and still requires installed-unit verification. Current belongs in drive status, never JointState.effort.
 
@@ -60,7 +62,7 @@ Validated CAN samples are ordered per drive/field with the original acquisition 
 
 Joint names are <module>_steering and <module>_traction. Radius is 0.325 m; configured traction scaling is 4096 counts/revolution and 16:1 gearing. Raw traction ceiling is 116053 increments/s, with acceleration/deceleration 32093 increments/s². ROS limits remain 11.12 rad/s traction and 4.32 rad/s steering. These reference settings must match actual Elmo units before operation.
 
-Use integrated bringup and the shared platform/policy YAML. The synchronized profile requires both PDO paths and a positive sample-skew budget below the SYNC period. Eight moving joints and four modules must match supervisor/kinematics configuration.
+Use integrated bringup and the shared platform/policy YAML. The synchronized profile requires both PDO paths and a positive sample-skew budget below the SYNC period. All selected moving joints and modules must match supervisor/kinematics configuration. The [front-right/rear-left profile](../../docs/two_module_setup.md) selects drive nodes 3, 4, 7 and 8 and requires four joints; omitted controllers must be disconnected.
 
 ## Persistence and validation status
 

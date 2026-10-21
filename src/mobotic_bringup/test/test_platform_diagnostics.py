@@ -50,6 +50,15 @@ class PlatformDiagnosticsTest(unittest.TestCase):
         self.node._publish()
         self.assertTrue(all(status.level == bytes([health.STALE]) for status in self.outputs[-1].status))
 
+    def test_hardware_sto_diagnostic_does_not_claim_known_safe_inputs(self):
+        self.node.safety_source = 'hardwired_sto'
+        self.node.channels = {}
+        self.node._publish()
+        status, = self.outputs[-1].status
+        self.assertEqual(status.level, bytes([health.WARN]))
+        self.assertIn('PLC telemetry not used', status.message)
+        self.assertIn('unknown to ROS', status.message)
+
     def test_unknown_hardware_signals_are_warn_not_green(self):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=0)),
                               sto_state_known=False, safety_enable_state_known=False, flexisoft_status_raw=15)

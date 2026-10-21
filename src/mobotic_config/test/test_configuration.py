@@ -27,6 +27,7 @@ class ConfigurationTest(unittest.TestCase):
         baseline['manual']['remdevice_mapping'] = json.dumps(
             {'verified': False, 'node_id': 9, 'axes': {}, 'buttons': {}}, sort_keys=True)
         baseline['supervisor']['require_operator_interlock'] = True
+        baseline['supervisor']['safety_source'] = 'flexisoft'
         baseline['manual'].update(axis_speed_sign=1, axis_crab_sign=1, axis_steer_sign=1)
         for component, values in baseline.items():
             self.assertEqual(self.cfg.parameters(component), values, component)
@@ -38,6 +39,123 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(drive['can_node_id'], p['drives.can_node_ids'][index])
             self.assertEqual(drive['encoder_resolution'], p['drives.resolutions'][index])
             self.assertEqual(drive['gear_ratio'], p['drives.gear_ratios'][index])
+
+    def test_two_module_profile_propagates_without_omitted_drives(self):
+        path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
+        cfg = Configuration(path)
+        names = ['front_right', 'rear_left']
+        joints = [name + '_' + role for name in names for role in ('steering', 'traction')]
+        driver = cfg.parameters('driver')
+        self.assertEqual(driver['modules.names'], names)
+        self.assertEqual(driver['drives.names'], joints)
+        self.assertEqual(driver['drives.can_node_ids'], ['0x03', '0x04', '0x07', '0x08'])
+        self.assertEqual(cfg.parameters('kinematics')['module_names'], names)
+        self.assertEqual(cfg.parameters('kinematics')['wheels_x'], [0.845, -0.845])
+        self.assertEqual(cfg.parameters('kinematics')['wheels_y'], [-0.495, 0.495])
+        self.assertEqual(cfg.parameters('supervisor')['expected_module_names'], names)
+        self.assertEqual([joint for joint, _ in cfg.virtual_drives()], joints)
+        original = copy.deepcopy(self.cfg.platform)
+        original['modules'] = [m for m in original['modules'] if m['name'] in names]
+        original['can']['drives']['bitrate'] = 250000
+        original['safety'] = {'source': 'hardwired_sto'}
+        original['commissioning_pending'] = [item.replace(
+            'Confirm FlexiSoft/ELMO independent STO and enable bit mapping.',
+            'Verify Siemens hardwired STO chain and fresh per-module drive STO feedback.')
+            for item in original['commissioning_pending']]
+        self.assertEqual(cfg.platform, original)
+        for stack in ('hardware', 'virtual'):
+            actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                                 {'platform_config': str(path), 'stack_type': stack})
+            node = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_driver')
+            self.assertEqual(node.kwargs['parameters'][0]['drives.names'], joints)
+            simulated = [a.kwargs['parameters'][0]['can_node_id'] for a in actions
+                         if a.kind == 'Node' and a.kwargs['executable'] == 'virtual_mobotic_drive']
+            self.assertEqual(simulated, ['0x03', '0x04', '0x07', '0x08'])
+        robot = ET.fromstring(render_description(cfg))
+        moving = {j.get('name') for j in robot.findall('joint') if j.get('type') != 'fixed'}
+        self.assertEqual(moving, set(joints))
+        links = {link.get('name') for link in robot.findall('link')}
+        self.assertNotIn('front_left_wheel', links)
+        self.assertNotIn('rear_right_wheel', links)
+        self.assertIn('front_left_scan', links)
+        self.assertIn('rear_right_scan', links)
+
+    def test_hardwired_sto_source_has_no_gateway_settings_and_keeps_monitor(self):
+        path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
+        cfg = Configuration(path)
+        self.assertEqual(cfg.parameters('supervisor')['safety_source'], 'hardwired_sto')
+        self.assertEqual(cfg.diagnostic_parameters()['safety_source'], 'hardwired_sto')
+        self.assertEqual(cfg.parameters('safety')['expected_module_names'], ['front_right', 'rear_left'])
+        for source in ('mobotic_bringup/launch/moboterra.launch.py', 'mobotic_safety/launch/safety.launch.py'):
+            actions, _ = resolve(factory(PACKAGES / source)(), {'platform_config': str(path)})
+            executables = [a.kwargs['executable'] for a in actions if a.kind == 'Node']
+            self.assertNotIn('flexisoft_tcp_bridge', executables)
+            self.assertIn('safety_monitor', executables)
+            self.assertIn('scanner_safety_adapter', executables)
+        for safety in ({'source': 'none'}, {'source': 'hardwired_sto', 'port': 9100}):
+            profile = copy.deepcopy(cfg.platform)
+            profile['safety'] = safety
+            with self.assertRaises(ConfigurationError):
+                validate_platform(profile)
+
+    def test_four_modules_cannot_select_no_plc_telemetry_mode(self):
+        profile = copy.deepcopy(self.cfg.platform)
+        self.assertEqual(len(profile['modules']), 4)
+        profile['safety'] = {'source': 'hardwired_sto'}
+        with self.assertRaisesRegex(ConfigurationError, 'exactly two'):
+            validate_platform(profile)
+
+    def test_four_module_launch_retains_flexisoft(self):
+        self.assertEqual(self.cfg.parameters('supervisor')['safety_source'], 'flexisoft')
+        self.assertEqual(self.cfg.diagnostic_parameters()['safety_source'], 'flexisoft')
+        for source in ('mobotic_bringup/launch/moboterra.launch.py', 'mobotic_safety/launch/safety.launch.py'):
+            actions, _ = resolve(factory(PACKAGES / source)(), {'platform_config': str(self.cfg.path)})
+            executables = [a.kwargs['executable'] for a in actions if a.kind == 'Node']
+            self.assertIn('flexisoft_tcp_bridge', executables)
+
+    def test_module_subsets_reject_missing_duplicate_unknown_and_coincident_axes(self):
+        modules = self.cfg.platform['modules']
+        for selection in ([], modules[:1], [modules[1], modules[1]], modules[1:3][::-1]):
+            p = copy.deepcopy(self.cfg.platform)
+            p['modules'] = copy.deepcopy(selection)
+            with self.subTest(selection=[m['name'] for m in selection]), self.assertRaises(ConfigurationError):
+                validate_platform(p)
+        for mutation in ('unknown', 'coincident', 'frame_collision'):
+            p = copy.deepcopy(self.cfg.platform)
+            p['modules'] = p['modules'][1:3]
+            if mutation == 'unknown': p['modules'][0]['name'] = 'unknown'
+            if mutation == 'coincident': p['modules'][1]['cad_steering_xyz'] = p['modules'][0]['cad_steering_xyz'][:]
+            if mutation == 'frame_collision': p['frames']['base'] = 'front_right_wheel'
+            with self.subTest(mutation=mutation), self.assertRaises(ConfigurationError):
+                validate_platform(p)
+
+    def test_ordered_three_module_subset_is_supported(self):
+        p = copy.deepcopy(self.cfg.platform)
+        p['modules'] = p['modules'][:3]
+        validate_platform(p)
+
+    def test_each_two_module_combination_and_four_module_layout_use_the_same_launch(self):
+        from itertools import combinations
+        modules = self.cfg.platform['modules']
+        selections = list(combinations(modules, 2)) + [tuple(modules)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'platform.yaml'
+            for selection in selections:
+                profile = copy.deepcopy(self.cfg.platform)
+                profile['modules'] = list(selection)
+                path.write_text(yaml.safe_dump(profile))
+                cfg = Configuration(path)
+                expected = cfg.parameters('driver')['drives.names']
+                actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                                     {'platform_config': str(path), 'stack_type': 'virtual'})
+                self.assertEqual(len([a for a in actions if a.kind == 'Node'
+                                      and a.kwargs['executable'] == 'virtual_mobotic_drive']), len(expected))
+                robot = ET.fromstring(render_description(cfg))
+                self.assertEqual({j.get('name') for j in robot.findall('joint') if j.get('type') != 'fixed'},
+                                 set(expected))
+                standalone, _ = resolve(environment()['virtual_launch'](), {'platform_config': str(path)})
+                node = next(a for a in standalone if a.kind == 'Node')
+                self.assertEqual(node.kwargs['parameters'][0]['can_node_id'], selection[0]['steering']['can_node_id'])
 
     def test_synchronized_profile_rejects_missing_pdos_and_invalid_skew(self):
         for overrides in ({'traction_pdo_enabled': False}, {'telemetry_pdo_enabled': False},
@@ -195,7 +313,9 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_yaml_files_have_one_owner_and_no_physical_duplicates(self):
         files = list(PACKAGES.rglob('*.yaml'))
-        self.assertEqual(len(files), 10)
+        expected = {'platform.yaml', 'platform-front-right-rear-left.yaml'}
+        expected.update(Path(config_path(component)).name for component in self.cfg._parameters)
+        self.assertEqual({path.name for path in files}, expected)
         self.assertTrue(all(path.parent == PACKAGES / 'mobotic_config/config' for path in files))
         for component, derived in self.cfg._derived.items():
             self.assertFalse(set(ros_parameters(config_path(component))) & set(derived), component)

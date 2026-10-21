@@ -181,8 +181,11 @@ def validate_platform(platform):
         if can['battery']['listen_only'] is not True:
             raise ConfigurationError('battery transport must remain listen-only')
         modules = platform['modules']
-        if not isinstance(modules, list) or [m['name'] for m in modules] != list(MODULE_NAMES):
-            raise ConfigurationError(f'modules must be ordered as {MODULE_NAMES}')
+        if not isinstance(modules, list) or not 2 <= len(modules) <= len(MODULE_NAMES):
+            raise ConfigurationError('modules must contain two to four powered steering/traction modules')
+        names = [m['name'] for m in modules]
+        if names != [name for name in MODULE_NAMES if name in names]:
+            raise ConfigurationError(f'modules must be a unique subset ordered as {MODULE_NAMES}')
         ids, joints = [master], []
         for module in modules:
             _record(module, ('name', 'cad_steering_xyz', 'mounting_yaw', 'steering', 'traction'), 'module')
@@ -241,8 +244,8 @@ def validate_platform(platform):
                 raise ConfigurationError(str(error)) from error
             if operator['mapping']['node_id'] in ids:
                 raise ConfigurationError('REMdevice node ID conflicts with platform drives/master')
-        if len({tuple(m['cad_steering_xyz'][:2]) for m in modules}) != 4:
-            raise ConfigurationError('four wheel axes must have distinct XY coordinates')
+        if len({tuple(m['cad_steering_xyz'][:2]) for m in modules}) != len(modules):
+            raise ConfigurationError('wheel axes must have distinct XY coordinates')
         scanners = platform['scanners']
         _ip(scanners['host_ip'], 'scanner host')
         if [s['name'] for s in scanners['units']] != ['front_left', 'rear_right']:
@@ -270,26 +273,36 @@ def validate_platform(platform):
             corner_names.append(corner['name'])
         for module in modules:
             generated_links.update(module['name'] + suffix for suffix in ('_steering_mount', '_steering_link', '_wheel'))
-        if len(generated_links) != 14 or any(s['frame_id'] in generated_links for s in scanners['units']):
+        if len(generated_links) != 2 + 3 * len(modules) or any(s['frame_id'] in generated_links for s in scanners['units']):
             raise ConfigurationError('base and scanner frames conflict with generated links')
         if len(set(corner_names)) != len(corner_names) or any(n in generated_links or n in {s['frame_id'] for s in scanners['units']} or n == platform['frames']['odom'] for n in corner_names):
             raise ConfigurationError('corner frame names conflict')
         if platform['frames']['odom'] in generated_links or platform['frames']['odom'] in {s['frame_id'] for s in scanners['units']}:
             raise ConfigurationError('odom frame cannot belong to the robot description tree')
         safety = platform['safety']
+        safety_source = safety.get('source', 'flexisoft')
+        if safety_source not in ('flexisoft', 'hardwired_sto'):
+            raise ConfigurationError('safety.source must be flexisoft or hardwired_sto')
         mask_names = ('front_protective_ossd_mask', 'rear_protective_ossd_mask',
                       'emergency_stop_mask', 'safety_override_mask', 'rear_warning_mask',
                       'front_warning_mask', 'safety_enable_mask', 'sto_mask')
-        _record(safety, ('bind_address', 'port', 'telegram_size', 'status_byte_offset', *mask_names), 'safety')
-        _ip(safety['bind_address'], 'FlexiSoft bind address')
-        _number(safety['port'], 'TCP port', integer=True)
-        if not 1 <= _id(safety['port'], 65535, 'TCP port'):
-            raise ConfigurationError('TCP port must be nonzero')
-        size = _number(safety['telegram_size'], 'telegram size', integer=True, positive=True)
-        offset = _number(safety['status_byte_offset'], 'status offset', integer=True)
-        if not 0 <= offset < size:
-            raise ConfigurationError('status offset must be inside telegram')
-        masks = [_id(_number(safety[key], key, integer=True), 255, key) for key in mask_names]
+        flexisoft_keys = ('bind_address', 'port', 'telegram_size', 'status_byte_offset', *mask_names)
+        if safety_source == 'hardwired_sto':
+            if len(modules) != 2:
+                raise ConfigurationError('hardwired_sto requires exactly two wheel modules; four modules require FlexiSoft')
+            _record(safety, ('source',), 'safety')
+            masks = []
+        else:
+            _record(safety, ('source', *flexisoft_keys), 'safety', required=flexisoft_keys)
+            _ip(safety['bind_address'], 'FlexiSoft bind address')
+            _number(safety['port'], 'TCP port', integer=True)
+            if not 1 <= _id(safety['port'], 65535, 'TCP port'):
+                raise ConfigurationError('TCP port must be nonzero')
+            size = _number(safety['telegram_size'], 'telegram size', integer=True, positive=True)
+            offset = _number(safety['status_byte_offset'], 'status offset', integer=True)
+            if not 0 <= offset < size:
+                raise ConfigurationError('status offset must be inside telegram')
+            masks = [_id(_number(safety[key], key, integer=True), 255, key) for key in mask_names]
         occupied = 0
         for mask in masks:
             if occupied & mask:
@@ -388,6 +401,7 @@ class Configuration:
         supervisor = {'expected_module_names': names, 'expected_steering_joint_names': steering,
                       'expected_traction_joint_names': traction, 'direct_steering_encoder_resolutions': resolutions,
                       'direct_traction_control_mode': 'velocity', 'output_frame_id': frame, **vehicle_limits}
+        supervisor['safety_source'] = p['safety'].get('source', 'flexisoft')
         operator = p.get('operator', {'source': 'usb'})
         supervisor['require_operator_interlock'] = operator['source'] == 'remdevice'
         manual = {'frame_id': frame, **vehicle_limits}
@@ -404,7 +418,9 @@ class Configuration:
             battery['batteries.' + key] = [str(b[field]) for b in participants]
         return {'driver': driver, 'kinematics': kinematics, 'supervisor': supervisor,
                 'manual': manual, 'battery': battery,
-                'safety': copy.deepcopy(p['safety']),
+                'safety': ({'source': 'hardwired_sto', 'expected_module_names': names}
+                           if p['safety'].get('source') == 'hardwired_sto' else
+                           {key: copy.deepcopy(value) for key, value in p['safety'].items() if key != 'source'}),
                 'odometry': {'base_frame_id': frame, 'odom_frame_id': p['frames']['odom']}}
 
     def parameters(self, component):
@@ -551,6 +567,7 @@ class Configuration:
     def diagnostic_parameters(self):
         supervisor, driver = self.parameters('supervisor'), self.parameters('driver')
         return {**self.parameters('diagnostics'), 'minimum_battery_percentage': supervisor['minimum_battery_percentage'],
+                'safety_source': supervisor['safety_source'],
                 'manual_timeout': supervisor['manual_timeout'], 'battery_timeout': supervisor['battery_timeout'],
                 'safety_timeout': supervisor['safety_timeout'], 'mode_timeout': driver['supervisor_timeout']}
 
