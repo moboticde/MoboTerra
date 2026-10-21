@@ -18,7 +18,8 @@ POLICY_TYPES = {
         "telemetry_pdo_enabled": "boolean",
         "telemetry_pdo_sync_divider": "integer",
         "traction_pdo_period": "number",
-        "sample_skew_budget": "number"
+        "sample_skew_budget": "number",
+        "physical_sample_skew_budget": "number"
     },
     "kinematics": {
         "cmd_vel_timeout": "number",

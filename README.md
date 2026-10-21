@@ -31,11 +31,12 @@ passive capture. See the [PAIL capture guide](docs/remdevice_commissioning.md).
 - The driver publishes `joint_states` and `wheel_modules/status`. Missing required CAN feedback
   blocks motion on all units; a new motion command is required after recovery.
 
-Physical enable and authoritative joint publication remain inhibited pending verified Elmo position scale/reference and power-cycle continuity. Only the virtual launch enables synthetic position; never use that flag on hardware. Position is read exclusively through Elmo; no encoder changes are performed. See [implementation status](docs/implementation_plan.md).
+Physical startup reads existing controller state and position, preserves the installed controller configuration, and enables drives when readiness checks pass. B2 requests fault reset followed by re-enable after verified clearance. No separate encoder-reference recovery is required at startup. See [drive startup and B2 behavior](docs/drive_startup.md). Physical operation still requires hardware validation.
 
 All topic names above are relative to the robot namespace, normally `/moboterra`.
-The supervisor consumes both `safety/state` and `safety/io_state`, plus
-`battery/system_state`. One public `battery/state` supplies standard battery telemetry.
+FlexiSoft profiles require both `safety/state` and `safety/io_state`. The explicit
+two-module hardware-STO profile requires no Siemens network telemetry. Both
+variants require `battery/system_state`. One public `battery/state` supplies standard battery telemetry.
 
 ## Packages
 
@@ -135,8 +136,8 @@ Use `publish_odom_tf:=false` if an external estimator owns that transform, or
 `start_odometry:=false` to omit the node. Use `start_description:=false` only when another description owner is already running. No laser/IMU fusion or autonomous navigation is added.
 
 The four-wheel profile restores the 10 ms heartbeat and 116053 increments/s
-traction ceiling. Driver acceleration/deceleration use the actual 0.325 m wheel
-radius (32093 increments/s^2 for nominal 1 m/s^2); the supervisor command ramp
+traction ceiling. The virtual driver acceleration/deceleration use the actual 0.325 m wheel
+radius (32093 increments/s^2 for nominal 1 m/s^2); physical drive ramps are preserved. The supervisor command ramp
 remains 0.5 m/s^2. See the [bringup configuration](src/mobotic_bringup/README.md).
 
 Before launching on a secured platform, verify the configuration against the

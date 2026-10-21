@@ -548,6 +548,8 @@ class Configuration:
             raise ConfigurationError('the synchronized feedback profile requires both motion PDO paths')
         if not 0 < driver['sample_skew_budget'] < driver['traction_pdo_period']:
             raise ConfigurationError('sample_skew_budget must be positive and less than the SYNC period')
+        if not 0 < driver['physical_sample_skew_budget'] <= driver['motion_feedback_timeout']:
+            raise ConfigurationError('physical_sample_skew_budget must fit inside the motion feedback timeout')
 
     def virtual_drives(self):
         result = []

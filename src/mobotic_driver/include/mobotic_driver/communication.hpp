@@ -338,6 +338,7 @@ public:
   //   s_velocity -> MiControl steering velocity mode
   bool isTractionController() const { return is_traction_controller_; }
   bool isSteeringController() const { return !isTractionController(); }
+  void preserveControllerConfiguration(bool preserve) { preserve_configuration_ = preserve; }
   bool supportsTractionVelocityPdo() const { return isTractionController() && target_mode_ == VELOCITY; }
   void setTractionController(const bool is_traction_controller) { is_traction_controller_ = is_traction_controller; }
 
@@ -594,6 +595,24 @@ public:
     return frames;
   }
 
+  std::vector<can_msgs::msg::Frame> enableFromObservedState() const
+  {
+    if (!initialized() || hasError() || getErrorCode() != 0) { return {}; }
+    if (!isTractionController()) { return enabled() ? std::vector<can_msgs::msg::Frame>{} : changeDeviceStateRequests(ENABLE); }
+    if (!hasStatusword()) { return {}; }
+    // Elmo DS402 manual, sections 6.4-6.6: advance one observed transition
+    // at a time. A fault requires the separate B2 reset transaction.
+    const auto state = statusword_ & 0x006F;
+    short controlword;
+    if ((statusword_ & 0x004F) == 0x0040) { controlword = 0x0006; }
+    else if (state == 0x0021) { controlword = 0x0007; }
+    else if (state == 0x0023 || state == 0x0007) { controlword = 0x000F; }
+    else { return {}; }
+    auto frame = createAndFillMoboticHeader(requestNodeID_, WRITE_TO_DEVICE_2B, EC_CONTROLWORD, 0);
+    shortToFrame(frame, 4, controlword);
+    return {frame};
+  }
+
   can_msgs::msg::Frame readDeviceStateRequest() const
   {
     return createAndFillMoboticHeader(requestNodeID_, READ_FROM_DEVICE,
@@ -650,8 +669,13 @@ public:
       rated_current_ma_ = 0;
       initialized_ = enabled_ = has_statusword_ = false;
       current_mode_ = UNKNOWN;
+      resetAllFeedbacks();
+      feedback_freshness_ = FeedbackFreshness{};
       return frames;
     }
+    // Physical PDO layouts belong to the installed controller project. Their
+    // payload must not be interpreted using the simulator's fixed mappings.
+    if (preserve_configuration_ && frame.id != replyNodeID_) { return frames; }
     if (isTractionController() && frame.id == telemetryTpdo3CobId() && frame.dlc == 4)
     {
       if (accept(FeedbackFreshness::POSITION)) { feedbacks_[POSITION_FEEDBACK] = intFromFrame(frame, 0); }
@@ -711,7 +735,7 @@ public:
     {
       if (!accept(FeedbackFreshness::ERROR_REGISTER)) { return frames; }
       error_ = isTractionController() ? frame.data[4] : intFromFrame(frame, 4);
-      if (!initialized_ && !error_)
+      if (!initialized_ && !error_ && !preserve_configuration_)
       {
         frames.push_back(setDeviceModeRequest(target_mode_));
         frames.push_back(readDeviceModeRequest());
@@ -886,6 +910,7 @@ private:
   DeviceMode target_mode_;
   bool enabled_{false};
   bool initialized_{false};
+  bool preserve_configuration_{false};
   bool is_traction_controller_{false};
   bool has_statusword_{false};
   unsigned short statusword_{0};

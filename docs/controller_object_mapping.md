@@ -24,7 +24,7 @@ The supplied CANedsGoldV005_0.eds declares 6064 as signed 32-bit, read-only and 
 
 The driver therefore computes `current_A = raw_6078 * rated_current_6075_mA / 1000000`. Missing, zero or stale rating yields unknown current. It does not guess that 6078 is milliamps.
 
-Position is requested through Elmo at startup and then mapped into TPDO3. The existing counts/revolution and gearing conversion is a commissioning assumption for the virtual model, not proof of the live 6064 user-unit scale. The EDS describes supported objects; it is not a dump of the installed drive's settings or its behavior after power loss.
+Physical position is read through Elmo 6064 at startup and cyclically over SDO; installed PDO mappings are preserved. The virtual fixture uses TPDO3. The configured counts/revolution and gearing conversion must match the live 6064 user-unit scale. The EDS describes supported objects; it is not a dump of the installed drive's settings or its behavior after power loss. See [drive startup](drive_startup.md).
 
 The [iC-Haus MHM specification](https://www.ichaus.de/product/ic-mhm/) describes an absolute angle sensor with an external multiturn input. This does not establish the installed assembly's unpowered tracking capability. Verification must remain through Elmo as requested; no direct encoder access is required.
 
@@ -34,6 +34,6 @@ The [iC-Haus MHM specification](https://www.ichaus.de/product/ic-mhm/) describes
 2. Measure a known wheel rotation and compare 6064/606C changes to configured sign, resolution and 16:1 gearing.
 3. Repeat across ROS/container/PC restart, drive power loss without movement, and drive power loss with measured unpowered wheel movement.
 4. Confirm that Elmo's restored value and reference recover the expected wheel angle. Exercise signed-counter rollover and ambiguous jumps separately.
-5. Only after these pass, integrate the durable calibration/identity store and enable the hardware position profile. Never use the synthetic virtual flag to bypass this gate.
+5. Treat any verified cross-power-cycle retained-reference feature as separate work. Current startup uses the controller's present position and does not require a durable calibration store; it never zeroes the controller reference.
 
 Raw position readback is available in driver diagnostics as `position_0x6064_raw`. Unknown brake/STO mappings remain unknown. See [the implementation plan](implementation_plan.md) for the remaining release gates.

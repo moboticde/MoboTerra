@@ -5,6 +5,7 @@
 #include <mobotic_driver/motion_source_gate.hpp>
 #include <mobotic_driver/pdo_configuration.hpp>
 #include <mobotic_driver/traction_position.hpp>
+#include <mobotic_driver/sdo_channel.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <mobotic_interfaces/msg/wheel_module_operation_command.hpp>
 #include <mobotic_interfaces/msg/wheel_module_command_array.hpp>
@@ -61,6 +62,8 @@ private:
   bool allDriveFeedbackFresh(FeedbackFreshness::Clock::time_point now) const;
   void enforceFeedbackFreshness();
   void publishDiagnostics();
+  void publishCanFrame(const can_msgs::msg::Frame& frame);
+  void pumpSdo(unsigned node);
 
   std::shared_ptr<rclcpp::TimerBase> feedback_timer_, watchdog_timer_setpoints_, timer_can_heartbeat_,
       traction_pdo_timer_;
@@ -107,6 +110,9 @@ private:
   int64_t sync_stamp_ns_{0}, published_cycle_ns_{0};
   int64_t last_final_stamp_ns_{0};
   bool virtual_position_source_{false};
+  bool controller_control_started_{false};
+  std::map<unsigned, SdoChannel> sdo_channels_;
+  double physical_sample_skew_budget_{0.05};
   double sample_skew_budget_{0.005};
   double max_steering_velocity_{4.32}, max_traction_velocity_{11.12};
   uint64_t reset_id_{0};

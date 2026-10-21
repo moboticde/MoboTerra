@@ -28,6 +28,7 @@ class ConfigurationTest(unittest.TestCase):
             {'verified': False, 'node_id': 9, 'axes': {}, 'buttons': {}}, sort_keys=True)
         baseline['supervisor']['require_operator_interlock'] = True
         baseline['supervisor']['safety_source'] = 'flexisoft'
+        baseline['driver']['physical_sample_skew_budget'] = 0.05
         baseline['manual'].update(axis_speed_sign=1, axis_crab_sign=1, axis_steer_sign=1)
         for component, values in baseline.items():
             self.assertEqual(self.cfg.parameters(component), values, component)

@@ -105,6 +105,7 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
   this->declare_parameter("traction_pdo_enabled", true);
   this->declare_parameter("virtual_position_source", false);
   this->declare_parameter("sample_skew_budget", 0.005);
+  this->declare_parameter("physical_sample_skew_budget", 0.05);
   this->declare_parameter("max_steering_velocity", 4.32);
   this->declare_parameter("max_traction_velocity", 11.12);
   this->declare_parameter("telemetry_pdo_enabled", true);
@@ -160,6 +161,7 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
   params &= this->get_parameter("traction_pdo_enabled", traction_pdo_enabled_);
   this->get_parameter("virtual_position_source", virtual_position_source_);
   this->get_parameter("sample_skew_budget", sample_skew_budget_);
+  this->get_parameter("physical_sample_skew_budget", physical_sample_skew_budget_);
   this->get_parameter("max_steering_velocity", max_steering_velocity_);
   this->get_parameter("max_traction_velocity", max_traction_velocity_);
   params &= this->get_parameter("telemetry_pdo_enabled", telemetry_pdo_enabled_);
@@ -168,8 +170,16 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
   if (!std::isfinite(sample_skew_budget_) || sample_skew_budget_ <= 0 || sample_skew_budget_ >= traction_pdo_period ||
       !std::isfinite(max_steering_velocity_) || max_steering_velocity_ <= 0 ||
       !std::isfinite(max_traction_velocity_) || max_traction_velocity_ <= 0 ||
-      !traction_pdo_enabled_ || !telemetry_pdo_enabled_)
+      (virtual_position_source_ && (!traction_pdo_enabled_ || !telemetry_pdo_enabled_)) ||
+      !std::isfinite(physical_sample_skew_budget_) || physical_sample_skew_budget_ <= 0 ||
+      physical_sample_skew_budget_ > motion_feedback_timeout_)
   { throw std::invalid_argument("invalid motion limits or synchronized PDO profile"); }
+  if (!virtual_position_source_)
+  {
+    // Physical controllers retain their installed mode, PDOs, ramps, encoder
+    // reference and saved parameters. Read existing state through SDO instead.
+    traction_pdo_enabled_ = telemetry_pdo_enabled_ = false;
+  }
   params &= this->get_parameter("traction_max_profile_velocity", traction_max_profile_velocity_);
   params &= this->get_parameter("traction_profile_accel", traction_profile_accel_);
   params &= this->get_parameter("traction_profile_decel", traction_profile_decel_);
@@ -306,6 +316,7 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
     drives_.emplace(names.at(i), MoboticDriveCanCommunication(names.at(i), can_node_id, mode,
                                                               static_cast<int>(resolutions.at(i)), gear_ratios.at(i),
                                                               limits));
+    drives_.at(names.at(i)).preserveControllerConfiguration(!virtual_position_source_);
   }
 
   configureWheelModules(module_names, module_steering_drives, module_traction_drives);
@@ -529,9 +540,11 @@ void MoboticDriver::publishWheelModuleStatus(const rclcpp::Time& stamp)
     status.name = module_name;
     status.initialized = steering.initialized() && traction.initialized() &&
         configuration_[binding.steering_drive].ready() && configuration_[binding.traction_drive].ready();
-    status.position_valid = virtual_position_source_ && position_valid_[binding.traction_drive];
-    status.position_reason = status.position_valid ? "virtual counter source (not physical commissioning)" :
-        "retained physical encoder reference not commissioned; motion inhibited";
+    status.position_valid = position_valid_[binding.traction_drive] && steering.hasFeedback(POSITION_FEEDBACK) &&
+        steering.feedbackFreshness().fresh(FeedbackFreshness::POSITION, motion_feedback_timeout_, steady_now) &&
+        traction.feedbackFreshness().fresh(FeedbackFreshness::POSITION, motion_feedback_timeout_, steady_now);
+    status.position_reason = status.position_valid ? "current controller position feedback" :
+        "controller position feedback missing, stale or discontinuous";
     status.reset_id = reset_id_;
     status.reset_acknowledged = reset_id_ != 0;
     for (const auto& name : {binding.steering_drive, binding.traction_drive})
@@ -607,7 +620,7 @@ void MoboticDriver::publishWheelModuleStatus(const rclcpp::Time& stamp)
     for (const auto& [name, drive] : drives_)
     {
       (void)name;
-      pub_can_frames_->publish(stampFrame(drive.clearErrorRequest(NO_OPERATION), "can", this->now()));
+      publishCanFrame(stampFrame(drive.clearErrorRequest(NO_OPERATION), "can", this->now()));
     }
     reset_release_sent_ = true;
   }
@@ -648,6 +661,7 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
 
     const auto node_id = drive.canNodeID() - 0x600;
     const bool is_sdo = frame.id == 0x580 + node_id && frame.dlc == 8;
+    if (!virtual_position_source_ && is_sdo && !sdo_channels_[node_id].receive(frame)) { continue; }
     const bool is_pdo = (frame.id == 0x180 + node_id || frame.id == 0x280 + node_id ||
                          frame.id == 0x380 + node_id || frame.id == 0x480 + node_id) && frame.dlc > 0;
     if (is_sdo || is_pdo || (frame.id == 0x700 + node_id && frame.dlc == 1))
@@ -677,6 +691,9 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
       configuration_[name].invalidate();
       boot_reconfigure_pending_ = true;
       position_valid_[name] = false;
+      traction_positions_.erase(name);
+      motion_sample_stamp_ns_.erase(name);
+      if (!virtual_position_source_) { sdo_channels_[node_id].clear(); }
       accepted_traction_targets_.clear();
       sendStopToAllDrives(); disableAllDrives();
     }
@@ -694,11 +711,13 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
         position_valid_[name] = traction_positions_[name].update(static_cast<int32_t>(drive.feedback(POSITION_FEEDBACK)),
             static_cast<double>(traction_max_profile_velocity_) * motion_feedback_timeout_ + 2.0);
       }
+      else { position_valid_[name] = true; }
     }
     for (const auto& frame_to_send : frames_to_send)
     {
-      pub_can_frames_->publish(stampFrame(frame_to_send, "can", this->now()));
+      publishCanFrame(stampFrame(frame_to_send, "can", this->now()));
     }
+    if (!virtual_position_source_ && is_sdo) { pumpSdo(node_id); }
 
     if (drive.hasFeedback(CURRENT_FEEDBACK))
     {
@@ -746,13 +765,22 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
     { coherent = coherent && stamp >= sync_stamp_ns_; newest_motion_stamp_ns = std::max(newest_motion_stamp_ns, stamp); }
   }
   coherent = coherent && static_cast<double>(newest_motion_stamp_ns - oldest_motion_stamp_ns) * 1e-9 <= sample_skew_budget_;
-  if (virtual_position_source_ && all_feedbacks_available && coherent && feedback_msg.name.size() == drives_.size())
+  if (!virtual_position_source_)
+  {
+    // SDO samples have individual acquisition times rather than a common
+    // SYNC. Publish only a complete, bounded-skew set, stamped at its oldest
+    // acquisition; repeated array publications never refresh old samples.
+    coherent = oldest_motion_stamp_ns > published_cycle_ns_ &&
+        static_cast<double>(newest_motion_stamp_ns - oldest_motion_stamp_ns) * 1e-9 <= physical_sample_skew_budget_ &&
+        std::all_of(position_valid_.begin(), position_valid_.end(), [](const auto& item) { return item.second; });
+  }
+  if (all_feedbacks_available && coherent && feedback_msg.name.size() == drives_.size())
   {
     const rclcpp::Time feedback_stamp(oldest_motion_stamp_ns, ros_now.get_clock_type());
     feedback_msg.header.stamp = feedback_stamp;
     feedback_msg.header.frame_id = "can";
     feedback_msg.effort.clear();
-    published_cycle_ns_ = sync_stamp_ns_;
+    published_cycle_ns_ = virtual_position_source_ ? sync_stamp_ns_ : oldest_motion_stamp_ns;
     pub_joint_states_->publish(feedback_msg);
     publishWheelModuleStatus(ros_now);
 
@@ -855,6 +883,14 @@ void MoboticDriver::feedbackTimerCallback()
 
   for (auto& [name, drive] : drives_)
   {
+    if (!virtual_position_source_)
+    {
+      // Read disabled/faulted controllers too: B2 needs measured standstill
+      // and fresh fault state before it can request reset and re-enable.
+      for (const auto parameter : {POSITION_FEEDBACK, VELOCITY_FEEDBACK, CURRENT_FEEDBACK})
+      { publishCanFrame(stampFrame(drive.readFeedbackRequest(parameter), "can", now)); }
+      pumpSdo(drive.rawCanNodeID());
+    }
     if (!configuration_[name].ready())
     {
       const auto frame = configuration_[name].next(PdoConfiguration::Clock::now(), now.nanoseconds());
@@ -864,16 +900,16 @@ void MoboticDriver::feedbackTimerCallback()
     // Status/fault polling must continue in every state, including PDO operation.
     if (shouldPoll(last_status_poll_, name, std::min(0.1, status_feedback_timeout_ / 3.0)))
     {
-      pub_can_frames_->publish(stampFrame(drive.readDeviceStateRequest(), "can", now));
-      pub_can_frames_->publish(stampFrame(drive.readDeviceModeRequest(), "can", now));
+      publishCanFrame(stampFrame(drive.readDeviceStateRequest(), "can", now));
+      publishCanFrame(stampFrame(drive.readDeviceModeRequest(), "can", now));
     }
     if (shouldPoll(last_error_poll_, name, diagnostic_sdo_period_))
     {
-      pub_can_frames_->publish(stampFrame(drive.readErrorRegisterRequest(), "can", now));
+      publishCanFrame(stampFrame(drive.readErrorRegisterRequest(), "can", now));
       if (drive.isTractionController())
       {
-        pub_can_frames_->publish(stampFrame(drive.readErrorCodeRequest(), "can", now));
-        pub_can_frames_->publish(stampFrame(createAndFillMoboticHeader(
+        publishCanFrame(stampFrame(drive.readErrorCodeRequest(), "can", now));
+        publishCanFrame(stampFrame(createAndFillMoboticHeader(
             drive.canNodeID(), READ_FROM_DEVICE, EC_TRACTION_RATED_CURRENT, 0), "can", now));
       }
     }
@@ -882,7 +918,7 @@ void MoboticDriver::feedbackTimerCallback()
     {
       for (const unsigned index : {0x2086u, 0x60FDu})
       {
-        pub_can_frames_->publish(stampFrame(
+        publishCanFrame(stampFrame(
             createAndFillMoboticHeader(drive.canNodeID(), READ_FROM_DEVICE, index, 0), "can", now));
       }
     }
@@ -897,10 +933,10 @@ void MoboticDriver::feedbackTimerCallback()
                                                                              << " on drive " << name << ".");
           // Never clear an error as an initialization side effect.
         }
-        pub_can_frames_->publish(stampFrame(drive.readErrorRegisterRequest(), "can", this->now()));
+        publishCanFrame(stampFrame(drive.readErrorRegisterRequest(), "can", this->now()));
         if (drive.isTractionController())
         {
-          pub_can_frames_->publish(stampFrame(drive.readErrorCodeRequest(), "can", this->now()));
+          publishCanFrame(stampFrame(drive.readErrorCodeRequest(), "can", this->now()));
         }
       }
       continue;
@@ -908,6 +944,7 @@ void MoboticDriver::feedbackTimerCallback()
 
     if (enable_all_drives_requested_ && !drive.enabled())
     {
+      if (!virtual_position_source_ && !driveFeedbackFresh(drive, FeedbackFreshness::Clock::now())) { continue; }
       if (shouldRetry(last_enable_attempt_, name))
       {
         if (drive.hasStatusword())
@@ -924,7 +961,7 @@ void MoboticDriver::feedbackTimerCallback()
         {
           // Enabling is not an error acknowledgement.
         }
-        if (drive.currentMode() != drive.targetMode())
+        if (virtual_position_source_ && drive.currentMode() != drive.targetMode())
         {
           pub_can_frames_->publish(stampFrame(drive.setDeviceModeRequest(drive.targetMode()), "can", this->now()));
         }
@@ -932,7 +969,7 @@ void MoboticDriver::feedbackTimerCallback()
         const auto idle_input = drive.isSteeringController() ? STEERING_PROFILE_VELOCITY_INPUT : modeToInputId(drive.targetMode());
         if (!(traction_pdo_enabled_ && drive.supportsTractionVelocityPdo()))
         {
-          pub_can_frames_->publish(stampFrame(drive.setTargetRequest(idle_input, 0), "can", this->now()));
+          publishCanFrame(stampFrame(drive.setTargetRequest(idle_input, 0), "can", this->now()));
         }
         if (traction_pdo_enabled_ && drive.supportsTractionVelocityPdo())
         {
@@ -946,12 +983,12 @@ void MoboticDriver::feedbackTimerCallback()
         }
         else
         {
-          for (const auto& frame : drive.changeDeviceStateRequests(ENABLE))
+          for (const auto& frame : (virtual_position_source_ ? drive.changeDeviceStateRequests(ENABLE) : drive.enableFromObservedState()))
           {
-            pub_can_frames_->publish(stampFrame(frame, "can", this->now()));
+            publishCanFrame(stampFrame(frame, "can", this->now()));
           }
         }
-        if (drive.targetMode() == VELOCITY)
+        if (virtual_position_source_ && drive.targetMode() == VELOCITY)
         {
           pub_can_frames_->publish(stampFrame(
               drive.setTargetRequest(EC_TRACTION_MAX_PROFILE_VELOCITY, traction_max_profile_velocity_), "can",
@@ -965,13 +1002,13 @@ void MoboticDriver::feedbackTimerCallback()
             pub_can_frames_->publish(stampFrame(drive.setTargetRequest(VELOCITY_INPUT, 0), "can", this->now()));
           }
         }
-        pub_can_frames_->publish(stampFrame(drive.readErrorRegisterRequest(), "can", this->now()));
+        publishCanFrame(stampFrame(drive.readErrorRegisterRequest(), "can", this->now()));
         if (drive.isTractionController())
         {
-          pub_can_frames_->publish(stampFrame(drive.readErrorCodeRequest(), "can", this->now()));
+          publishCanFrame(stampFrame(drive.readErrorCodeRequest(), "can", this->now()));
         }
-        pub_can_frames_->publish(stampFrame(drive.readDeviceModeRequest(), "can", this->now()));
-        pub_can_frames_->publish(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
+        publishCanFrame(stampFrame(drive.readDeviceModeRequest(), "can", this->now()));
+        publishCanFrame(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
       }
       // Disabled actuators still supply passive position/velocity telemetry.
     }
@@ -987,7 +1024,7 @@ void MoboticDriver::feedbackTimerCallback()
     {
       RCLCPP_WARN_STREAM_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                                   "Drive " << drive.id() << " is not enabled.");
-      pub_can_frames_->publish(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
+      publishCanFrame(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
       continue;
     }
 
@@ -1003,13 +1040,13 @@ void MoboticDriver::feedbackTimerCallback()
 
     if (!(telemetry_pdo_enabled_ && drive.isSteeringController()))
     {
-      pub_can_frames_->publish(stampFrame(drive.readFeedbackRequest(CURRENT_FEEDBACK), "can", this->now()));
+      publishCanFrame(stampFrame(drive.readFeedbackRequest(CURRENT_FEEDBACK), "can", this->now()));
     }
-    pub_can_frames_->publish(stampFrame(drive.readFeedbackRequest(VELOCITY_FEEDBACK), "can", this->now()));
+    publishCanFrame(stampFrame(drive.readFeedbackRequest(VELOCITY_FEEDBACK), "can", this->now()));
 
     if (!drive.isTractionController())
     {
-      pub_can_frames_->publish(stampFrame(drive.readFeedbackRequest(POSITION_FEEDBACK), "can", this->now()));
+      publishCanFrame(stampFrame(drive.readFeedbackRequest(POSITION_FEEDBACK), "can", this->now()));
     }
   }
 
@@ -1190,6 +1227,7 @@ void MoboticDriver::wheelModuleCommandCallback(const mobotic_interfaces::msg::Wh
                  && std::abs(drive.velocityFeedbackRadPerSec()) <= 0.1;
         })) { sendStopToAllDrives(); disableAllDrives(); return; }
     reset_id_ = msg.reset_id;
+    controller_control_started_ = true;
     reset_requested_ns_ = this->now().nanoseconds();
     reset_release_sent_ = false;
     for (const auto& [name, drive] : drives_)
@@ -1201,7 +1239,7 @@ void MoboticDriver::wheelModuleCommandCallback(const mobotic_interfaces::msg::Wh
     clearErrorsOnAllDrives();
   }
 
-  if (msg.enable && virtual_position_source_ && std::all_of(configuration_.begin(), configuration_.end(), [](const auto& item) { return item.second.ready(); }))
+  if (msg.enable && std::all_of(configuration_.begin(), configuration_.end(), [](const auto& item) { return item.second.ready(); }))
   {
     // The supervisor republishes the desired state every control cycle.
     // Preserve active motion targets and the existing enable retry sequence.
@@ -1226,7 +1264,7 @@ void MoboticDriver::clearErrorsOnAllDrives()
   for (auto& [name, drive] : drives_)
   {
     (void)name;
-    pub_can_frames_->publish(stampFrame(drive.clearErrorRequest(CLEAR), "can", this->now()));
+    publishCanFrame(stampFrame(drive.clearErrorRequest(CLEAR), "can", this->now()));
   }
 }
 
@@ -1276,11 +1314,11 @@ bool MoboticDriver::applyJointSetpoints(const sensor_msgs::msg::JointState& msg)
         continue;
       }
 
-      pub_can_frames_->publish(stampFrame(drive.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT,
+      publishCanFrame(stampFrame(drive.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT,
                                                                  drive.getTarget(STEERING_PROFILE_VELOCITY_INPUT,
                                                                                  msg.velocity.at(idx))),
                                           "can", this->now()));
-      pub_can_frames_->publish(stampFrame(drive.setTargetRequest(ABSOLUTE_POSITION_INPUT,
+      publishCanFrame(stampFrame(drive.setTargetRequest(ABSOLUTE_POSITION_INPUT,
                                                                  drive.getTarget(ABSOLUTE_POSITION_INPUT,
                                                                                  msg.position.at(idx))),
                                           "can", this->now()));
@@ -1297,7 +1335,7 @@ bool MoboticDriver::applyJointSetpoints(const sensor_msgs::msg::JointState& msg)
         continue;
       }
 
-      pub_can_frames_->publish(stampFrame(drive.setTargetRequest(CURRENT_INPUT,
+      publishCanFrame(stampFrame(drive.setTargetRequest(CURRENT_INPUT,
                                                                  drive.getTarget(CURRENT_INPUT, msg.effort.at(idx))),
                                           "can", this->now()));
       command_sent = true;
@@ -1319,7 +1357,7 @@ bool MoboticDriver::applyJointSetpoints(const sensor_msgs::msg::JointState& msg)
     }
     else
     {
-      pub_can_frames_->publish(stampFrame(drive.setTargetRequest(input_id, target), "can", this->now()));
+      publishCanFrame(stampFrame(drive.setTargetRequest(input_id, target), "can", this->now()));
     }
     command_sent = true;
   }
@@ -1335,6 +1373,8 @@ bool MoboticDriver::applyJointSetpoints(const sensor_msgs::msg::JointState& msg)
 
 void MoboticDriver::sendStopToAllDrives()
 {
+  if (!virtual_position_source_ && !controller_control_started_) { return; }
+  for (auto& [node, channel] : sdo_channels_) { (void)node; channel.cancelMotionTargets(); }
   for (auto& [name, drive] : drives_)
   {
     (void)name;
@@ -1353,7 +1393,7 @@ void MoboticDriver::sendStopToAllDrives()
     }
     else
     {
-      pub_can_frames_->publish(stampFrame(drive.setTargetRequest(stop_input_id, 0), "can", this->now()));
+      publishCanFrame(stampFrame(drive.setTargetRequest(stop_input_id, 0), "can", this->now()));
     }
   }
 
@@ -1365,6 +1405,8 @@ void MoboticDriver::sendStopToAllDrives()
 
 void MoboticDriver::disableAllDrives()
 {
+  if (!virtual_position_source_ && !controller_control_started_) { return; }
+  for (auto& [node, channel] : sdo_channels_) { (void)node; channel.cancelWrites(true); }
   RCLCPP_INFO(this->get_logger(), "[driver] Disabling all drives.");
   enable_all_drives_requested_ = false;
   last_enable_attempt_.clear();
@@ -1382,17 +1424,17 @@ void MoboticDriver::disableAllDrives()
       }
       else
       {
-        pub_can_frames_->publish(stampFrame(drive.setTargetRequest(stop_input_id, 0), "can", this->now()));
+        publishCanFrame(stampFrame(drive.setTargetRequest(stop_input_id, 0), "can", this->now()));
       }
     }
     if (!(traction_pdo_enabled_ && drive.supportsTractionVelocityPdo()))
     {
       for (const auto& frame : drive.changeDeviceStateRequests(DISABLE))
       {
-        pub_can_frames_->publish(stampFrame(frame, "can", this->now()));
+        publishCanFrame(stampFrame(frame, "can", this->now()));
       }
     }
-    pub_can_frames_->publish(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
+    publishCanFrame(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
   }
 
   if (traction_pdo_enabled_)
@@ -1403,8 +1445,13 @@ void MoboticDriver::disableAllDrives()
 
 void MoboticDriver::enableAllDrives()
 {
-  if (!management_lease_.permitsEnable(supervisor_timeout_) || !virtual_position_source_ ||
+  if (!management_lease_.permitsEnable(supervisor_timeout_) ||
       !std::all_of(configuration_.begin(), configuration_.end(), [](const auto& item) { return item.second.ready(); })) { return; }
+  if (!allDriveFeedbackFresh(FeedbackFreshness::Clock::now()) ||
+      std::any_of(drives_.begin(), drives_.end(), [](const auto& item) {
+        return !item.second.initialized() || item.second.hasError() || item.second.getErrorCode() != 0;
+      }) || std::any_of(position_valid_.begin(), position_valid_.end(), [](const auto& item) { return !item.second; })) { return; }
+  controller_control_started_ = true;
   motion_accept_after_ns_ = this->now().nanoseconds();
   motion_command_received_ = false;
   RCLCPP_INFO(this->get_logger(), "[driver] Enabling all drives.");
@@ -1417,11 +1464,12 @@ void MoboticDriver::enableAllDrives()
   {
     RCLCPP_INFO_STREAM(this->get_logger(), "[driver] Sending enable sequence to drive " << name << ".");
     if (drive.hasError() || drive.getErrorCode() != 0) { continue; }
-    pub_can_frames_->publish(stampFrame(drive.setDeviceModeRequest(drive.targetMode()), "can", this->now()));
+    if (virtual_position_source_)
+    { pub_can_frames_->publish(stampFrame(drive.setDeviceModeRequest(drive.targetMode()), "can", this->now())); }
     const auto idle_input = drive.isSteeringController() ? STEERING_PROFILE_VELOCITY_INPUT : modeToInputId(drive.targetMode());
     if (!(traction_pdo_enabled_ && drive.supportsTractionVelocityPdo()))
     {
-      pub_can_frames_->publish(stampFrame(drive.setTargetRequest(idle_input, 0), "can", this->now()));
+      publishCanFrame(stampFrame(drive.setTargetRequest(idle_input, 0), "can", this->now()));
     }
     if (traction_pdo_enabled_ && drive.supportsTractionVelocityPdo())
     {
@@ -1435,12 +1483,12 @@ void MoboticDriver::enableAllDrives()
     }
     else
     {
-      for (const auto& frame : drive.changeDeviceStateRequests(ENABLE))
+      for (const auto& frame : (virtual_position_source_ ? drive.changeDeviceStateRequests(ENABLE) : drive.enableFromObservedState()))
       {
-        pub_can_frames_->publish(stampFrame(frame, "can", this->now()));
+        publishCanFrame(stampFrame(frame, "can", this->now()));
       }
     }
-    if (drive.targetMode() == VELOCITY)
+    if (virtual_position_source_ && drive.targetMode() == VELOCITY)
     {
       pub_can_frames_->publish(stampFrame(
           drive.setTargetRequest(EC_TRACTION_MAX_PROFILE_VELOCITY, traction_max_profile_velocity_), "can", this->now()));
@@ -1453,13 +1501,13 @@ void MoboticDriver::enableAllDrives()
         pub_can_frames_->publish(stampFrame(drive.setTargetRequest(VELOCITY_INPUT, 0), "can", this->now()));
       }
     }
-    pub_can_frames_->publish(stampFrame(drive.readErrorRegisterRequest(), "can", this->now()));
+    publishCanFrame(stampFrame(drive.readErrorRegisterRequest(), "can", this->now()));
     if (drive.isTractionController())
     {
-      pub_can_frames_->publish(stampFrame(drive.readErrorCodeRequest(), "can", this->now()));
+      publishCanFrame(stampFrame(drive.readErrorCodeRequest(), "can", this->now()));
     }
-    pub_can_frames_->publish(stampFrame(drive.readDeviceModeRequest(), "can", this->now()));
-    pub_can_frames_->publish(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
+    publishCanFrame(stampFrame(drive.readDeviceModeRequest(), "can", this->now()));
+    publishCanFrame(stampFrame(drive.readDeviceStateRequest(), "can", this->now()));
   }
 }
 
@@ -1473,6 +1521,15 @@ void MoboticDriver::initializeAllDrives()
 
   for (auto& [name, drive] : drives_)
   {
+    if (!virtual_position_source_)
+    {
+      configuration_[name].start({});
+      for (const auto& frame : {drive.readDeviceStateRequest(), drive.readDeviceModeRequest(),
+                               drive.readErrorRegisterRequest(), drive.readFeedbackRequest(POSITION_FEEDBACK),
+                               drive.readFeedbackRequest(VELOCITY_FEEDBACK)})
+      { publishCanFrame(stampFrame(frame, "can", this->now())); }
+      continue;
+    }
     RCLCPP_INFO_STREAM(this->get_logger(), "Initializing drive " << name << ".");
     auto frames = drive.isTractionController() ? drive.tractionPdoConfigurationRequests(
         static_cast<unsigned>(telemetry_pdo_sync_divider_)) : drive.steeringTelemetryPdoConfigurationRequests(
@@ -1491,6 +1548,36 @@ void MoboticDriver::initializeAllDrives()
   }
 }
 
+void MoboticDriver::publishCanFrame(const can_msgs::msg::Frame& frame)
+{
+  if (!virtual_position_source_ && frame.id >= 0x601 && frame.id <= 0x67F)
+  {
+    const unsigned node = frame.id - 0x600;
+    if (frame.data[0] != READ_FROM_DEVICE)
+    {
+      const auto drive = std::find_if(drives_.begin(), drives_.end(), [node](const auto& item) { return item.second.rawCanNodeID() == node; });
+      const unsigned index = static_cast<unsigned>(frame.data[1]) | (static_cast<unsigned>(frame.data[2]) << 8);
+      const bool permitted = drive != drives_.end() && (drive->second.isTractionController()
+          ? (index == EC_CONTROLWORD || index == EC_TRACTION_VELOCITY_INPUT)
+          : (index == MICONTROL_DEVICE_STATE || index == MICONTROL_CLEAR_ERROR_STATUS ||
+             index == STEERING_PROFILE_VELOCITY_INPUT || index == ABSOLUTE_POSITION_INPUT));
+      if (!controller_control_started_ || !permitted || frame.data[3] != 0)
+      { RCLCPP_ERROR(this->get_logger(), "Refusing physical controller configuration write to 0x%04X", index); return; }
+    }
+    sdo_channels_[node].push(frame);
+    pumpSdo(node);
+    return;
+  }
+  pub_can_frames_->publish(frame);
+}
+
+void MoboticDriver::pumpSdo(unsigned node)
+{
+  const auto stamp = this->now();
+  const auto frame = sdo_channels_[node].next(watchdog_timeout_, SdoChannel::Clock::now(), stamp.nanoseconds());
+  if (frame) { pub_can_frames_->publish(stampFrame(*frame, "can", stamp)); }
+}
+
 can_msgs::msg::Frame MoboticDriver::stampFrame(const can_msgs::msg::Frame& frame, const std::string& frame_id,
                                                const rclcpp::Time& stamp)
 {
@@ -1507,6 +1594,7 @@ void MoboticDriver::watchdogTimerCallback()
 
 void MoboticDriver::enforceManagementLease()
 {
+  if (!virtual_position_source_ && !controller_control_started_) { return; }
   if (management_lease_.permitsEnable(supervisor_timeout_)) { return; }
   // Passive initialization and acquisition do not depend on an enable lease.
   const auto steady_now = ManagementLease::Clock::now();
@@ -1550,7 +1638,7 @@ void MoboticDriver::modeStateCallback(const mobotic_interfaces::msg::VehicleMode
       for (const auto& [name, drive] : drives_)
       {
         (void)name;
-        pub_can_frames_->publish(stampFrame(drive.clearErrorRequest(NO_OPERATION), "can", this->now()));
+        publishCanFrame(stampFrame(drive.clearErrorRequest(NO_OPERATION), "can", this->now()));
       }
     }
     reset_release_sent_ = true;
@@ -1710,7 +1798,7 @@ void MoboticDriver::publishDiagnostics()
       const bool position_fresh = drive.hasFeedback(POSITION_FEEDBACK) &&
           drive.feedbackFreshness().fresh(FeedbackFreshness::POSITION, motion_feedback_timeout_, steady_now);
       add_value(status, "position_0x6064_raw", position_fresh ? std::to_string(drive.feedback(POSITION_FEEDBACK)) : "unknown");
-      add_value(status, "position_source", "Elmo only: startup SDO and cyclic TPDO3");
+      add_value(status, "position_source", virtual_position_source_ ? "virtual controller PDO" : "Elmo 0x6064 read through SDO");
       add_value(status, "power_cycle_continuity_verified", "false");
       for (const auto& item : {std::make_pair("sto_0x2086", &sto_status_),
                                std::make_pair("digital_inputs_0x60FD", &digital_inputs_)})
@@ -1730,6 +1818,7 @@ void MoboticDriver::publishDiagnostics()
   pub_diagnostics_->publish(array);
 }
 
+#ifndef MOBOTIC_DRIVER_NO_MAIN
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv, rclcpp::InitOptions());
@@ -1738,3 +1827,4 @@ int main(int argc, char** argv)
   rclcpp::shutdown();
   return 0;
 }
+#endif

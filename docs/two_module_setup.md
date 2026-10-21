@@ -22,7 +22,7 @@ safety-enable telemetry remains unknown; ROS does not fabricate healthy signals.
 The physical Siemens/scanner/STO chain controls torque independently. A known
 active STO reported by a configured drive still inhibits software enable.
 Battery readiness, drive feedback/faults, operator interlocks, command timeouts,
-and physical position continuity checks remain in force.
+and current controller position-feedback checks remain in force.
 
 | Module | Steering node | Traction node | Steering-axis XY (m) |
 | --- | --- | --- | --- |
@@ -86,7 +86,7 @@ All three axes use zero 0 and full scale 255. The capture's receiver is node 10;
 the prepared local candidate reserves master node 11 to avoid a node-ID collision.
 This reuses the control assignments without enabling virtual position feedback,
 mock readiness or virtual-only steering policies on physical drives. Hardware
-STOP/radio-loss behaviour and encoder-reference recovery still need commissioning.
+STOP/radio-loss behaviour and installed controller scaling still need hardware verification.
 
 The supervisor still requires both selected modules, all four fresh joints,
 measured standstill for recovery, real battery readiness, and the
@@ -137,12 +137,13 @@ profile continues to require eight joints and four modules.
 
 ## Hardware deployment status
 
-Physical enable is currently inhibited in `MoboticDriver::enableAllDrives()`
-until a physical encoder-reference continuity/recovery implementation is
-commissioned. The two-module profile does not remove that restriction. Never
-set `virtual_position_source` on physical CAN to bypass it. The bundled reference
-profile starts with an empty operator mapping; the local candidate can reuse the
-captured assignment above while physical stop/recovery checks remain outstanding.
+Physical startup reads the installed controller state and current positions,
+then enables drives when readiness checks pass. B2 requests fault reset and
+re-enable; it requires neutral controls and measured standstill. Physical mode
+does not set `virtual_position_source` or rewrite the controller project. See
+[drive startup](drive_startup.md). The bundled reference profile starts with an
+empty operator mapping; the local candidate can reuse the captured assignment
+above. Physical stop/recovery behavior remains untested without hardware.
 
 To stage a reviewed profile and a new hardware release without starting drives,
 stop the hardware service, back up the existing profile and install the candidate:

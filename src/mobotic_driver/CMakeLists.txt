@@ -48,6 +48,21 @@ install(TARGETS
 
 
 if(BUILD_TESTING)
+  add_executable(test_controller_protocol test/test_controller_protocol.cpp)
+  target_include_directories(test_controller_protocol PRIVATE include)
+  ament_target_dependencies(test_controller_protocol can_msgs)
+  ament_add_test(test_controller_protocol COMMAND "$<TARGET_FILE:test_controller_protocol>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
+  add_executable(test_controller_startup test/test_controller_startup.cpp src/mobotic_driver.cpp)
+  target_compile_definitions(test_controller_startup PRIVATE MOBOTIC_DRIVER_NO_MAIN)
+  # Compile the second driver copy without optimizer work; the production
+  # executable above keeps the selected release optimization settings.
+  target_compile_options(test_controller_startup PRIVATE -O0)
+  target_include_directories(test_controller_startup PRIVATE include)
+  ament_target_dependencies(test_controller_startup rclcpp std_msgs sensor_msgs geometry_msgs can_msgs std_srvs mobotic_interfaces diagnostic_msgs)
+  ament_add_test(test_controller_startup COMMAND "$<TARGET_FILE:test_controller_startup>"
+    TIMEOUT 45 ENV ROS_DOMAIN_ID=151 ROS_LOCALHOST_ONLY=1
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
   find_package(ament_cmake_test REQUIRED)
   add_executable(test_virtual_sync test/test_virtual_sync.cpp)
   target_include_directories(test_virtual_sync PRIVATE include)

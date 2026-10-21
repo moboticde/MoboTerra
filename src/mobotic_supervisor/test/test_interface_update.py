@@ -140,6 +140,25 @@ class InterfaceUpdateTest(unittest.TestCase):
         self.node._observe_reset(self.fixture.now, [])
         self.assertIn('RESET_TIMEOUT', self.node.fault_codes)
 
+    def test_successful_b2_transaction_publishes_enable_again(self):
+        self.node.fault_codes = {'DRIVE_FAULT:front'}
+        self.node.standstill_since = harness.Time(9.7)
+        self.assertTrue(self.node._reset_errors_service(None, SimpleNamespace()).success)
+        for module in self.node.wheel_status.modules:
+            module.reset_id, module.reset_acknowledged = 0, False
+        self.node._control()
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
+        self.assertEqual(self.node.module_command_publisher.messages[-1].reset_id, 1)
+        self.fixture.now = harness.Time(10.1)
+        self.fixture.feedback()
+        for module in self.node.wheel_status.modules:
+            module.reset_id, module.reset_acknowledged = 1, True
+        self.node._control()
+        self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
+        self.assertEqual(self.node.module_command_publisher.messages[-1].reset_id, 0)
+        self.assertFalse(self.node.fault_codes)
+        self.assertIsNone(self.node.manual_command)
+
     def test_host_error_blocks_enable_during_startup_and_remains_latched_after_recovery(self):
         now = self.fixture.now
         self.node.required_health_sources = ['host']

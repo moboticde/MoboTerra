@@ -171,13 +171,13 @@ stale rating yields unknown current, not guessed amperes. Missing physical
 brake/STO mappings remain unknown. Known flags and freshness must be checked
 before a zero fault or a numerical reading is treated as valid.
 
-Traction position is read through Elmo at startup and cyclically using PDOs.
-There is no direct encoder connection/configuration step. The current physical
-profile deliberately inhibits enable and authoritative joint publication until
-the retained Elmo reference, scale and identity are commissioned. The virtual
-launch alone enables the synthetic source. Never set `virtual_position_source`
-on physical CAN to bypass this gate. The persistent directory and durable
-helper do not yet establish recovery across power loss or unpowered movement.
+Physical traction position is read through Elmo 0x6064 at startup and cyclically
+using SDO. There is no direct encoder connection, reference-zeroing, or external
+retained-reference prerequisite. Fresh controller feedback supplies the position
+used for readiness and joint publication. Physical startup preserves the installed
+mode, mappings and ramps. The virtual launch alone configures the simulator's PDOs.
+See [startup and B2 recovery](drive_startup.md); continuity across a controller
+coordinate reset or unpowered movement is not inferred.
 
 ## Scanner information for autonomy
 

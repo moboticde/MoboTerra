@@ -39,8 +39,10 @@ Wheel odometry does publish `odom -> base_link` on the namespaced `tf` topic.
 The shared [description](../mobotic_description/README.md) starts by default,
 including joint/static TF and CAD-envelope corner frames. Use start_description:=false
 if an external owner supplies it; do not start two robot_state_publishers.
-ROS/RViz validation remains required. Physical position continuity is not yet
-commissioned, so physical enable/joint publication remain inhibited.
+Physical startup reads existing controller state/positions without rewriting
+controller settings, then enables when readiness checks pass. B2 requests reset
+and re-enable. See [drive startup](../../docs/drive_startup.md); physical acceptance
+remains outstanding without hardware.
 
 Required external packages: `ros2_socketcan`, `joy`, `sick_safetyscanners2`.
 Bringup does not configure the OS CAN interfaces or PC network interface.

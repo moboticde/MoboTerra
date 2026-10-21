@@ -22,10 +22,11 @@ same profile for every component; physical commissioning restrictions still appl
 
 ## Prerequisites
 
-The interface update is not a hardware-ready release: Elmo position continuity,
-full Jazzy/Docker builds and secured hardware tests remain open. Physical enable
-is inhibited; never set the virtual position flag on physical CAN. Node discovery
-health is not proof that the robot is ready to move.
+Physical startup reads existing controller state and enables drives after readiness
+checks pass; see [drive startup and B2 recovery](../docs/drive_startup.md). It
+preserves controller configuration and uses current controller-reported positions.
+Physical mode does not use the virtual position flag. Secured hardware validation
+remains outstanding; node discovery health is not proof of motion readiness.
 
 The host platform file is /etc/moboterra/platform.yaml and is mounted read-only;
 the installer preserves an existing file. Optional *_PARAMETERS_FILE values in

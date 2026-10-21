@@ -2,7 +2,7 @@
 
 C++ ROS 2 driver for MoboTerra's configured powered steering/traction modules (four by default). Steering uses MiControl; traction uses Elmo CANopen/DS402. Hardware configuration, scale/reference, gearing, limits and safety/brake behavior require commissioning.
 
-The update configures and monitors drives while disabled, performs acknowledged PDO writes with readback, and accepts one final supervised motion array. Physical enable and authoritative joint publication remain inhibited pending verified Elmo position continuity; the synthetic position flag is only for virtual launch.
+Physical startup reads the installed controllers' state and position through CANopen SDO. It preserves operating modes, PDO mappings, ramps, limits, encoder reference and saved parameters. Once real feedback and supervisor readiness checks pass, the driver enables the drives. The virtual launch configures its simulated PDOs separately. See [startup and B2 recovery](../../docs/drive_startup.md).
 
 ## Topics and services
 
@@ -23,11 +23,11 @@ There are no ordinary driver subscriptions to kinematics/joint_setpoints or supe
 
 ## Feedback and protocol
 
-Elmo TPDO communication setup explicitly requests COB-ID bit 30 (RTR disabled), which Gold controllers retain in readback. Every configuration write still requires an exact acknowledged readback; PDO setup leaves motor operation disabled.
+Physical startup sends SDO reads, plus the master's heartbeat. Its operational write allowlist permits enable/disable, explicit fault reset and motion targets; no configuration download is permitted. Transactions are serialized per node, require matching replies, and queued writes expire with the motion watchdog. Unknown installed PDO payloads are ignored. A reported mode that differs from the configured steering/traction role prevents readiness rather than being overwritten.
 
-Elmo position is read immediately at initialization through 6064:0, then through configured TPDO3. No direct encoder access, encoder/firmware changes or automatic reference zeroing are performed. Raw readback is exposed as position_0x6064_raw in diagnostics. EDS mapping support does not prove the installed reference survives a full power cycle.
+Elmo position is read at initialization and cyclically through 6064:0. No direct encoder access, encoder/firmware changes or automatic reference zeroing are performed. The current controller count initializes the software position; no external retained-reference file is required for enable. Raw readback is exposed as position_0x6064_raw in diagnostics.
 
-A joint publication requires position and velocity for every configured steering and traction joint within one SYNC window and the configured sample-skew budget (5 ms by default). Its stamp is the oldest required motion acquisition, not report time. Traction counters are unwrapped with jump rejection; this alone cannot recover unpowered movement after a drive coordinate reset. See [controller object mapping](../../docs/controller_object_mapping.md).
+A physical joint publication requires fresh position and velocity for every configured steering and traction joint within `physical_sample_skew_budget` (50 ms by default). Its stamp is the oldest required motion acquisition, not report time. Virtual feedback retains its synchronous PDO window and 5 ms skew budget. Traction counters are unwrapped with jump rejection; continuity across a controller coordinate reset is not inferred. See [controller object mapping](../../docs/controller_object_mapping.md).
 
 Elmo 6078 current is per-mille of rated current 6075, not milliamps. The driver reads the rating and converts to amperes; stale/zero/absent rating yields unknown current. Steering uses the existing MiControl current conversion and still requires installed-unit verification. Current belongs in drive status, never JointState.effort.
 
@@ -47,7 +47,7 @@ Status records expose native state/mode, status word where supported, errors, cu
 
 Every final array must match supervisor instance, generation and selected mode, have ordered valid timestamps and contain each module once. Normal motion requires permission and a source age no greater than 250 ms. Controlled-stop authority only reduces traction without reversing; steering remains held. Actual controller mode and all-drive freshness are checked independently. Limits are derived from the shared profile, not fixed inside final-command validation.
 
-Initialization and enable retries never clear faults. A reset ID is consumed once after fresh measured per-joint standstill (0.1 rad/s), then acknowledged only after new cleared fault readback. Supervisor verifies the complete transaction before clearing its latch. CAN boot-up stops/disables all drives and triggers disabled reconfiguration; lost position continuity cannot be repaired by clearing a fault.
+Initialization and enable retries never clear faults. A reset ID is consumed once after fresh measured per-joint standstill (0.1 rad/s), then acknowledged only after new cleared fault readback. Supervisor verifies the complete transaction before clearing its latch and requesting enable again. Physical Elmo enable advances one observed DS402 state at a time: 0x0006, 0x0007, 0x000F. CAN boot-up stops managed drives, invalidates feedback and rereads installed state; physical controller configuration is preserved.
 
 Validated CAN samples are ordered per drive/field with the original acquisition watermark shared across PDO and SDO decoding. Heartbeats, unrelated SDOs and currents do not refresh motion. Zero-stamped transport has a local-reception compatibility fallback, not reliable replay detection; use the timestamping SocketCAN bridge on hardware.
 
@@ -62,7 +62,7 @@ Validated CAN samples are ordered per drive/field with the original acquisition 
 
 Joint names are <module>_steering and <module>_traction. Radius is 0.325 m; configured traction scaling is 4096 counts/revolution and 16:1 gearing. Raw traction ceiling is 116053 increments/s, with acceleration/deceleration 32093 increments/s². ROS limits remain 11.12 rad/s traction and 4.32 rad/s steering. These reference settings must match actual Elmo units before operation.
 
-Use integrated bringup and the shared platform/policy YAML. The synchronized profile requires both PDO paths and a positive sample-skew budget below the SYNC period. All selected moving joints and modules must match supervisor/kinematics configuration. The [front-right/rear-left profile](../../docs/two_module_setup.md) selects drive nodes 3, 4, 7 and 8 and requires four joints; omitted controllers must be disconnected.
+Use integrated bringup and the shared platform/policy YAML. Physical mode uses serialized SDO reads and operational writes; PDO policy settings apply to the virtual protocol fixture. All selected moving joints and modules must match supervisor/kinematics configuration. The [front-right/rear-left profile](../../docs/two_module_setup.md) selects drive nodes 3, 4, 7 and 8 and requires four joints; omitted controllers must be disconnected.
 
 ## Persistence and validation status
 

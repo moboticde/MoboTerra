@@ -2,6 +2,12 @@
 
 Date: 14 October 2026. Revised after the customer-requirement audit and topic-naming clarification. Audience: MoboTerra development and commissioning team.
 
+Startup clarification, 21 October 2026: [drive startup and B2 recovery](drive_startup.md)
+supersedes this historical plan's external retained-reference enable prerequisite
+and physical PDO-configuration startup. Physical startup now adopts current
+controller state over SDO, preserves its project and enables after readiness.
+Cross-power-cycle retained-reference recovery remains separate work.
+
 ## Implementation status on 14 October 2026
 
 The software foundation is implemented locally: new messages and namespace migration, one supervised final wheel-command path, automatic SAFETY/ERROR, explicit reset transactions, USB rearm, a guarded REMdevice decoder, timestamped safety transport, generic scanner state/diagnostics, passive PDO setup/readback, traction position TPDO3, separate drive current/status, integrated description/corner frames, ARM64/AMD64 deployment configuration and durable state-store helpers. Repository interface/graph/controller documentation and the editable architecture figure have been updated.

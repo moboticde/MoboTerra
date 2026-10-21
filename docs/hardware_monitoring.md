@@ -1,9 +1,11 @@
 # Hardware monitoring and commissioning
 
 The updated contract is [supervisor_interfaces.md](supervisor_interfaces.md).
-Physical position continuity remains uncommissioned and motion is inhibited;
-read Elmo 6064 at startup and through PDOs without accessing/changing the encoder.
-The durable recovery helper is not yet a complete hardware recovery backend.
+Physical startup reads current controller state and Elmo 6064 through SDO,
+preserves the installed controller project, and enables only after fresh readiness
+checks pass. No external encoder-reference recovery is a startup prerequisite.
+See [drive startup and B2 recovery](drive_startup.md). The durable recovery helper
+does not establish continuity across controller coordinate resets.
 Older test descriptions below are commissioning scenarios, not completed checks
 of the updated interface. Full Jazzy/ROS/SocketCAN validation remains required.
 

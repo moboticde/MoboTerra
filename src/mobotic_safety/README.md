@@ -13,7 +13,7 @@ messages. For this explicit two-module profile, the supervisor does not use PLC
 telemetry for readiness, faults, speed scaling or direct-mode selection. The
 physical Siemens/scanner/STO circuit operates independently; known active drive
 STO still inhibits software enable. Battery, operator, drive feedback/faults and
-position continuity checks remain. The driver currently exposes raw Elmo safety
+current controller position-feedback checks remain. The driver currently exposes raw Elmo safety
 registers but does not yet commission per-module STO feedback. `hardwired_sto`
 is rejected for any layout other than exactly two modules. Four-module profiles
 require FlexiSoft and retain its communication and safety-state checks.
