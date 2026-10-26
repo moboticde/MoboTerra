@@ -74,6 +74,19 @@ class InterfaceUpdateTest(unittest.TestCase):
         self.assertEqual(state.current_mode, State.UNKNOWN)
         self.assertFalse(state.ready_to_drive or state.readiness_known or state.motion_permitted)
 
+    def test_ready_to_drive_includes_enable_external_readiness_and_health(self):
+        self.assertTrue(self.publish_state().ready_to_drive)
+        self.node.wheel_status.modules[0].enabled = False
+        self.assertFalse(self.publish_state().ready_to_drive)
+        self.node.wheel_status.modules[0].enabled = True
+        self.node.battery_state.high_voltage_connected = False
+        self.assertFalse(self.publish_state().ready_to_drive)
+        self.node.battery_state.high_voltage_connected = True
+        self.node.required_health_sources = ['odometry']
+        self.node.component_health = {}
+        self.node.health_timeout = .3
+        self.assertFalse(self.publish_state().ready_to_drive)
+
     def test_final_array_preserves_source_stamp_and_accepts_candidate_once(self):
         msg = self.joints()
         source_stamp = harness.Time(9.9).to_msg()
@@ -129,6 +142,12 @@ class InterfaceUpdateTest(unittest.TestCase):
         self.assertTrue(self.node.fault_codes)
         for module in self.node.wheel_status.modules: module.reset_id = 1
         self.node._observe_reset(self.fixture.now, [])
+        self.assertTrue(self.node.fault_codes)  # A single zero sample is insufficient.
+        self.fixture.now = harness.Time(10.35)
+        self.fixture.feedback()
+        for module in self.node.wheel_status.modules:
+            module.reset_id, module.reset_acknowledged = 1, True
+        self.node._observe_reset(self.fixture.now, [])
         self.assertEqual(self.node.fault_codes, set())
         self.assertIsNone(self.node.reset_started_at)
         self.assertIsNone(self.node.autonomy_command)
@@ -155,9 +174,26 @@ class InterfaceUpdateTest(unittest.TestCase):
             module.reset_id, module.reset_acknowledged = 1, True
         self.node._control()
         self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
+        self.assertEqual(self.node.module_command_publisher.messages[-1].reset_id, 1)
+        self.assertTrue(self.node.fault_codes)
+        self.fixture.now = harness.Time(10.35)
+        self.fixture.feedback()
+        for module in self.node.wheel_status.modules:
+            module.reset_id, module.reset_acknowledged = 1, True
+        self.node._control()
         self.assertEqual(self.node.module_command_publisher.messages[-1].reset_id, 0)
         self.assertFalse(self.node.fault_codes)
         self.assertIsNone(self.node.manual_command)
+
+    def test_reset_rejects_expired_external_readiness(self):
+        self.node.fault_codes = {'DRIVE_FAULT:front'}
+        self.node.standstill_since = harness.Time(9.7)
+        self.fixture.now = harness.Time(10.4)
+        response = self.node._reset_errors_service(None, SimpleNamespace())
+        self.assertFalse(response.success)
+        self.assertIn('scanner field data unavailable', response.message)
+        self.assertIsNone(self.node.reset_started_at)
+        self.assertEqual(self.node.reset_id, 0)
 
     def test_host_error_blocks_enable_during_startup_and_remains_latched_after_recovery(self):
         now = self.fixture.now

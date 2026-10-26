@@ -12,6 +12,15 @@ public:
   using Clock = std::chrono::steady_clock;
   enum class Source { Kinematics, SupervisorDirect };
 
+  static bool immediateStop(bool motion_permitted, bool transitioning,
+                            bool new_epoch, bool safety_stop, bool error, bool resetting)
+  {
+    // An ordinary transition keeps its controlled ramp. Explicit inhibition
+    // always stops, including when a scanner turns red during that ramp.
+    return safety_stop || error || resetting ||
+           ((!motion_permitted || new_epoch) && !transitioning);
+  }
+
   bool update(uint8_t mode, bool transitioning, int64_t stamp_ns, int64_t ros_now_ns,
               double timeout, Clock::time_point now = Clock::now())
   {

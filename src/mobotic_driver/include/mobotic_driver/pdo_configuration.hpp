@@ -33,7 +33,19 @@ public:
     if (frame.id != request.id - 0x600 + 0x580 || frame.data[1] != request.data[1] ||
         frame.data[2] != request.data[2] || frame.data[3] != request.data[3]) { return; }
     if (frame.data[0] == ABORT_REPLY) { failed_ = true; waiting_ = false; return; }
-    if (!reading_ && frame.data[0] == WRITE_REPLY) { waiting_ = false; reading_ = true; return; }
+    if (!reading_ && frame.data[0] == WRITE_REPLY)
+    {
+      // State/reset/zero-target commands are actions, not persistent settings.
+      // Their acknowledgement is sufficient; fresh operational feedback later
+      // confirms the result. Configuration objects still require readback.
+      const unsigned index = request.data[1] | (unsigned(request.data[2]) << 8);
+      const bool action = index == EC_CONTROLWORD || index == MICONTROL_DEVICE_STATE ||
+          index == MICONTROL_CLEAR_ERROR_STATUS || index == STEERING_PROFILE_VELOCITY_INPUT ||
+          index == EC_TRACTION_VELOCITY_INPUT;
+      waiting_ = false;
+      if (action) { queue_.pop_front(); } else { reading_ = true; }
+      return;
+    }
     if (!reading_ || !isReadReplyFromDevice(frame)) { return; }
     const unsigned size = request.data[0] == WRITE_TO_DEVICE_1B ? 1 : request.data[0] == WRITE_TO_DEVICE_2B ? 2 : 4;
     if (4u - ((frame.data[0] >> 2) & 3u) != size) { failed_ = true; }

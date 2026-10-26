@@ -72,11 +72,24 @@ Types in the following table use ROS 2 `package/msg/Type` notation.
 | `battery/system_state` | mobotic_interfaces/msg/BatterySystemState | Battery monitor; aggregate pack readiness/faults |
 | `safety/state` | mobotic_interfaces/msg/SafetyState | Safety monitor; software motion permission and stop state |
 | `safety/io_state` | mobotic_interfaces/msg/SafetyIOState | Safety monitor; mapped I/O and known flags |
+| `can_rx`, `can_tx` | can_msgs/msg/Frame | SocketCAN transport; raw drive/PAIL frames received from or sent to can0 |
+| `battery_can/can_rx` | can_msgs/msg/Frame | Separate receive-only battery CAN transport to battery monitor |
+| `scanner/<location>/scan` | sensor_msgs/msg/LaserScan | Scanner to application/diagnostics; measured laser ranges |
+| `scanner/<location>/safety_zone_status` | mobotic_interfaces/msg/ScannerSafetyState | Scanner adapter to consumers; mapped field/OSSD state with known flags |
+| `internal/component_health` | mobotic_interfaces/msg/ComponentHealthArray | Platform diagnostics to supervisor; required component freshness and health |
+| `tf`, `tf_static` | tf2_msgs/msg/TFMessage | Odometry/robot state publisher; dynamic and static coordinate transforms |
 | `diagnostics` | diagnostic_msgs/msg/DiagnosticArray | Component details for root-cause investigation |
 
 The driver publishes no separate scalar wheel-motion topics. Consumers use the
 aggregated samples. Old `manual/*`, `vehicle/mode_state`, `agv_vel` and
 `odometry` names are not aliases in this updated implementation.
+
+The driver subscribes to final `wheel_modules/command`, not directly to
+`kinematics/joint_setpoints`. The supervisor validates and forwards a correlated
+candidate inside its receive callback without another periodic control wait.
+See [wheel command fields, EC comparison and latency](control_path_and_latency.md)
+for the complete payload, the 20 ms supervisor/PDO periods and why these periods
+are not measured end-to-end latency or guaranteed stopping times.
 
 ## Operating modes
 
@@ -101,6 +114,93 @@ mode during SAFETY/ERROR. ERROR takes precedence if both are present, while
 `safety_stop_active` preserves the overlapping safety-stop indication.
 Read `error_active`, `reason_codes`, `motion_permitted`, `transition_in_progress`,
 `readiness_known`, `ready_to_drive` and `drives_enabled` as well.
+
+### Selecting a mode on the two-module PAIL chassis
+
+The supervisor starts with `selected_mode=MANUAL`, while `current_mode=UNKNOWN`
+until startup readiness is established. External readiness starts drive
+initialization and zero-target enable automatically; selecting a mode is not a
+separate motor-enable operation. In all three selectable modes, Elmo steering
+stays in position control and traction stays in velocity control.
+
+The confirmed PAIL mode input is U5 active low. Raw U5 high maps to MANUAL (0);
+raw U5 low maps to AUTONOMOUS (1). The receiver's first complete sample after
+startup or reconnection only primes the switch position. It does not request a
+mode. Change the switch position to send a request, or use the service below.
+An unchanged switch cannot continually override a service-selected mode.
+The physical labels/left-right orientation should be checked on the actual radio.
+
+With a sourced workspace and the stack running, request a mode using one of:
+
+```bash
+ros2 service call /moboterra/vehicle/set_mode mobotic_interfaces/srv/SetVehicleMode '{requested_mode: 0}'
+ros2 service call /moboterra/vehicle/set_mode mobotic_interfaces/srv/SetVehicleMode '{requested_mode: 1}'
+ros2 service call /moboterra/vehicle/set_mode mobotic_interfaces/srv/SetVehicleMode '{requested_mode: 2}'
+```
+
+The service response confirms acceptance, not completion. While changing modes,
+`selected_mode` remains the outgoing mode, `requested_mode` holds the target,
+`transition_in_progress=true` and `motion_permitted=false`. Buffered motion is
+discarded. Velocity modes use their outgoing controlled stop; leaving direct
+mode commands zero traction and holds actual steering. Fresh body and all-joint
+feedback must prove standstill for 0.25 s before the target becomes selected.
+Requesting the already-selected mode also runs this stop/standstill sequence.
+Transition alone normally keeps drives enabled, subject to the external gates.
+A fault or safety loss can disable them.
+
+After completion, commands must have stamps at or after the new authority
+boundary. Manual input additionally returns to neutral; this PAIL has no held
+deadman. A connected neutral manual source can report `motion_permitted=true`
+while requesting zero velocity. AUTONOMOUS needs an external stamped body
+velocity publisher on `autonomy/cmd_vel`. KINEMATICOFF needs complete stamped
+wheel candidates on `autonomy/joint_setpoints`; it bypasses inverse kinematics
+for commands but retains measured feedback, monitoring and the supervisor's
+final authority. Selecting either autonomous mode does not start a planner.
+An existing publisher sending new commands can start motion after the switch.
+
+The PAIL connection and known STOP state remain required in autonomous modes
+because this profile sets `require_operator_interlock=true`. Operator driving
+axes and boost have no motion authority there; mode/reset and STOP monitoring
+remain available. Commands expire after 250 ms by default. The driver also
+checks the supervisor instance, authority generation and selected mode.
+
+Inspect progress and blockers with:
+
+```bash
+ros2 topic echo /moboterra/vehicle/mode
+```
+
+A transition that reaches 10 s latches `MODE_TRANSITION_TIMEOUT` immediately.
+Further mode requests are refused until explicit reset succeeds. A new command
+or another mode request does not clear ERROR. Safety stops preserve the selected
+mode; after a non-latched protective stop clears, fresh commands and manual
+neutral rearm are required. Any accompanying latched fault still requires reset.
+
+On the Siemens two-module chassis, the physical scanner/controller/STO chain
+operates independently of ROS. The supervisor has no Siemens Ethernet input.
+It can indicate SAFETY from a known PAIL STOP or known drive STO; a LaserScan
+alone does not establish protective-field state. Evaluated scanner output paths
+are read separately over Ethernet; both field-status streams are motion
+prerequisites. Unknown physical STO telemetry does not prove the chain is clear.
+
+### Reset recovery when disabled drives withhold motion telemetry
+
+B2 and `wheel_modules/clear_errors` accept a recovery request when external
+interlocks and neutral controls are ready and either sustained measured
+standstill is proven or every initialized drive has a fresh native disabled
+state. Known movement rejects the request. An aggregate `enabled=false` with
+unknown/stale individual status is insufficient. Missing motion data is never
+interpreted as zero velocity.
+
+The driver independently verifies admission and the current supervisor/reset
+ID, disables/zeros drives and clears faults once. Fresh fault-clearance
+acknowledgements permit zero-target enable while reset and fault latches remain
+active. Completion requires enabled, initialized, fault-free modules with valid
+fresh feedback, required component health and 0.25 s of new sustained measured
+body/all-joint standstill. Pre-reset samples, frozen samples and gaps cannot
+satisfy this proof. Only then is the latch cleared; old commands are discarded
+and manual neutral rearm is required. Timeout requests disable and retains ERROR.
+See [the complete recovery sequence](drive_startup.md).
 
 SAFETY includes confirmed protective stops, physical E-stop and known STO or
 safety-enable stops from mapped inputs. Missing monitoring is not proof of a
@@ -139,8 +239,9 @@ The [two-module profile](two_module_setup.md) selects only `front_right` and
 
 For actual `joint_states`, `position` contains steering angles and wheel rotation
 angles [rad], and `velocity` contains steering and traction rotational velocities
-[rad/s]. The driver synchronizes all configured joints within the configured SYNC
-window and preserves acquisition time. `effort` is empty; electrical motor
+[rad/s]. The driver requires coherent samples from all configured joints and
+preserves acquisition time: physical samples use a bounded acquisition skew;
+virtual samples use the configured SYNC window. `effort` is empty; electrical motor
 current is not torque and is not placed in JointState.effort.
 
 In KINEMATICOFF, the external JointState candidate must contain every configured
@@ -171,11 +272,12 @@ stale rating yields unknown current, not guessed amperes. Missing physical
 brake/STO mappings remain unknown. Known flags and freshness must be checked
 before a zero fault or a numerical reading is treated as valid.
 
-Physical traction position is read through Elmo 0x6064 at startup and cyclically
-using SDO. There is no direct encoder connection, reference-zeroing, or external
-retained-reference prerequisite. Fresh controller feedback supplies the position
-used for readiness and joint publication. Physical startup preserves the installed
-mode, mappings and ramps. The virtual launch alone configures the simulator's PDOs.
+Physical startup waits for external supervisor readiness, configures controller
+modes/PDOs/ramps and enables with zero targets. Motion feedback is acquired after
+enable; Elmo 0x6064 is read cyclically through configured TPDO3 or SDO in a non-PDO
+profile. Fresh complete feedback is required before motion. There is no direct
+encoder connection, reference-zeroing or retained-reference prerequisite. Module
+status distinguishes startup_pending, startup_complete and startup_failed.
 See [startup and B2 recovery](drive_startup.md); continuity across a controller
 coordinate reset or unpowered movement is not inferred.
 
@@ -188,8 +290,14 @@ For `front_left` and `rear_right`, public relative topics are:
 - `scanner/<location>/diagnostics` for per-scanner DiagnosticArray.
 
 ScannerSafetyState provides communication, protective/warning clear state, OSSD
-state and corresponding known flags. The generic safety adapter derives fields
-from the mapped safety-controller I/O; field-set number is currently unknown.
+state and corresponding known flags. On hardware the adapter reads evaluated
+application output paths from each scanner's `raw_data`, with validity checks
+and a 0.3 s deadline. Physical OSSD and field-set numbers remain unknown. The
+supervisor combines both scanners: red commands zero immediately; yellow ramps
+to an absolute 0.3 m/s cap; both clear remove the scanner cap. Missing/unknown
+field status blocks motion. This applies to manual, autonomous velocity and
+direct wheel commands, including the two-module hardware-STO profile. Virtual
+bringup explicitly uses mock safety I/O instead of hardware scanner messages.
 Protective stops and unavailable monitoring are distinguished. LaserScan
 presence does not establish a clear protective field or safety permission.
 
@@ -198,7 +306,7 @@ presence does not establish a clear protective field or safety permission.
 | Relative service | Type | Use |
 | --- | --- | --- |
 | `vehicle/set_mode` | mobotic_interfaces/srv/SetVehicleMode | Request MANUAL=0, AUTONOMOUS=1 or KINEMATICOFF=2 |
-| `wheel_modules/clear_errors` | std_srvs/srv/Trigger | Supervisor-owned asynchronous, standstill-guarded fault reset |
+| `wheel_modules/clear_errors` | std_srvs/srv/Trigger | Supervisor-owned staged fault recovery; disabled-state admission and fresh standstill before completion |
 | `vehicle/reset_odometry` | std_srvs/srv/Trigger | Reset wheel odometry only with fresh measured standstill |
 | `internal/driver/initialize_all_drives` | std_srvs/srv/Trigger | Commissioning only; rejected while drives are enabled |
 | `internal/driver/disable_all_drives` | std_srvs/srv/Trigger | Internal disable; not a persistent safety override |

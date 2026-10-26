@@ -22,9 +22,10 @@ same profile for every component; physical commissioning restrictions still appl
 
 ## Prerequisites
 
-Physical startup reads existing controller state and enables drives after readiness
-checks pass; see [drive startup and B2 recovery](../docs/drive_startup.md). It
-preserves controller configuration and uses current controller-reported positions.
+Physical startup initializes modes/PDOs/ramps and enables with zero targets after
+external supervisor readiness. Enabled-drive feedback then permits motion; see
+[drive startup and B2 recovery](../docs/drive_startup.md). Encoder reference and
+saved controller parameters are retained.
 Physical mode does not use the virtual position flag. Secured hardware validation
 remains outstanding; node discovery health is not proof of motion readiness.
 

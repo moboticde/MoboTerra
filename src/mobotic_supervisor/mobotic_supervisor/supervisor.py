@@ -8,6 +8,7 @@ from mobotic_interfaces.msg import (
     BatterySystemState,
     OperatorState,
     SafetyIOState,
+    ScannerSafetyState,
     SafetyState,
     VehicleModeRequest,
     VehicleModeState,
@@ -69,7 +70,8 @@ class MoboticSupervisor(Node):
         self.declare_parameter('max_velocity_angular', 1.51)
         self.declare_parameter('max_acceleration_linear', 0.5)
         self.declare_parameter('max_acceleration_angular', 0.52)
-        self.declare_parameter('warning_speed_scale', 0.3)
+        self.declare_parameter('warning_speed_limit', 0.3)
+        self.declare_parameter('wheel_radius', 0.325)
         self.declare_parameter('override_speed_scale', 0.2)
         self.declare_parameter('max_direct_steering_velocity', 4.32)
         self.declare_parameter('max_direct_traction_velocity', 11.12)
@@ -134,7 +136,8 @@ class MoboticSupervisor(Node):
         self.max_acceleration_angular = float(
             self.get_parameter('max_acceleration_angular').value
         )
-        self.warning_speed_scale = float(self.get_parameter('warning_speed_scale').value)
+        self.warning_speed_limit = float(self.get_parameter('warning_speed_limit').value)
+        self.wheel_radius = float(self.get_parameter('wheel_radius').value)
         self.override_speed_scale = float(self.get_parameter('override_speed_scale').value)
         self.max_direct_steering_velocity = float(
             self.get_parameter('max_direct_steering_velocity').value
@@ -179,6 +182,8 @@ class MoboticSupervisor(Node):
         self.transition_timed_out = False
         self.command_accept_after = None
         self.motion_inputs_ready = False
+        self.drive_startup_completed_at = None
+        self.drive_startup_requested = False
 
         self.manual_command = None
         self.manual_command_received = None
@@ -192,6 +197,7 @@ class MoboticSupervisor(Node):
         self.safety_received = None
         self.safety_io_state = None
         self.safety_io_received = None
+        self.scanner_states = {name: (None, None) for name in ('front_left', 'rear_right')}
         self.battery_state = None
         self.battery_received = None
         self.wheel_status = None
@@ -271,6 +277,10 @@ class MoboticSupervisor(Node):
         self.mode_service = self.create_service(
             SetVehicleMode, 'vehicle/set_mode', self._set_mode_service
         )
+        for name in self.scanner_states:
+            self.input_subscriptions.append(self.create_subscription(
+                ScannerSafetyState, f'scanner/{name}/safety_zone_status',
+                lambda msg, location=name: self._scanner_callback(location, msg), 1))
         self.kinematics_subscription = self.create_subscription(
             JointState, 'kinematics/joint_setpoints', self._kinematics_candidate_callback, 1)
         if self.manual_stationary_steering_enabled:
@@ -308,6 +318,8 @@ class MoboticSupervisor(Node):
             self.max_velocity_angular,
             self.max_acceleration_linear,
             self.max_acceleration_angular,
+            self.warning_speed_limit,
+            self.wheel_radius,
             self.max_direct_steering_velocity,
             self.max_direct_traction_velocity,
             self.max_direct_traction_current,
@@ -318,8 +330,6 @@ class MoboticSupervisor(Node):
             raise ValueError('mode_transition_timeout must exceed the standstill hold duration')
         if not 0.0 <= self.minimum_battery_percentage <= 1.0:
             raise ValueError('minimum_battery_percentage must be in [0, 1]')
-        if not 0.0 < self.warning_speed_scale <= 1.0:
-            raise ValueError('warning_speed_scale must be in (0, 1]')
         if not 0.0 < self.override_speed_scale <= 1.0:
             raise ValueError('override_speed_scale must be in (0, 1]')
         if (
@@ -495,6 +505,53 @@ class MoboticSupervisor(Node):
             self.battery_received = self.get_clock().now()
         self._refresh_motion_readiness(self.get_clock().now())
 
+    def _scanner_callback(self, name, msg):
+        now = self.get_clock().now()
+        previous, _ = self.scanner_states[name]
+        if msg.scanner_id != name or not self._stamp_valid(msg.header.stamp, self.safety_timeout, now):
+            return
+        if previous is not None and Time.from_msg(msg.header.stamp).nanoseconds <= Time.from_msg(previous.header.stamp).nanoseconds:
+            # The adapter repeats its original acquisition stamp on heartbeats.
+            # An explicit loss report must still replace that same-age sample.
+            if msg.communication_ok or not previous.communication_ok:
+                return
+        was_warning = self._scanner_warning_active()
+        self.scanner_states[name] = (msg, now)
+        if was_warning != self._scanner_warning_active():
+            # Drop in-flight kinematics from the previous speed policy while
+            # preserving the last output so yellow decelerates smoothly.
+            self.velocity_ledger.clear()
+        self._refresh_motion_readiness(now)
+        scanner_ready, reason = self._scanner_gate(now)
+        if not scanner_ready:
+            # vehicle/mode carries the driver's authority generation and stop
+            # flags. Announce inhibition now so the driver stops independently
+            # of delivery order between authority and final wheel targets.
+            self._publish_mode_state(now, False, reason)
+            # Publish zero final wheel targets in this callback, without waiting
+            # for another control tick or the kinematics round trip.
+            self._publish_velocity(None, now, immediate_stop=True)
+            self._publish_direct_stop(now)
+
+    def _scanner_gate(self, now):
+        for name, (state, received) in self.scanner_states.items():
+            if (not self._message_fresh(state, received, self.safety_timeout, now)
+                    or not state.communication_ok or not state.protective_state_known
+                    or not state.warning_state_known):
+                return False, f'{name} scanner field data unavailable'
+            if not state.protective_field_clear:
+                return False, f'{name} scanner red protective field active'
+        return True, 'scanner fields monitored'
+
+    def _scanner_warning_active(self):
+        return any(state is not None and state.warning_state_known and not state.warning_field_clear
+                   for state, _ in self.scanner_states.values())
+
+    def _warning_active(self):
+        return self._scanner_warning_active() or (self._requires_safety_telemetry() and (
+            (self.safety_state is not None and self.safety_state.warning_field_active)
+            or self._io_warning_active()))
+
     def _wheel_status_callback(self, msg):
         if self._stamp_valid(msg.header.stamp, self.wheel_status_timeout):
             self.wheel_status = msg
@@ -502,16 +559,21 @@ class MoboticSupervisor(Node):
         self._refresh_motion_readiness(self.get_clock().now())
 
     def _joint_state_callback(self, msg):
+        if not self._message_fresh(self.joint_state, self.joint_state_received,
+                                   self.wheel_status_timeout, self.get_clock().now()):
+            self.standstill_since = None
         if not self._joint_feedback_valid(msg):
             self.joint_state = None
             self.joint_state_received = None
             self.transition_standstill_since = None
+            self.standstill_since = None
             self._refresh_motion_readiness(self.get_clock().now())
             return
         self.joint_state = msg
         self.joint_state_received = self.get_clock().now()
         if any(abs(value) > self.standstill_joint_velocity for value in msg.velocity):
             self.transition_standstill_since = None
+            self.standstill_since = None
         self._refresh_motion_readiness(self.get_clock().now())
 
     def _joint_feedback_valid(self, msg):
@@ -541,6 +603,9 @@ class MoboticSupervisor(Node):
         )
 
     def _velocity_feedback_callback(self, msg):
+        if not self._message_fresh(self.measured_velocity, self.measured_velocity_received,
+                                   self.velocity_feedback_timeout, self.get_clock().now()):
+            self.standstill_since = None
         if (
             not self._finite_twist(msg)
             or msg.header.frame_id != self.output_frame_id
@@ -549,6 +614,7 @@ class MoboticSupervisor(Node):
             self.measured_velocity = None
             self.measured_velocity_received = None
             self.transition_standstill_since = None
+            self.standstill_since = None
             return
         self.measured_velocity = msg
         self.measured_velocity_received = self.get_clock().now()
@@ -557,6 +623,7 @@ class MoboticSupervisor(Node):
             or abs(msg.twist.angular.z) > self.standstill_angular_velocity
         ):
             self.transition_standstill_since = None
+            self.standstill_since = None
 
     def _command_stamp_valid(self, stamp, timeout):
         # A future-dated command must not cross a later recovery boundary.
@@ -654,6 +721,9 @@ class MoboticSupervisor(Node):
         )
 
     def _safety_gate(self, now):
+        scanner_ready, reason = self._scanner_gate(now)
+        if not scanner_ready:
+            return False, reason
         if not self._requires_safety_telemetry():
             # Do not invent healthy PLC signals. Real drive feedback and the
             # hardware STO circuit remain independent prerequisites/protection.
@@ -698,7 +768,7 @@ class MoboticSupervisor(Node):
             return False, self.safety_state.status_message or 'motion prohibited by safety system'
         return True, 'FlexiSoft ready'
 
-    def _enable_gate(self, now):
+    def _enable_gate(self, now, recovering=False, allow_drive_faults=False):
         if 'host' in getattr(self, 'required_health_sources', []):
             health, received = self.component_health.get('host', (None, None))
             if (not self._message_fresh(health, received, self.health_timeout, now)
@@ -716,6 +786,8 @@ class MoboticSupervisor(Node):
             return False, self.battery_state.status_message or 'battery communication unavailable'
         if not self.battery_state.system_ready:
             return False, self.battery_state.status_message or 'battery system not ready'
+        if getattr(self.battery_state, 'faulted_batteries', []):
+            return False, 'battery reports an active fault'
         if not self.battery_state.high_voltage_connected:
             return False, 'battery high voltage is not connected'
         if (
@@ -724,7 +796,7 @@ class MoboticSupervisor(Node):
             or self.battery_state.minimum_percentage < self.minimum_battery_percentage
         ):
             return False, 'battery state of charge invalid or below enable threshold'
-        if getattr(self, 'fault_codes', set()) or getattr(self, 'reset_started_at', None) is not None:
+        if not recovering and (getattr(self, 'fault_codes', set()) or getattr(self, 'reset_started_at', None) is not None):
             return False, 'system fault/reset inhibits enable'
         operator = getattr(self, 'manual_state', None)
         if getattr(self, 'require_operator_interlock', False) and (
@@ -737,21 +809,21 @@ class MoboticSupervisor(Node):
         if self.wheel_status is not None:
             if not self._message_fresh(self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now):
                 return False, 'driver status stale'
-            if not self._requires_safety_telemetry():
-                names = [m.name for m in self.wheel_status.modules]
-                if len(names) != len(self.expected_module_names) or set(names) != set(self.expected_module_names):
-                    return False, 'wheel-module status does not match configured modules'
-                if any(not m.feedback_fresh for m in self.wheel_status.modules):
-                    return False, 'driver feedback stale or missing'
-                if any(getattr(m, 'sto_state_known', False) and m.sto_active
-                       for m in self.wheel_status.modules):
-                    return False, 'safe torque off active in drive feedback'
-            if any(not getattr(m, 'initialized', True) or not getattr(m, 'position_valid', True)
-                   or m.error_code != 0 for m in self.wheel_status.modules):
-                return False, 'driver initialization/position/fault prevents enable'
+            names = [m.name for m in self.wheel_status.modules]
+            if len(names) != len(self.expected_module_names) or set(names) != set(self.expected_module_names):
+                return False, 'wheel-module status does not match configured modules'
+            if any(getattr(m, 'sto_state_known', False) and m.sto_active for m in self.wheel_status.modules):
+                return False, 'safe torque off active in drive feedback'
+            if any(getattr(m, 'startup_failed', False) for m in self.wheel_status.modules):
+                return False, 'driver startup failed; investigate and restart driver'
+            # Enable authorizes initialization and acquisition. Motion feedback
+            # can become available only after the controllers are enabled.
+            if not allow_drive_faults and any(getattr(m, 'startup_complete', True) and m.error_code != 0
+                   for m in self.wheel_status.modules):
+                return False, 'driver fault prevents enable'
         else:
             return False, 'waiting for passive driver status'
-        return True, 'safety, battery and disabled-driver initialization ready'
+        return True, 'external readiness permits drive initialization and enable'
 
     def _base_gate(self, now):
         enable_ready, reason = self._enable_gate(now)
@@ -770,6 +842,10 @@ class MoboticSupervisor(Node):
             return False, 'wheel-module status does not match configured modules'
         for name in self.expected_module_names:
             module = modules[name]
+            if not getattr(module, 'startup_complete', True):
+                return False, f'wheel module {name} startup not complete'
+            if not getattr(module, 'initialized', True) or not getattr(module, 'position_valid', True):
+                return False, f'wheel module {name} initialization/position not ready'
             if not module.feedback_fresh:
                 return False, f'wheel module {name} feedback stale or missing'
             if not module.enabled:
@@ -779,19 +855,17 @@ class MoboticSupervisor(Node):
         return True, 'hardware ready'
 
     def _motion_hardware_gate(self, now):
+        base_ready, reason = self._base_gate(now)
+        if not base_ready:
+            return False, reason
         for name in getattr(self, 'required_health_sources', []):
             message, received = self.component_health.get(name, (None, None))
             if not self._message_fresh(message, received, self.health_timeout, now) or not message.monitoring_valid or message.fault_active:
                 return False, 'required component health unavailable: ' + name
-        base_ready, reason = self._base_gate(now)
-        if not base_ready:
-            return False, reason
 
         if self.selected_mode == VehicleModeState.AUTO_DIRECT:
             if self._requires_safety_telemetry() and (
-                self.safety_state.warning_field_active
-                or self._io_warning_active()
-                or self.safety_state.safety_override_active
+                self.safety_state.safety_override_active
             ):
                 return False, 'autonomous direct mode inhibited by reduced-speed safety state'
             if not self._message_fresh(
@@ -907,11 +981,6 @@ class MoboticSupervisor(Node):
         if not self._requires_safety_telemetry():
             return 1.0
         scale = 1.0
-        if (
-            self.safety_state is not None
-            and self.safety_state.warning_field_active
-        ) or self._io_warning_active():
-            scale = min(scale, self.warning_speed_scale)
         if self.safety_state is not None and self.safety_state.safety_override_active:
             scale = min(scale, self.override_speed_scale)
         return scale
@@ -928,23 +997,29 @@ class MoboticSupervisor(Node):
             return
 
         scale = self._speed_scale()
+        linear_limit = self.max_velocity_linear * scale
+        angular_limit = self.max_velocity_angular * scale
+        if self._warning_active():
+            linear_limit = min(linear_limit, self.warning_speed_limit)
+            angular_limit = min(angular_limit, self.max_velocity_angular * min(
+                1.0, self.warning_speed_limit / self.max_velocity_linear))
         target_x, target_y = clamp_planar(
             source.twist.linear.x,
             source.twist.linear.y,
-            self.max_velocity_linear * scale,
+            linear_limit,
         )
         target_angular = clamp(
             source.twist.angular.z,
-            -self.max_velocity_angular * scale,
-            self.max_velocity_angular * scale,
+            -angular_limit,
+            angular_limit,
         )
         dt = max((now - self.last_control_time).nanoseconds * 1.0e-9, 0.0)
-        output_x = slew(
-            target_x, self.last_output[0], self.max_acceleration_linear * scale * dt
-        )
-        output_y = slew(
-            target_y, self.last_output[1], self.max_acceleration_linear * scale * dt
-        )
+        delta_x, delta_y = clamp_planar(target_x - self.last_output[0], target_y - self.last_output[1],
+                                       self.max_acceleration_linear * scale * dt)
+        output_x = self.last_output[0] + delta_x
+        output_y = self.last_output[1] + delta_y
+        # The yellow limit applies to the target. Clamping the output to that
+        # limit here would replace the requested deceleration ramp with a step.
         output.twist.linear.x, output.twist.linear.y = clamp_planar(
             output_x,
             output_y,
@@ -993,6 +1068,20 @@ class MoboticSupervisor(Node):
                     self.max_direct_traction_current,
                 )
         output.effort = []
+        if self._warning_active():
+            traction = [indices[name] for name in self.expected_traction_joint_names]
+            peak = max(abs(output.velocity[i]) for i in traction)
+            limit = self.warning_speed_limit / self.wheel_radius
+            ratio = min(1.0, limit / peak) if peak else 1.0
+            targets = [output.velocity[i] * ratio for i in traction]
+            previous = [self.last_final.get(name, 0.0) for name in self.expected_module_names]
+            dt = max((now - self.last_control_time).nanoseconds * 1e-9, 0.0)
+            delta = max(abs(target - old) for target, old in zip(targets, previous))
+            step = self.max_acceleration_linear / self.wheel_radius * dt
+            fraction = min(1.0, step / delta) if delta else 1.0
+            for i, old, target in zip(traction, previous, targets):
+                output.velocity[i] = old + (target - old) * fraction
+        self.last_control_time = now
         self._emit_final(output, source.header.stamp, now, WheelModuleCommandArray.MOTION)
 
     def _publish_direct_stop(self, now):
@@ -1050,9 +1139,7 @@ class MoboticSupervisor(Node):
                                 and len(module_names) == len(self.expected_module_names)
                                 and set(module_names) == set(self.expected_module_names))
         state.drives_enabled = state.readiness_known and all(m.enabled for m in self.wheel_status.modules)
-        state.ready_to_drive = state.readiness_known and all(
-            getattr(m, 'initialized', True) and getattr(m, 'position_valid', True)
-            and m.feedback_fresh and m.error_code == 0 for m in self.wheel_status.modules)
+        state.ready_to_drive = state.readiness_known and self._motion_hardware_gate(now)[0]
         monitors_known = all(self._message_fresh(message, received, timeout, now)
                              for message, received, timeout, _ in self._safety_monitors() + (
                                  (self.battery_state, self.battery_received, self.battery_timeout, 'BMS_MONITOR_LOST'),))
@@ -1094,6 +1181,9 @@ class MoboticSupervisor(Node):
         elapsed = (now - self.transition_started_at).nanoseconds * 1.0e-9
         if elapsed >= self.transition_timeout:
             self.transition_timed_out = True
+            # Latch in this cycle: a service request between control ticks must
+            # not restart a timed-out transition before explicit reset.
+            self.fault_codes.add('MODE_TRANSITION_TIMEOUT')
         hardware_ready, hardware_reason = self._base_gate(now)
         if self.transition_from_direct:
             # Autonomy owns its kinematics in this mode. Send only the direct
@@ -1110,7 +1200,7 @@ class MoboticSupervisor(Node):
         if self.transition_timed_out:
             self.transition_standstill_since = None
             self._publish_mode_state(
-                now, False, 'mode transition timed out: motion blocked; request mode again to retry'
+                now, False, 'mode transition timed out: motion blocked; reset faults before selecting a mode'
             )
             return
 
@@ -1155,10 +1245,21 @@ class MoboticSupervisor(Node):
         errors, _ = self._system_conditions(now)
         if not hasattr(self, 'fault_codes'):
             self.fault_codes = set()
-        if errors:
+        if errors and self._drive_startup_observed():
             self.fault_codes.update(errors)
         self._observe_reset(now, errors)
         enable_ready, _ = self._enable_gate(now)
+        # A reset may disable the only source of motion telemetry. Once every
+        # drive has acknowledged fault clearance, authorize zero-target enable
+        # to reacquire feedback before completing the reset transaction.
+        resetting = getattr(self, 'reset_started_at', None) is not None
+        reset_acknowledged = resetting and self._reset_acknowledged(now)
+        feedback_only_errors = all(code.startswith(('DRIVE_FEEDBACK_LOST:', 'POSITION_CONTINUITY_UNKNOWN:')) or
+                                   code in ('COMPONENT_HEALTH_LOST:kinematics', 'COMPONENT_HEALTH_LOST:odometry') for code in errors)
+        if reset_acknowledged and feedback_only_errors:
+            enable_ready, _ = self._reset_external_gate(now)
+        if enable_ready:
+            self.drive_startup_requested = True
         module_command = WheelModuleOperationCommand()
         module_command.header.stamp = now.to_msg()
         module_command.enable = enable_ready
@@ -1197,10 +1298,27 @@ class MoboticSupervisor(Node):
         if not preserve_stop:
             self.last_final = {}
 
+    def _drive_startup_observed(self):
+        return getattr(self, 'drive_startup_requested', False) or (
+            self.wheel_status is not None and any(
+                getattr(m, 'startup_pending', False) or getattr(m, 'startup_complete', True) or
+                getattr(m, 'startup_failed', False) for m in self.wheel_status.modules))
+
     def _system_conditions(self, now):
         errors = []
         started = getattr(self, 'started_at', now)
         grace = (now - started).nanoseconds < int(getattr(self, 'startup_grace', 10.0) * 1e9)
+        startup_waiting = self.wheel_status is None or any(
+            not getattr(m, 'startup_complete', True) for m in self.wheel_status.modules)
+        # Initial battery/operator/PLC discovery is a readiness wait, not a
+        # latched loss. Once enable has been requested, ordinary loss handling
+        # applies and the driver's own startup deadline also remains active.
+        grace = grace or not self._drive_startup_observed()
+        if not startup_waiting and getattr(self, 'drive_startup_completed_at', None) is None:
+            self.drive_startup_completed_at = now
+        completed_at = getattr(self, 'drive_startup_completed_at', None)
+        feedback_grace = startup_waiting or (completed_at is not None and
+            (now - completed_at).nanoseconds < int(self.wheel_status_timeout * 2 * 1e9))
         for message, received, timeout, code in self._safety_monitors() + (
                 (self.battery_state, self.battery_received, self.battery_timeout, 'BMS_MONITOR_LOST'),
                 (self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, 'DRIVER_MONITOR_LOST')):
@@ -1216,6 +1334,13 @@ class MoboticSupervisor(Node):
              or (safety.protective_stop_active and not safety.safety_override_active
                  and getattr(io, 'scanner_state_known', False))
              or (getattr(io, 'safety_enable_state_known', False) and not io.safety_enable_active)))
+        for name, (state, received) in self.scanner_states.items():
+            known = (self._message_fresh(state, received, self.safety_timeout, now)
+                     and state.communication_ok and state.protective_state_known and state.warning_state_known)
+            if not known and not grace:
+                errors.append('SCANNER_MONITOR_LOST:' + name)
+            if known and not state.protective_field_clear:
+                confirmed_stop = True
         if safety_fresh and not safety.communication_ok and not grace:
             errors.append('SAFETY_MONITOR_LOST')
         operator = getattr(self, 'manual_state', None)
@@ -1242,16 +1367,21 @@ class MoboticSupervisor(Node):
             if not grace and (len(names) != len(self.expected_module_names) or set(names) != set(self.expected_module_names)):
                 errors.append('DRIVER_STATUS_INVALID')
             for module in self.wheel_status.modules:
-                if module.error_code:
+                if getattr(module, 'startup_failed', False):
+                    errors.append('DRIVE_STARTUP_FAILED:' + module.name)
+                complete = getattr(module, 'startup_complete', True)
+                if complete and module.error_code:
                     errors.append('DRIVE_FAULT:' + module.name)
-                if not grace and (not module.feedback_fresh or not getattr(module, 'initialized', True)):
+                if complete and not grace and (not module.feedback_fresh or not getattr(module, 'initialized', True)):
                     errors.append('DRIVE_FEEDBACK_LOST:' + module.name)
-                if not grace and not getattr(module, 'position_valid', True):
+                if complete and not grace and not getattr(module, 'position_valid', True):
                     errors.append('POSITION_CONTINUITY_UNKNOWN:' + module.name)
         if self.transition_timed_out and getattr(self, 'reset_started_at', None) is None:
             errors.append('MODE_TRANSITION_TIMEOUT')
         for name in getattr(self, 'required_health_sources', []):
             message, received = self.component_health.get(name, (None, None))
+            if name in ('kinematics', 'odometry') and feedback_grace:
+                continue  # Both depend on the first enabled-drive JointState.
             if (name == 'host' or not grace) and (not self._message_fresh(message, received, self.health_timeout, now)
                     or not message.monitoring_valid or message.fault_active):
                 errors.append('COMPONENT_HEALTH_LOST:' + name)
@@ -1267,9 +1397,69 @@ class MoboticSupervisor(Node):
             if message.component_id in self.required_health_sources:
                 self.component_health[message.component_id] = (message, now)
 
+    def _reset_external_gate(self, now, allow_drive_faults=False):
+        ready, reason = self._enable_gate(now, recovering=True, allow_drive_faults=allow_drive_faults)
+        if not ready:
+            return False, reason
+        operator = getattr(self, 'manual_state', None)
+        operator_fresh = self._message_fresh(operator, self.manual_state_received, self.manual_timeout, now)
+        if ((getattr(self, 'require_operator_interlock', False) or
+             (operator_fresh and operator.connected)) and
+                not (operator_fresh and operator.connected and operator.controls_neutral)):
+            return False, 'fresh neutral operator controls required for reset recovery'
+        return True, 'reset external interlocks ready'
+
+    def _reset_acknowledged(self, now):
+        started = getattr(self, 'reset_started_at', None)
+        return (started is not None and self.wheel_status is not None and
+                self._message_fresh(self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now) and
+                Time.from_msg(self.wheel_status.header.stamp).nanoseconds > started.nanoseconds and
+                len(self.wheel_status.modules) == len(self.expected_module_names) and
+                {m.name for m in self.wheel_status.modules} == set(self.expected_module_names) and
+                all(getattr(m, 'reset_id', 0) == self.reset_id and getattr(m, 'reset_acknowledged', False)
+                    for m in self.wheel_status.modules))
+
+    def _reset_disabled_gate(self, now):
+        # A missing motion sample is not standstill. Fresh individual native
+        # disabled states allow only the non-motion fault-clear transaction.
+        if not self._message_fresh(self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now):
+            return False
+        modules = self.wheel_status.modules
+        if (len(modules) != len(self.expected_module_names) or
+                {m.name for m in modules} != set(self.expected_module_names)):
+            return False
+        bindings = dict(zip(self.expected_module_names, zip(
+            self.expected_steering_joint_names, self.expected_traction_joint_names)))
+        for module in modules:
+            if (module.enabled or not module.initialized or not getattr(module, 'startup_complete', False) or
+                    getattr(module, 'startup_pending', False) or getattr(module, 'startup_failed', False)):
+                return False
+            for role, name in zip(('steering', 'traction'), bindings[module.name]):
+                drive = getattr(module, role, None)
+                if (drive is None or drive.name != name or not drive.status_known or
+                        not drive.device_state_known or drive.enabled or
+                        not self._stamp_valid(drive.status_stamp, self.wheel_status_timeout, now) or
+                        Time.from_msg(drive.status_stamp).nanoseconds > now.nanoseconds):
+                    return False
+        return True
+
+    def _reset_observed_motion(self, now):
+        # Reject known movement even if another required motion channel is absent.
+        if (self._message_fresh(self.joint_state, self.joint_state_received, self.wheel_status_timeout, now) and
+                any(not math.isfinite(v) or abs(v) > self.standstill_joint_velocity for v in self.joint_state.velocity)):
+            return True
+        if self._message_fresh(self.measured_velocity, self.measured_velocity_received, self.velocity_feedback_timeout, now):
+            velocity = self.measured_velocity.twist
+            return (not self._finite_twist(self.measured_velocity) or
+                    math.hypot(velocity.linear.x, velocity.linear.y) > self.standstill_linear_velocity or
+                    abs(velocity.angular.z) > self.standstill_angular_velocity)
+        return False
+
     def _observe_reset(self, now, errors):
+        started = getattr(self, 'reset_started_at', None)
         proof_times_valid = (self.joint_state is not None and self.measured_velocity is not None and
-                             all(0 < Time.from_msg(m.header.stamp).nanoseconds <= now.nanoseconds
+                             all((started.nanoseconds if started is not None else 0) <
+                                 Time.from_msg(m.header.stamp).nanoseconds <= now.nanoseconds
                                  for m in (self.joint_state, self.measured_velocity)))
         stationary = (proof_times_valid and self._joint_feedback_valid(self.joint_state)
                       and self._finite_twist(self.measured_velocity)
@@ -1283,23 +1473,33 @@ class MoboticSupervisor(Node):
             self.standstill_since = None
         elif getattr(self, 'standstill_since', None) is None:
             self.standstill_since = now
-        started = getattr(self, 'reset_started_at', None)
         if started is None:
             return
-        acknowledged = (self.wheel_status is not None and self._message_fresh(
-            self.wheel_status, self.wheel_status_received, self.wheel_status_timeout, now)
-            and Time.from_msg(self.wheel_status.header.stamp).nanoseconds > started.nanoseconds
-            and all(m.reset_id == self.reset_id and m.reset_acknowledged for m in self.wheel_status.modules))
-        if acknowledged and not errors and stationary:
+        elapsed = (now - started).nanoseconds
+        proof_ns = min(Time.from_msg(m.header.stamp).nanoseconds for m in
+                       (self.joint_state, self.measured_velocity)) if stationary else 0
+        sustained = (stationary and self.standstill_since is not None and
+                     proof_ns - self.standstill_since.nanoseconds >= int(self.transition_duration * 1e9))
+        acknowledged = self._reset_acknowledged(now)
+        modules_ready = acknowledged and all(
+            m.enabled and m.initialized and m.position_valid and m.feedback_fresh and not m.error_code
+            for m in self.wheel_status.modules)
+        if elapsed < 0 or elapsed >= int(self.reset_timeout * 1e9):
+            self.reset_started_at = None
+            self.reset_result = 'reset timeout'
+            self.fault_codes.add('RESET_TIMEOUT')
+        elif modules_ready and not errors and sustained and self._reset_external_gate(now)[0]:
             self.fault_codes.clear()
             self.reset_started_at = None
             self.reset_result = 'completed; fresh command and manual rearm required'
             self.transition_timed_out = self.transition_in_progress = False
             self._invalidate_motion_commands(now)
-        elif (now - started).nanoseconds > int(self.reset_timeout * 1e9):
-            self.reset_started_at = None
-            self.reset_result = 'reset timeout'
-            self.fault_codes.add('RESET_TIMEOUT')
+        elif not acknowledged:
+            self.reset_result = 'clearing faults with motion blocked; waiting for fresh drive acknowledgements'
+        elif not sustained or not modules_ready:
+            self.reset_result = 'zero-target recovery; waiting for enabled feedback and sustained standstill'
+        else:
+            self.reset_result = 'reset recovery blocked by current system interlocks'
 
     def _reset_errors_service(self, request, response):
         del request
@@ -1307,14 +1507,22 @@ class MoboticSupervisor(Node):
         self._observe_reset(now, self._system_conditions(now)[0])
         proof_ns = min(Time.from_msg(m.header.stamp).nanoseconds for m in
                        (self.joint_state, self.measured_velocity)) if self.standstill_since is not None else 0
+        stationary = (self.standstill_since is not None and
+                      proof_ns - self.standstill_since.nanoseconds >= int(self.transition_duration * 1e9))
+        interlocks_ready, interlock_reason = self._reset_external_gate(now, allow_drive_faults=True)
         if self.reset_started_at is not None or (self.transition_in_progress and not self.transition_timed_out):
             response.success, response.message = False, 'reset/transition already active'
-        elif self.standstill_since is None or proof_ns - self.standstill_since.nanoseconds < int(self.transition_duration * 1e9):
-            response.success, response.message = False, 'fresh sustained measured standstill required'
+        elif not interlocks_ready:
+            response.success, response.message = False, interlock_reason
+        elif self._reset_observed_motion(now):
+            response.success, response.message = False, 'measured movement prevents reset recovery'
+        elif not stationary and not self._reset_disabled_gate(now):
+            response.success, response.message = False, 'fresh sustained measured standstill or confirmed disabled drives required'
         else:
             self.reset_id += 1
             self.transition_in_progress = False
             self.reset_started_at = now
+            self.standstill_since = None
             self.reset_result = 'accepted; recovery not yet verified'
             self._invalidate_motion_commands(now)
             response.success, response.message = True, self.reset_result

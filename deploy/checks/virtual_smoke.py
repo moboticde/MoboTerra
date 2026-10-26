@@ -9,7 +9,7 @@ import time
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
-from mobotic_interfaces.msg import WheelModuleStatusArray
+from mobotic_interfaces.msg import WheelModuleStatusArray, VehicleModeState, OperatorState, WheelModuleCommandArray
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from mobotic_config.configuration import Configuration
@@ -37,13 +37,32 @@ def main():
         rclpy.init()
         node = rclpy.create_node('installation_smoke_check')
         samples = {}
+        received = {}
+        def receive(key, msg):
+            samples[key] = msg
+            received[key] = time.monotonic()
         handles = [node.create_subscription(kind, topic,
-                   lambda msg, key=key: samples.update({key: msg}), 10)
+                   lambda msg, key=key: receive(key, msg), 10)
                    for kind, topic, key in (
                        (JointState, '/moboterra/joint_states', 'joints'),
                        (Odometry, '/moboterra/vehicle/odom', 'odom'),
                        (WheelModuleStatusArray, '/moboterra/wheel_modules/status', 'modules'),
-                       (DiagnosticArray, '/moboterra/diagnostics', 'diagnostics'))]
+                       (DiagnosticArray, '/moboterra/diagnostics', 'diagnostics'),
+                       (VehicleModeState, '/moboterra/vehicle/mode', 'mode'),
+                       (WheelModuleCommandArray, '/moboterra/wheel_modules/command', 'commands'))]
+        # This check launches only the virtual stack and no physical operator
+        # receiver. Supply a clearly identified neutral virtual operator so the
+        # supervisor must actually initialize/enable, without commanding motion.
+        operator = node.create_publisher(OperatorState, '/moboterra/operator/state', 1)
+        def publish_neutral_operator():
+            msg = OperatorState()
+            msg.header.stamp = node.get_clock().now().to_msg()
+            msg.source_id = 'installation_smoke_virtual_operator'
+            msg.connected = msg.estop_state_known = msg.controls_neutral = True
+            msg.command_active = msg.estop_pressed = False
+            msg.status_message = 'virtual smoke check: neutral, no motion source'
+            operator.publish(msg)
+        operator_timer = node.create_timer(0.05, publish_neutral_operator)
         try:
             deadline = time.monotonic() + 60
             ready_since = None
@@ -53,7 +72,9 @@ def main():
                 rclpy.spin_once(node, timeout_sec=0.2)
                 names = {name for name, namespace in node.get_node_names_and_namespaces()
                          if namespace == '/moboterra'}
-                ready = expected <= names and len(samples) == 4
+                ready = (expected <= names and {'joints', 'odom', 'modules', 'diagnostics', 'mode'} <= samples.keys()
+                         and all(time.monotonic() - received[key] <= 0.5
+                                 for key in ('joints', 'odom', 'modules', 'mode')))
                 if ready:
                     if (len(samples['joints'].name) != len(expected_joints)
                             or set(samples['joints'].name) != expected_joints):
@@ -63,6 +84,17 @@ def main():
                         raise RuntimeError('Expected status for every configured module')
                     if not samples['diagnostics'].status:
                         raise RuntimeError('Empty diagnostic publication')
+                    mode = samples['mode']
+                    ready = (not mode.error_active and not mode.safety_stop_active and not mode.reset_in_progress
+                             and mode.readiness_known and mode.drives_enabled and mode.ready_to_drive
+                             and all(m.startup_complete and m.initialized and m.enabled and m.position_valid
+                                     and m.feedback_fresh and m.error_code == 0 for m in samples['modules'].modules))
+                    if 'commands' in samples and any(m.traction_velocity != 0 or m.steering_profile_velocity != 0
+                                                     for m in samples['commands'].modules):
+                        raise RuntimeError('Unexpected motion command during neutral virtual readiness check')
+                    if not ready:
+                        ready_since = None
+                        continue
                     ready_since = ready_since or time.monotonic()
                     if time.monotonic() - ready_since >= 3:
                         break
@@ -75,7 +107,7 @@ def main():
             if healthcheck.exists():
                 subprocess.run([str(healthcheck)], check=True, timeout=15)
             print(f'PASS: virtual nodes, {len(expected_joints)} joints, '
-                  f'{len(expected_modules)} wheel modules, odometry and diagnostics',
+                  f'{len(expected_modules)} enabled wheel modules, supervisor readiness, odometry and diagnostics',
                   flush=True)
         except Exception:
             log.seek(0)

@@ -289,6 +289,16 @@ class RemdeviceControlTest(unittest.TestCase):
         self.pair(); self.pair(buttons=1); self.pair(buttons=1); self.pair()
         self.assertEqual([m.requested_mode for m in self.node.mode_publisher.messages], [1, 0])
 
+    def test_confirmed_active_low_u5_selects_manual_high_and_autonomous_low(self):
+        mapping = synthetic_mapping()
+        mapping['buttons']['mode'] = {'signal': 'U5', 'active_high': False}
+        self.node.mapping = RemdeviceMapping(mapping)
+        self.pair(up=0)  # Startup primes even when the switch indicates auto.
+        self.assertFalse(self.node.mode_publisher.messages)
+        self.pair(up=16)  # Raw U5 high -> logical 0 -> MANUAL.
+        self.pair(up=0)   # Raw U5 low -> logical 1 -> AUTONOMOUS.
+        self.assertEqual([m.requested_mode for m in self.node.mode_publisher.messages], [0, 1])
+
     def test_nmt_start_is_targeted_rate_limited_and_only_auto_when_verified(self):
         self.state(); self.state()
         self.assertEqual(len(self.node.can_publisher.messages), 1)

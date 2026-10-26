@@ -428,6 +428,7 @@ class ManualControlTest(unittest.TestCase):
         state = self.node.state_publisher.messages[-1]
         self.assertTrue(state.connected)
         self.assertFalse(state.command_active)
+        self.assertEqual(state.status_message, 'return controls to neutral to rearm')
         self.assertEqual(state.header.stamp, old_stamp)
         self.assertEqual(self.node.command, [0.0, 0.0, 0.0])
         self.now = Time(10.21)

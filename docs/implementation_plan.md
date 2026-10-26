@@ -2,10 +2,13 @@
 
 Date: 14 October 2026. Revised after the customer-requirement audit and topic-naming clarification. Audience: MoboTerra development and commissioning team.
 
-Startup clarification, 21 October 2026: [drive startup and B2 recovery](drive_startup.md)
-supersedes this historical plan's external retained-reference enable prerequisite
-and physical PDO-configuration startup. Physical startup now adopts current
-controller state over SDO, preserves its project and enables after readiness.
+Startup clarification, 22 October 2026: [drive startup and B2 recovery](drive_startup.md)
+supersedes the startup and reset descriptions in this historical plan. Supervisor readiness
+now authorizes EC-style controller initialization and zero-target enable before
+motion feedback is required. Fresh complete feedback then permits driving.
+Runtime recovery now admits non-motion fault clearing from fresh native disabled
+states, reacquires feedback through guarded zero-target enable and requires new
+sustained standstill before completing reset.
 Cross-power-cycle retained-reference recovery remains separate work.
 
 ## Implementation status on 14 October 2026

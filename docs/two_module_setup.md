@@ -17,8 +17,12 @@ it does not start the FlexiSoft TCP bridge or require a FlexiSoft gateway addres
 The safety monitor and scanner safety adapter remain running for observation.
 The supervisor does not require Siemens Ethernet messages, `safety/state`, or
 `safety/io_state` for this profile. Those topics do not control readiness, fault
-latching, speed scaling, or direct-mode selection. Missing scanner, E-stop and
-safety-enable telemetry remains unknown; ROS does not fabricate healthy signals.
+latching, speed scaling, or direct-mode selection. Both scanners instead supply
+their evaluated field status directly over Ethernet. Fresh, known status from
+both scanners is required for motion: red commands zero immediately; yellow
+ramps to a 0.3 m/s cap; clear removes that scanner cap. Missing field data blocks
+motion. Missing physical E-stop and safety-enable telemetry remains unknown;
+ROS does not fabricate healthy signals.
 The physical Siemens/scanner/STO chain controls torque independently. A known
 active STO reported by a configured drive still inhibits software enable.
 Battery readiness, drive feedback/faults, operator interlocks, command timeouts,
@@ -51,6 +55,9 @@ profile = read_yaml('/etc/moboterra/platform.yaml')
 selected = ['front_right', 'rear_left']
 profile['modules'] = [m for m in profile['modules'] if m['name'] in selected]
 profile['can']['drives']['bitrate'] = 250000
+reference = read_yaml('src/mobotic_config/config/platform-front-right-rear-left.yaml')
+profile['can']['master_node_id'] = reference['can']['master_node_id']
+profile['operator'].update(source='remdevice', mapping=reference['operator']['mapping'])
 profile['safety'] = {'source': 'hardwired_sto'}  # This Siemens/STO chassis only.
 assert [m['name'] for m in profile['modules']] == selected
 validate_platform(profile)
@@ -137,13 +144,14 @@ profile continues to require eight joints and four modules.
 
 ## Hardware deployment status
 
-Physical startup reads the installed controller state and current positions,
-then enables drives when readiness checks pass. B2 requests fault reset and
-re-enable; it requires neutral controls and measured standstill. Physical mode
-does not set `virtual_position_source` or rewrite the controller project. See
-[drive startup](drive_startup.md). The bundled reference profile starts with an
-empty operator mapping; the local candidate can reuse the captured assignment
-above. Physical stop/recovery behavior remains untested without hardware.
+Physical startup initializes controller modes/PDOs/ramps and enables with zero
+targets after external supervisor readiness. It acquires motion feedback after
+enable and requires it before driving. B2 requests fault reset and re-enable;
+it requires neutral controls and measured standstill. Physical mode does not set
+`virtual_position_source`, zero encoder reference or save controller settings. See
+[drive startup](drive_startup.md). The bundled two-module profile includes the
+captured PAIL assignment confirmed by the user: receiver 10, master 11, B1/SP3 and
+B2/SP4. Physical stop/recovery behavior remains untested without hardware.
 
 To stage a reviewed profile and a new hardware release without starting drives,
 stop the hardware service, back up the existing profile and install the candidate:

@@ -39,15 +39,17 @@ Wheel odometry does publish `odom -> base_link` on the namespaced `tf` topic.
 The shared [description](../mobotic_description/README.md) starts by default,
 including joint/static TF and CAD-envelope corner frames. Use start_description:=false
 if an external owner supplies it; do not start two robot_state_publishers.
-Physical startup reads existing controller state/positions without rewriting
-controller settings, then enables when readiness checks pass. B2 requests reset
-and re-enable. See [drive startup](../../docs/drive_startup.md); physical acceptance
-remains outstanding without hardware.
+Physical startup waits for supervisor readiness, initializes modes/PDOs/ramps
+and enables with zero targets before requiring motion feedback. Actual fresh
+feedback then permits motion. B2 requests reset and zero-target re-enable.
+See [drive startup](../../docs/drive_startup.md); physical acceptance remains
+outstanding without hardware.
 
 Required external packages: `ros2_socketcan`, `joy`, `sick_safetyscanners2`.
 Bringup does not configure the OS CAN interfaces or PC network interface.
-Match the reference wiring: drives use `can0`, battery telemetry uses `can1`,
-both at 500 kbit/s; configure the battery adapter in listen-only mode in the OS.
+Match the selected profile: drives use `can0`, battery telemetry uses `can1`.
+The two-module profile uses 250/500 kbit/s respectively; the four-module reference
+uses 500/500 kbit/s. Configure the battery adapter in listen-only mode in the OS.
 Drive frames remain on `can_rx`/`can_tx`. Battery frames are isolated on
 `battery_can/can_rx`; the battery monitor remaps its input there. No battery
 sender is launched, and this does not implement operating-consent/HV control.
@@ -65,6 +67,13 @@ CAN acquisition timestamps. This changes diagnostics reception, not drive enable
 fault reset, CAN bitrate or automatic bus recovery.
 
 ## Shared configuration
+
+Use `ros2 run mobotic_bringup check_readiness --platform-config /etc/moboterra/platform.yaml`
+for a read-only report of live startup/feedback, battery and operator blockers.
+Add `--offline` to validate configuration without ROS or CAN access. See the
+[software readiness review](../../docs/software_readiness.md) for scope and
+target-machine verification. `ready_to_drive` includes all hardware/health
+prerequisites; it does not require an active motion command.
 
 All bundled YAML now belongs to [mobotic_config](../mobotic_config/README.md).
 `platform_config` selects the physical profile for every component; use the same
@@ -134,7 +143,13 @@ Each scanner exposes `scanner/<location>/scan` (`sensor_msgs/msg/LaserScan`) and
 `scanner/<location>/raw_data` (`sick_safetyscanners2_interfaces/msg/RawMicroScanData`),
 where locations are `front_left` and `rear_right`. Raw data is the vendor's decoded
 ROS message, not a PCAP/network-byte stream. Measurement, intrusion and application
-I/O data are enabled in `mobotic_config/config/scanners.yaml`. Scanner acquisition still needs verification
+I/O data are enabled in `mobotic_config/config/scanners.yaml`. The scanner adapter
+uses evaluated output paths in raw data to publish `scanner/<location>/safety_zone_status`.
+Both streams gate supervisor motion: red commands zero immediately, yellow ramps
+to a 0.3 m/s cap, and clear fields remove that cap. Unknown/stale status blocks
+motion. `scanner/<location>/field_data` exposes configured field geometry for
+inspection; geometry is not re-evaluated in ROS. Hardware uses scanner Ethernet
+telemetry; virtual bringup selects mock safety I/O explicitly. Scanner acquisition still needs verification
 on the actual network; no raw-data recording or scanner extrinsic TF is added.
 
 ```bash

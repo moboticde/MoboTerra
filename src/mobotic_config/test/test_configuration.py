@@ -28,7 +28,11 @@ class ConfigurationTest(unittest.TestCase):
             {'verified': False, 'node_id': 9, 'axes': {}, 'buttons': {}}, sort_keys=True)
         baseline['supervisor']['require_operator_interlock'] = True
         baseline['supervisor']['safety_source'] = 'flexisoft'
+        baseline['supervisor'].pop('warning_speed_scale')
+        baseline['supervisor']['warning_speed_limit'] = 0.3
+        baseline['supervisor']['wheel_radius'] = 0.325
         baseline['driver']['physical_sample_skew_budget'] = 0.05
+        baseline['driver']['startup_timeout'] = 15.0
         baseline['manual'].update(axis_speed_sign=1, axis_crab_sign=1, axis_steer_sign=1)
         for component, values in baseline.items():
             self.assertEqual(self.cfg.parameters(component), values, component)
@@ -40,6 +44,31 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(drive['can_node_id'], p['drives.can_node_ids'][index])
             self.assertEqual(drive['encoder_resolution'], p['drives.resolutions'][index])
             self.assertEqual(drive['gear_ratio'], p['drives.gear_ratios'][index])
+
+    def test_confirmed_two_module_pail_assignments_and_distinct_master(self):
+        cfg = Configuration(self.cfg.path.with_name('platform-front-right-rear-left.yaml'))
+        mapping = cfg.platform['operator']['mapping']
+        self.assertTrue(mapping['verified'])
+        self.assertEqual(mapping['node_id'], 10)
+        self.assertEqual(int(cfg.platform['can']['master_node_id'], 0), 11)
+        self.assertEqual([mapping['axes'][role]['channel'] for role in ('speed', 'steer', 'crab')], [3, 2, 4])
+        self.assertEqual(mapping['buttons']['boost']['signal'], 'SP3')
+        self.assertEqual(mapping['buttons']['reset']['signal'], 'SP4')
+        self.assertTrue(cfg.parameters('supervisor')['require_operator_interlock'])
+
+    def test_invalid_runtime_timing_and_speed_scale_fail_before_launch(self):
+        for component, override in (
+                ('driver', {'feedback_request_period': .3}),
+                ('driver', {'fault_feedback_timeout': .5}),
+                ('supervisor', {'control_period': .2}),
+                ('supervisor', {'warning_speed_limit': 0}),
+                ('supervisor', {'startup_grace': 0}),
+                ('supervisor', {'mode_transition_timeout': .1}),
+                ('manual', {'publish_period': 1.0})):
+            cfg = Configuration()
+            cfg.apply_overrides(component, override)
+            with self.subTest(component=component, override=override), self.assertRaises(ConfigurationError):
+                cfg._validate_policy()
 
     def test_two_module_profile_propagates_without_omitted_drives(self):
         path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
@@ -58,10 +87,16 @@ class ConfigurationTest(unittest.TestCase):
         original = copy.deepcopy(self.cfg.platform)
         original['modules'] = [m for m in original['modules'] if m['name'] in names]
         original['can']['drives']['bitrate'] = 250000
+        original['can']['master_node_id'] = '0x0B'
+        original['operator'] = copy.deepcopy(cfg.platform['operator'])
         original['safety'] = {'source': 'hardwired_sto'}
         original['commissioning_pending'] = [item.replace(
             'Confirm FlexiSoft/ELMO independent STO and enable bit mapping.',
             'Verify Siemens hardwired STO chain and fresh per-module drive STO feedback.')
+            for item in original['commissioning_pending']]
+        original['commissioning_pending'] = [item.replace(
+            'Capture PAIL controls and verify axis calibration, RP1/B1/B2/STOP and radio-loss behavior.',
+            'Verify PAIL STOP/radio-loss and neutral/rearm behavior on the installed robot.')
             for item in original['commissioning_pending']]
         self.assertEqual(cfg.platform, original)
         for stack in ('hardware', 'virtual'):

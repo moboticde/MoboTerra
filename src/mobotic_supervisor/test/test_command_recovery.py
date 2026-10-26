@@ -189,12 +189,12 @@ class CommandRecoveryTest(unittest.TestCase):
                 self.assertIsNone(self.node.autonomy_command)
                 self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
 
-    def test_direct_reduced_speed_recovery_requires_new_command(self):
+    def test_direct_safety_override_recovery_requires_new_command(self):
         self.node.selected_mode = harness.MODES.AUTO_DIRECT
         self.node._autonomy_joint_callback(self.joints())
-        self.node.safety_state.warning_field_active = True
+        self.node.safety_state.safety_override_active = True
         self.node._control()
-        self.node.safety_state.warning_field_active = False
+        self.node.safety_state.safety_override_active = False
         self.advance(0.02)
         self.node._control()
         self.assertEqual(self.node.direct_command_publisher.messages[-1].velocity, [0.0] * 4)

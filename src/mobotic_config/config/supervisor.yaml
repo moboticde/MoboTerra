@@ -19,5 +19,5 @@
     battery_timeout: 0.6
     wheel_status_timeout: 0.3
     minimum_battery_percentage: 0.2
-    warning_speed_scale: 0.3
+    warning_speed_limit: 0.3  # m/s, absolute planar/individual-wheel limit
     override_speed_scale: 0.2

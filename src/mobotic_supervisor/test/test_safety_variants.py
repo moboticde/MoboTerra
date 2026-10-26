@@ -64,7 +64,8 @@ class SafetyVariantsTest(unittest.TestCase):
                              ('position_valid', False), ('error_code', 1)):
             original = getattr(node.wheel_status.modules[0], field)
             setattr(node.wheel_status.modules[0], field, value)
-            self.assertFalse(node._enable_gate(self.now)[0], field)
+            self.assertEqual(node._enable_gate(self.now)[0], field != 'error_code', field)
+            self.assertFalse(node._base_gate(self.now)[0], field)
             setattr(node.wheel_status.modules[0], field, original)
         original = copy.deepcopy(node.wheel_status.modules)
         node.wheel_status.modules.pop()

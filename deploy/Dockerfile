@@ -25,7 +25,8 @@ RUN source /opt/ros/jazzy/setup.bash \
     && colcon test --merge-install --python-testing pytest --event-handlers console_direct+ \
     && colcon test-result --verbose \
     && ros2 run mobotic_config check_config \
-    && python3 deploy/checks/virtual_smoke.py
+    && python3 deploy/checks/virtual_smoke.py \
+    && python3 deploy/checks/virtual_smoke.py --platform-config src/mobotic_config/config/platform-front-right-rear-left.yaml
 
 # Common runtime configuration precedes per-image dependencies and metadata.
 # New release timestamps do not force GUI/CAD downloads on a retry.

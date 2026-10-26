@@ -16,6 +16,30 @@ int main()
 {
   try
   {
+    for (bool transitioning : {false, true})
+    {
+      for (bool permitted : {false, true})
+      {
+        for (bool new_epoch : {false, true})
+        {
+          check(Gate::immediateStop(permitted, transitioning, new_epoch, true, false, false),
+                "red field must stop even during a controlled transition");
+          check(Gate::immediateStop(permitted, transitioning, new_epoch, false, true, false),
+                "errors must stop even during a controlled transition");
+          check(Gate::immediateStop(permitted, transitioning, new_epoch, false, false, true),
+                "reset keeps motion stopped during transitions too");
+        }
+      }
+    }
+    check(!Gate::immediateStop(false, true, true, false, false, false),
+          "ordinary mode transition preserves controlled deceleration");
+    check(!Gate::immediateStop(true, false, false, false, false, false),
+          "yellow keeps the existing motion authority and deceleration ramp");
+    check(Gate::immediateStop(false, false, false, false, false, false),
+          "inhibited ordinary motion stops immediately");
+    check(Gate::immediateStop(true, false, true, false, false, false),
+          "new authority starts from stopped targets");
+    std::cout << "PASS: protective stops override controlled transitions\n";
     Gate gate;
     check(!gate.permits(Source::Kinematics, 10 * SECOND, 10 * SECOND, .3, START), "startup must reject motion");
     check(!gate.permits(Source::SupervisorDirect, 10 * SECOND, 10 * SECOND, .3, START), "startup rejects direct too");
@@ -89,6 +113,6 @@ int main()
     std::cerr << "FAIL: " << error.what() << '\n';
     return 1;
   }
-  std::cout << "4 motion-source regression groups passed\n";
+  std::cout << "5 motion-source regression groups passed\n";
   return 0;
 }

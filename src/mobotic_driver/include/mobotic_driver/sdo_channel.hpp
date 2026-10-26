@@ -37,13 +37,18 @@ public:
     if (pending_ && std::chrono::duration<double>(now - sent_).count() > 0.1) { pending_.reset(); }
     if (pending_) { return std::nullopt; }
     queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [now, write_timeout](const Entry& e) {
-      return e.frame.data[0] != READ_FROM_DEVICE && std::chrono::duration<double>(now - e.queued).count() > write_timeout;
+      return e.frame.data[0] != READ_FROM_DEVICE && !stopCommand(e.frame) &&
+          std::chrono::duration<double>(now - e.queued).count() > write_timeout;
     }), queue_.end());
     if (queue_.empty()) { return std::nullopt; }
     auto selected = queue_.begin();
     // Alternate writes with reads under load so motion traffic cannot starve
     // the status/fault observations that authorize it.
-    if (!last_was_write_)
+    const auto disable = std::find_if(queue_.begin(), queue_.end(), [](const Entry& e) { return disableCommand(e.frame); });
+    const auto stop = std::find_if(queue_.begin(), queue_.end(), [](const Entry& e) { return stopCommand(e.frame); });
+    if (disable != queue_.end()) { selected = disable; }
+    else if (stop != queue_.end() && !last_was_stop_) { selected = stop; }
+    else if (!last_was_write_)
     {
       const auto write = std::find_if(queue_.begin(), queue_.end(), [](const Entry& e) { return e.frame.data[0] != READ_FROM_DEVICE; });
       if (write != queue_.end()) { selected = write; }
@@ -55,6 +60,7 @@ public:
     }
     pending_ = *selected; queue_.erase(selected);
     last_was_write_ = pending_->frame.data[0] != READ_FROM_DEVICE;
+    last_was_stop_ = stopCommand(pending_->frame);
     sent_ = now; sent_stamp_ns_ = stamp_ns;
     return pending_->frame;
   }
@@ -91,13 +97,28 @@ public:
              index != MICONTROL_DEVICE_STATE && index != MICONTROL_CLEAR_ERROR_STATUS;
     }), queue_.end());
   }
-  void clear() { queue_.clear(); pending_.reset(); }
+  void clear() { queue_.clear(); pending_.reset(); last_was_stop_ = false; }
 
 private:
+  static bool disableCommand(const can_msgs::msg::Frame& frame)
+  {
+    if (frame.data[0] == READ_FROM_DEVICE || frame.data[3] != 0) { return false; }
+    const unsigned index = frame.data[1] | (unsigned(frame.data[2]) << 8);
+    return (index == EC_CONTROLWORD || index == MICONTROL_DEVICE_STATE) && shortFromFrame(frame, 4) == 0;
+  }
+  static bool stopCommand(const can_msgs::msg::Frame& frame)
+  {
+    if (frame.data[0] == READ_FROM_DEVICE || frame.data[3] != 0) { return false; }
+    const unsigned index = frame.data[1] | (unsigned(frame.data[2]) << 8);
+    const bool state = index == EC_CONTROLWORD || index == MICONTROL_DEVICE_STATE;
+    const bool target = index == EC_TRACTION_VELOCITY_INPUT || index == STEERING_PROFILE_VELOCITY_INPUT;
+    return (state && shortFromFrame(frame, 4) == 0) || (target && intFromFrame(frame, 4) == 0);
+  }
   struct Entry { can_msgs::msg::Frame frame; Clock::time_point queued; };
   std::deque<Entry> queue_;
   std::optional<Entry> pending_;
   Clock::time_point sent_{};
   int64_t sent_stamp_ns_{0};
   bool last_was_write_{false};
+  bool last_was_stop_{false};
 };

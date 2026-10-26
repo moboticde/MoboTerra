@@ -25,6 +25,9 @@ class FourModuleSupervisorTest(unittest.TestCase):
 
     def feedback(self, *, vx=0.0, vy=0.0, wz=0.0, joint_velocity=0.0):
         node = self.node
+        for name, (state, _) in node.scanner_states.items():
+            state.header.stamp = self.now.to_msg()
+            node.scanner_states[name] = (state, self.now)
         node.safety_received = node.safety_io_received = node.battery_received = self.now
         for state in (node.safety_state, node.safety_io_state, node.battery_state):
             state.header.stamp = self.now.to_msg()

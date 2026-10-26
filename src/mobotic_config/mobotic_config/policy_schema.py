@@ -9,6 +9,7 @@ POLICY_TYPES = {
         "feedback_request_period": "number",
         "can_heartbeat_period": "number",
         "watchdog_timeout": "number",
+        "startup_timeout": "number",
         "supervisor_timeout": "number",
         "motion_feedback_timeout": "number",
         "status_feedback_timeout": "number",
@@ -100,7 +101,7 @@ POLICY_TYPES = {
         "battery_timeout": "number",
         "wheel_status_timeout": "number",
         "minimum_battery_percentage": "number",
-        "warning_speed_scale": "number",
+        "warning_speed_limit": "number",
         "override_speed_scale": "number"
     },
     "diagnostics": {

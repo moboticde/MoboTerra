@@ -48,6 +48,16 @@ class SocketCanLaunchTest(unittest.TestCase):
         actions, _ = resolve(factory(SOURCE)(), {'stack_type': 'virtual'})
         supervisor = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_supervisor')
         self.assertNotIn('host', supervisor.kwargs['parameters'][0]['required_health_sources'])
+
+    def test_odometry_dependency_does_not_erase_configured_health_sources(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            overlay = Path(directory) / 'supervisor.yaml'
+            overlay.write_text('/**:\n  ros__parameters:\n    required_health_sources: [custom_monitor]\n')
+            actions, _ = resolve(factory(SOURCE)(), {'supervisor_parameters_file': str(overlay)})
+            supervisor = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_supervisor')
+            self.assertEqual(supervisor.kwargs['parameters'][0]['required_health_sources'],
+                             ['custom_monitor', 'kinematics', 'odometry'])
     def setUp(self):
         description = namespace['generate_launch_description']()
         self.actions = description.args[0]
@@ -295,8 +305,18 @@ class SocketCanLaunchTest(unittest.TestCase):
             # ~/scan topics; private remaps leave both sensors on one topic.
             self.assertEqual(remappings['raw_data'], f'scanner/{location}/raw_data')
             self.assertEqual(remappings['scan'], f'scanner/{location}/scan')
+            self.assertEqual(remappings['field_data'], f'scanner/{location}/field_data')
             self.assertEqual(remappings['extended_scan'], f'scanner/{location}/extended_laser_scan')
             self.assertEqual(remappings['/diagnostics'], 'diagnostics')
+
+    def test_scanner_field_adapter_uses_real_ethernet_only_on_hardware(self):
+        for stack in ('hardware', 'virtual'):
+            actions, _ = resolve(factory(SOURCE)(), {'stack_type': stack})
+            node = next(a for a in actions if a.kind == 'Node'
+                        and a.kwargs.get('executable') == 'scanner_safety_adapter')
+            self.assertEqual(node.kwargs['parameters'][0]['scanner_source'],
+                             'scanner' if stack == 'hardware' else 'safety_io')
+            self.assertTrue(node.kwargs['respawn'])
 
 
 if __name__ == '__main__':

@@ -88,6 +88,11 @@ frame, topology or limit must be changed in the selected platform profile instea
 Manual source velocity/acceleration caps may be lower than shared limits, never
 higher. Supervisor enforcement remains authoritative.
 
+Scanner yellow-field limiting uses `supervisor.warning_speed_limit: 0.3` in
+metres per second. This replaces the former fractional `warning_speed_scale`;
+custom overlays must use the new key. The supervisor's wheel radius for direct
+wheel limiting is derived from `platform.geometry.wheel_radius`.
+
 Old bundled component YAML paths were removed intentionally. Do not pass these
 policy-only YAML files directly to `ros2 run --params-file`: they do not contain a
 complete node configuration. Use the launch adapter to supply derived parameters.

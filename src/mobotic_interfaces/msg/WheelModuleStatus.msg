@@ -9,6 +9,11 @@ string name
 DriveStatus steering
 DriveStatus traction
 bool initialized
+# Physical startup is authorized by the supervisor before motion telemetry is
+# available. Pending never permits motion; failed requires investigation/restart.
+bool startup_pending
+bool startup_complete
+bool startup_failed
 bool position_valid
 string position_reason
 uint64 reset_id

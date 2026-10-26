@@ -20,6 +20,7 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
+            'check_readiness = mobotic_bringup.readiness:main',
             'mock_platform_state = mobotic_bringup.mock_platform_state:main',
             'platform_diagnostics = mobotic_bringup.platform_diagnostics:main',
         ],

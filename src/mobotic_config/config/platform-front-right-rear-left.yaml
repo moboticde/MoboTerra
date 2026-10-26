@@ -15,7 +15,7 @@ reference_corners:
   - {name: vehicle_rear_left_corner, xyz: [-1.2671105957, 0.9228179321, 0.0]}
   - {name: vehicle_rear_right_corner, xyz: [-1.2671105957, -0.9203035278, 0.0]}
 can:
-  master_node_id: '0x0A'
+  master_node_id: '0x0B'
   drives: {interface: can0, bitrate: 250000}
   battery: {interface: can1, bitrate: 500000, listen_only: true}
 geometry:
@@ -75,9 +75,20 @@ operator:
   # Use source: usb for the PAIL's generic USB HID connection.
   usb_driver: joy_node
   usb_mapping_verified: false
-  # Ecobox shares can.drives (can0, 500 kbit/s). Configure its hardware separately.
-  # No motion or mode/reset requests until a recorded physical mapping is verified.
-  mapping: {verified: false, node_id: 9, axes: {}, buttons: {}}
+  # Captured assignment confirmed by the operator, 22 October 2026.
+  # Receiver node 10 shares can0 at 250 kbit/s; master node 11 is distinct.
+  mapping:
+    verified: true
+    node_id: 10
+    axes:
+      speed: {channel: 3, zero: 0, full_scale: 255, invert: false}
+      steer: {channel: 2, zero: 0, full_scale: 255, invert: false}
+      crab: {channel: 4, zero: 0, full_scale: 255, invert: false}
+    buttons:
+      mode: {signal: U5, active_high: false}
+      boost: {signal: SP3, active_high: true}  # B1
+      reset: {signal: SP4, active_high: true}  # B2
+      deadman: null  # No physical hold-to-drive button on this PAIL; neutral rearm only.
 scanners:
   host_ip: '10.60.20.186'
   units:
@@ -108,5 +119,5 @@ commissioning_pending:
   - Verify actual battery participants and CAN telegram mapping.
   - Verify Siemens hardwired STO chain and fresh per-module drive STO feedback.
   - Calibrate scanner extrinsics, wheel odometry and uncertainty.
-  - Capture PAIL controls and verify axis calibration, RP1/B1/B2/STOP and radio-loss behavior.
+  - Verify PAIL STOP/radio-loss and neutral/rearm behavior on the installed robot.
   - Configure CAN interfaces and host NIC externally; this package does not do so.

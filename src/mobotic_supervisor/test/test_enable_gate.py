@@ -112,6 +112,13 @@ class EnableGateTest(unittest.TestCase):
         node = self.node
         node.safety_source = 'flexisoft'
         node.safety_timeout = 0.3
+        node.warning_speed_limit = 0.3
+        node.wheel_radius = 0.325
+        node.scanner_states = {name: (SimpleNamespace(
+            header=SimpleNamespace(stamp=self.now.to_msg()), scanner_id=name,
+            communication_ok=True, protective_state_known=True, warning_state_known=True,
+            protective_field_clear=True, warning_field_clear=True), self.now)
+            for name in ('front_left', 'rear_right')}
         node.battery_timeout = 0.6
         node.wheel_status_timeout = 0.3
         node.velocity_feedback_timeout = 0.3
@@ -132,6 +139,7 @@ class EnableGateTest(unittest.TestCase):
             front_left_protective_field_clear=True,
             rear_right_protective_field_clear=True,
             front_left_ossd_active=True, rear_right_ossd_active=True,
+            front_left_warning_field_clear=True, rear_right_warning_field_clear=True,
         )
         node.battery_state = SimpleNamespace(
             header=SimpleNamespace(stamp=self.now.to_msg()),

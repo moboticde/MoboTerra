@@ -48,6 +48,16 @@ install(TARGETS
 
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_test REQUIRED)
+  add_executable(test_reset_recovery test/test_reset_recovery.cpp)
+  target_include_directories(test_reset_recovery PRIVATE include)
+  ament_add_test(test_reset_recovery COMMAND "$<TARGET_FILE:test_reset_recovery>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
+  add_executable(test_drive_startup test/test_drive_startup.cpp)
+  target_include_directories(test_drive_startup PRIVATE include)
+  ament_target_dependencies(test_drive_startup can_msgs)
+  ament_add_test(test_drive_startup COMMAND "$<TARGET_FILE:test_drive_startup>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
   add_executable(test_controller_protocol test/test_controller_protocol.cpp)
   target_include_directories(test_controller_protocol PRIVATE include)
   ament_target_dependencies(test_controller_protocol can_msgs)
@@ -61,9 +71,8 @@ if(BUILD_TESTING)
   target_include_directories(test_controller_startup PRIVATE include)
   ament_target_dependencies(test_controller_startup rclcpp std_msgs sensor_msgs geometry_msgs can_msgs std_srvs mobotic_interfaces diagnostic_msgs)
   ament_add_test(test_controller_startup COMMAND "$<TARGET_FILE:test_controller_startup>"
-    TIMEOUT 45 ENV ROS_DOMAIN_ID=151 ROS_LOCALHOST_ONLY=1
+    TIMEOUT 90 ENV ROS_DOMAIN_ID=151 ROS_LOCALHOST_ONLY=1
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
-  find_package(ament_cmake_test REQUIRED)
   add_executable(test_virtual_sync test/test_virtual_sync.cpp)
   target_include_directories(test_virtual_sync PRIVATE include)
   ament_add_test(test_virtual_sync

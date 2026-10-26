@@ -1,0 +1,912 @@
+{
+  "profile": "platform-front-right-rear-left.yaml",
+  "namespace": "/moboterra",
+  "source_defined": true,
+  "nodes": {
+    "battery_rx": {
+      "x": 550,
+      "y": 600,
+      "title": "battery_can/socket_can_receiver",
+      "note": "can1 \u00b7 500 kbit/s \u00b7 receive only",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "battery": {
+      "x": 1350,
+      "y": 600,
+      "title": "vanguard_battery_monitor",
+      "note": "read-only battery readiness / faults",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "can_rx": {
+      "x": 2200,
+      "y": 600,
+      "title": "socket_can_receiver",
+      "note": "can0 \u00b7 250 kbit/s",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "can_tx": {
+      "x": 3000,
+      "y": 600,
+      "title": "socket_can_sender",
+      "note": "can0 \u00b7 250 kbit/s",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "safety": {
+      "x": 3850,
+      "y": 600,
+      "title": "safety_monitor",
+      "note": "hardwired STO status \u00b7 known flags",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "scanner_adapter": {
+      "x": 4650,
+      "y": 600,
+      "title": "scanner_safety_adapter",
+      "note": "unknown field state stays unknown",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "operator": {
+      "x": 950,
+      "y": 1450,
+      "title": "operator",
+      "note": "PAIL input \u00b7 neutral rearm \u00b7 no deadman",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "supervisor": {
+      "x": 2600,
+      "y": 1450,
+      "title": "mobotic_supervisor",
+      "note": "mode machine \u00b7 final motion authority",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "driver": {
+      "x": 4250,
+      "y": 1450,
+      "title": "mobotic_driver",
+      "note": "2 modules \u00b7 4 drives \u00b7 guarded reset",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "scanner_front": {
+      "x": 800,
+      "y": 2125,
+      "title": "front_left_scanner",
+      "note": "sick_safetyscanners2 \u00b7 LaserScan",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "scanner_rear": {
+      "x": 1925,
+      "y": 2125,
+      "title": "rear_right_scanner",
+      "note": "sick_safetyscanners2 \u00b7 LaserScan",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "kinematics": {
+      "x": 3275,
+      "y": 2125,
+      "title": "mobotic_kinematics",
+      "note": "wheel candidates + measured body velocity",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "description": {
+      "x": 4400,
+      "y": 2125,
+      "title": "robot_state_publisher",
+      "note": "joint transforms \u00b7 URDF / Xacro",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "diagnostics": {
+      "x": 1362.5,
+      "y": 2500,
+      "title": "platform_diagnostics",
+      "note": "topic freshness \u00b7 component / host health",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "odometry": {
+      "x": 3837.5,
+      "y": 2500,
+      "title": "mobotic_odometry",
+      "note": "wheel-derived pose + body velocity",
+      "width": 660,
+      "height": 170,
+      "external": false
+    },
+    "application": {
+      "x": 2600,
+      "y": 3200,
+      "title": "External application / autonomy",
+      "note": "optional command source + telemetry consumer",
+      "width": 660,
+      "height": 170,
+      "external": true
+    }
+  },
+  "edges": [
+    {
+      "source": "battery_rx",
+      "target": "battery",
+      "topic": "battery_can/can_rx",
+      "points": [
+        [
+          550,
+          685
+        ],
+        [
+          550,
+          850
+        ],
+        [
+          1350,
+          850
+        ],
+        [
+          1350,
+          685
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "can_rx",
+      "target": "operator",
+      "topic": "can_rx",
+      "points": [
+        [
+          1980,
+          665
+        ],
+        [
+          1800,
+          1060
+        ],
+        [
+          1200,
+          1100
+        ],
+        [
+          1170,
+          1385
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "can_rx",
+      "target": "driver",
+      "topic": "can_rx",
+      "points": [
+        [
+          2420,
+          665
+        ],
+        [
+          2750,
+          1050
+        ],
+        [
+          3600,
+          1100
+        ],
+        [
+          4030,
+          1385
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "operator",
+      "target": "can_tx",
+      "topic": "can_tx \u00b7 operator NMT",
+      "points": [
+        [
+          950,
+          1365
+        ],
+        [
+          950,
+          1170
+        ],
+        [
+          3000,
+          1170
+        ],
+        [
+          3000,
+          685
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "driver",
+      "target": "can_tx",
+      "topic": "can_tx",
+      "points": [
+        [
+          4250,
+          1365
+        ],
+        [
+          4250,
+          1130
+        ],
+        [
+          3300,
+          1130
+        ],
+        [
+          3220,
+          665
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "battery",
+      "target": "supervisor",
+      "topic": "battery/system_state",
+      "points": [
+        [
+          1570,
+          665
+        ],
+        [
+          1800,
+          1040
+        ],
+        [
+          2050,
+          1100
+        ],
+        [
+          2380,
+          1385
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "driver",
+      "target": "safety",
+      "topic": "wheel_modules/status",
+      "points": [
+        [
+          4470,
+          1385
+        ],
+        [
+          5110,
+          1130
+        ],
+        [
+          5110,
+          450
+        ],
+        [
+          3850,
+          450
+        ],
+        [
+          3850,
+          515
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "safety",
+      "target": "supervisor",
+      "topic": "safety/state safety/io_state",
+      "points": [
+        [
+          3630,
+          665
+        ],
+        [
+          3400,
+          1040
+        ],
+        [
+          3150,
+          1100
+        ],
+        [
+          2820,
+          1385
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "safety",
+      "target": "scanner_adapter",
+      "topic": "safety/io_state",
+      "points": [
+        [
+          3850,
+          685
+        ],
+        [
+          3850,
+          850
+        ],
+        [
+          4650,
+          850
+        ],
+        [
+          4650,
+          685
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "operator",
+      "target": "supervisor",
+      "topic": "operator/cmd_vel operator/state operator/mode_request",
+      "points": [
+        [
+          1280,
+          1450
+        ],
+        [
+          2270,
+          1450
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "supervisor",
+      "target": "operator",
+      "topic": "vehicle/mode",
+      "points": [
+        [
+          2380,
+          1385
+        ],
+        [
+          2000,
+          1300
+        ],
+        [
+          1550,
+          1300
+        ],
+        [
+          1170,
+          1385
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "supervisor",
+      "target": "driver",
+      "topic": "wheel_modules/command wheel_modules/operation_command vehicle/mode",
+      "points": [
+        [
+          2930,
+          1450
+        ],
+        [
+          3920,
+          1450
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "driver",
+      "target": "supervisor",
+      "topic": "joint_states \u00b7 wheel_modules/status",
+      "points": [
+        [
+          4030,
+          1385
+        ],
+        [
+          3650,
+          1300
+        ],
+        [
+          3200,
+          1300
+        ],
+        [
+          2820,
+          1385
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "supervisor",
+      "target": "kinematics",
+      "topic": "vehicle/cmd_vel",
+      "points": [
+        [
+          2820,
+          1515
+        ],
+        [
+          2940,
+          1750
+        ],
+        [
+          3050,
+          1870
+        ],
+        [
+          3165,
+          2045
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "kinematics",
+      "target": "supervisor",
+      "topic": "kinematics/joint_setpoints vehicle/measured_velocity",
+      "points": [
+        [
+          3055,
+          2060
+        ],
+        [
+          2700,
+          1850
+        ],
+        [
+          2850,
+          1650
+        ],
+        [
+          2710,
+          1530
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "driver",
+      "target": "kinematics",
+      "topic": "joint_states",
+      "points": [
+        [
+          4030,
+          1515
+        ],
+        [
+          3850,
+          1750
+        ],
+        [
+          3500,
+          1850
+        ],
+        [
+          3385,
+          2045
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "kinematics",
+      "target": "odometry",
+      "topic": "vehicle/measured_velocity",
+      "points": [
+        [
+          3495,
+          2190
+        ],
+        [
+          3650,
+          2290
+        ],
+        [
+          3750,
+          2320
+        ],
+        [
+          3727.5,
+          2420
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "driver",
+      "target": "description",
+      "topic": "joint_states",
+      "points": [
+        [
+          4470,
+          1515
+        ],
+        [
+          4580,
+          1710
+        ],
+        [
+          4500,
+          1880
+        ],
+        [
+          4400,
+          2040
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "odometry",
+      "target": "application",
+      "topic": "vehicle/odom tf",
+      "points": [
+        [
+          3837.5,
+          2585
+        ],
+        [
+          3837.5,
+          2910
+        ],
+        [
+          3100,
+          2900
+        ],
+        [
+          2820,
+          3135
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "description",
+      "target": "application",
+      "topic": "tf tf_static",
+      "points": [
+        [
+          4620,
+          2190
+        ],
+        [
+          5150,
+          2600
+        ],
+        [
+          3900,
+          3100
+        ],
+        [
+          2930,
+          3200
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "application",
+      "target": "supervisor",
+      "topic": "autonomy/cmd_vel autonomy/joint_setpoints",
+      "points": [
+        [
+          2600,
+          3115
+        ],
+        [
+          2600,
+          1535
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "scanner_front",
+      "target": "application",
+      "topic": "scanner/front_left/scan",
+      "points": [
+        [
+          580,
+          2190
+        ],
+        [
+          100,
+          2800
+        ],
+        [
+          1550,
+          3060
+        ],
+        [
+          2270,
+          3200
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "scanner_rear",
+      "target": "application",
+      "topic": "scanner/rear_right/scan",
+      "points": [
+        [
+          1925,
+          2210
+        ],
+        [
+          1925,
+          2690
+        ],
+        [
+          2200,
+          2900
+        ],
+        [
+          2380,
+          3135
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "scanner_adapter",
+      "target": "application",
+      "topic": "scanner/<location>/safety_zone_status",
+      "points": [
+        [
+          4870,
+          665
+        ],
+        [
+          5180,
+          1150
+        ],
+        [
+          5180,
+          3180
+        ],
+        [
+          2930,
+          3200
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "battery",
+      "target": "diagnostics",
+      "topic": "battery/system_state",
+      "points": [
+        [
+          1130,
+          665
+        ],
+        [
+          100,
+          1120
+        ],
+        [
+          100,
+          2500
+        ],
+        [
+          1032.5,
+          2500
+        ]
+      ],
+      "cubic": false
+    },
+    {
+      "source": "scanner_front",
+      "target": "diagnostics",
+      "topic": "scanner/front_left/scan",
+      "points": [
+        [
+          1020,
+          2190
+        ],
+        [
+          1150,
+          2290
+        ],
+        [
+          1250,
+          2300
+        ],
+        [
+          1252.5,
+          2420
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "scanner_rear",
+      "target": "diagnostics",
+      "topic": "scanner/rear_right/scan",
+      "points": [
+        [
+          1705,
+          2190
+        ],
+        [
+          1575,
+          2290
+        ],
+        [
+          1475,
+          2300
+        ],
+        [
+          1472.5,
+          2420
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "diagnostics",
+      "target": "supervisor",
+      "topic": "internal/component_health",
+      "points": [
+        [
+          1362.5,
+          2415
+        ],
+        [
+          1362.5,
+          1900
+        ],
+        [
+          1800,
+          1750
+        ],
+        [
+          2380,
+          1515
+        ]
+      ],
+      "cubic": true
+    },
+    {
+      "source": "diagnostics",
+      "target": "application",
+      "topic": "diagnostics",
+      "points": [
+        [
+          1362.5,
+          2585
+        ],
+        [
+          1362.5,
+          2900
+        ],
+        [
+          2100,
+          2980
+        ],
+        [
+          2380,
+          3265
+        ]
+      ],
+      "cubic": true
+    }
+  ],
+  "groups": {
+    "battery": {
+      "title": "BATTERY",
+      "x": 200,
+      "y": 300,
+      "width": 1500,
+      "height": 700,
+      "members": [
+        "battery_rx",
+        "battery"
+      ]
+    },
+    "transport": {
+      "title": "DRIVE CAN TRANSPORT",
+      "x": 1850,
+      "y": 300,
+      "width": 1500,
+      "height": 700,
+      "members": [
+        "can_rx",
+        "can_tx"
+      ]
+    },
+    "safety": {
+      "title": "SAFETY MONITORING",
+      "x": 3500,
+      "y": 300,
+      "width": 1500,
+      "height": 700,
+      "members": [
+        "safety",
+        "scanner_adapter"
+      ]
+    },
+    "control": {
+      "title": "CONTROL & DRIVE AUTHORITY",
+      "x": 200,
+      "y": 1250,
+      "width": 4800,
+      "height": 400,
+      "members": [
+        "operator",
+        "supervisor",
+        "driver"
+      ]
+    },
+    "perception": {
+      "title": "SCANNERS & DIAGNOSTICS",
+      "x": 200,
+      "y": 1900,
+      "width": 2325,
+      "height": 800,
+      "members": [
+        "scanner_front",
+        "scanner_rear",
+        "diagnostics"
+      ]
+    },
+    "feedback": {
+      "title": "FEEDBACK, ODOMETRY & TF",
+      "x": 2675,
+      "y": 1900,
+      "width": 2325,
+      "height": 800,
+      "members": [
+        "kinematics",
+        "odometry",
+        "description"
+      ]
+    }
+  },
+  "omitted_secondary_fanout": {
+    "platform_diagnostics": [
+      "operator/state",
+      "vehicle/mode",
+      "vehicle/measured_velocity",
+      "vehicle/odom"
+    ]
+  },
+  "transport_sources": [
+    "https://github.com/autowarefoundation/ros2_socketcan/blob/main/ros2_socketcan/launch/socket_can_receiver.launch.py",
+    "https://github.com/autowarefoundation/ros2_socketcan/blob/main/ros2_socketcan/launch/socket_can_sender.launch.py"
+  ]
+}

@@ -339,6 +339,7 @@ public:
   bool isTractionController() const { return is_traction_controller_; }
   bool isSteeringController() const { return !isTractionController(); }
   void preserveControllerConfiguration(bool preserve) { preserve_configuration_ = preserve; }
+  void setAutomaticModeInitialization(bool automatic) { automatic_mode_initialization_ = automatic; }
   bool supportsTractionVelocityPdo() const { return isTractionController() && target_mode_ == VELOCITY; }
   void setTractionController(const bool is_traction_controller) { is_traction_controller_ = is_traction_controller; }
 
@@ -735,7 +736,9 @@ public:
     {
       if (!accept(FeedbackFreshness::ERROR_REGISTER)) { return frames; }
       error_ = isTractionController() ? frame.data[4] : intFromFrame(frame, 4);
-      if (!initialized_ && !error_ && !preserve_configuration_)
+      // Physical mode writes belong to supervised initialization, never an
+      // incidental error-register poll. Keep legacy fixture behavior explicit.
+      if (!initialized_ && !error_ && !preserve_configuration_ && automatic_mode_initialization_)
       {
         frames.push_back(setDeviceModeRequest(target_mode_));
         frames.push_back(readDeviceModeRequest());
@@ -911,6 +914,7 @@ private:
   bool enabled_{false};
   bool initialized_{false};
   bool preserve_configuration_{false};
+  bool automatic_mode_initialization_{true};
   bool is_traction_controller_{false};
   bool has_statusword_{false};
   unsigned short statusword_{0};

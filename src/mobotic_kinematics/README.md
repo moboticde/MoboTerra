@@ -29,6 +29,13 @@ The resulting candidate is returned to the supervisor, preserving its command
 stamp for correlation. Only the supervisor publishes final wheel command arrays
 to the driver. Current/effort commands are not exposed.
 
+Candidates are calculated and published in the velocity receive callback;
+feedback callbacks update measured state and publish measured body velocity.
+The supervisor approves a correlated candidate in its receive callback, without
+waiting for another control timer tick. The driver receives the final
+`wheel_modules/command`, not this node's JointState candidate. See
+[EC comparison, message fields and latency](../../docs/control_path_and_latency.md).
+
 Forward kinematics converts measured steering positions and traction velocities back to a least-squares planar body
 velocity. `vehicle/measured_velocity` preserves the input `joint_states` timestamp, so the supervisor
 cannot mistake republished old feedback for a new standstill sample.
@@ -69,7 +76,8 @@ ros2 launch mobotic_kinematics mobotic_kinematics.launch.py
 ```
 
 Review the values in [shared `platform.yaml`](../mobotic_config/config/platform.yaml) against the final mechanical measurements before operating the
-vehicle. Set `traction_control_mode` to the same `velocity` or `current` mode configured for the traction drives.
+vehicle. `traction_control_mode` must be `velocity`, matching the traction
+drives; current mode is rejected by parameter validation.
 
 The ROS-independent C++ cache regression executable is registered with the ament
 test runner when `BUILD_TESTING` is enabled, including test-result reporting.

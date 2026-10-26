@@ -71,7 +71,8 @@ def _launch_setup(context):
             'wheel_mount_angles', 'max_steering_velocity')})
         supervisor_config['manual_stationary_steering_enabled'] = True
     if LaunchConfiguration('start_odometry').perform(context) == 'true':
-        supervisor_config['required_health_sources'] = ['kinematics', 'odometry']
+        supervisor_config['required_health_sources'] = list(dict.fromkeys(
+            [*supervisor_config['required_health_sources'], 'kinematics', 'odometry']))
     host_state_path = LaunchConfiguration('host_state_path').perform(context)
     if host_state_path:
         supervisor_config['required_health_sources'] = list(dict.fromkeys(
@@ -293,6 +294,7 @@ def _launch_setup(context):
             remappings=[('scan', f'scanner/{location}/scan'),
                         ('raw_data', f'scanner/{location}/raw_data'),
                         ('output_paths', f'scanner/{location}/output_paths'),
+                        ('field_data', f'scanner/{location}/field_data'),
                         ('extended_scan', f'scanner/{location}/extended_laser_scan'),
                         ('/diagnostics', 'diagnostics')],
         )
@@ -319,7 +321,9 @@ def _launch_setup(context):
         remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')])
     scanner_adapter = Node(package='mobotic_safety', executable='scanner_safety_adapter',
         name='scanner_safety_adapter', namespace=robot_name, output='screen',
-        parameters=[{'status_timeout': supervisor_config['safety_timeout']}])
+        parameters=[{'status_timeout': supervisor_config['safety_timeout'],
+                     'scanner_source': 'safety_io' if stack_type.perform(context) == 'virtual' else 'scanner'}],
+        respawn=True, respawn_delay=1.0)
 
     return resolved + [
         socketcan,

@@ -402,6 +402,7 @@ class Configuration:
                       'expected_traction_joint_names': traction, 'direct_steering_encoder_resolutions': resolutions,
                       'direct_traction_control_mode': 'velocity', 'output_frame_id': frame, **vehicle_limits}
         supervisor['safety_source'] = p['safety'].get('source', 'flexisoft')
+        supervisor['wheel_radius'] = float(p['geometry']['wheel_radius'])
         operator = p.get('operator', {'source': 'usb'})
         supervisor['require_operator_interlock'] = operator['source'] == 'remdevice'
         manual = {'frame_id': frame, **vehicle_limits}
@@ -534,9 +535,17 @@ class Configuration:
         supervisor = self._parameters['supervisor']
         if supervisor['initial_mode'] not in ('manual', 'autonomous', 'kinematicoff', 'auto_velocity', 'auto_direct'):
             raise ConfigurationError('invalid initial_mode')
-        for key in ('warning_speed_scale', 'override_speed_scale'):
-            if not 0 <= supervisor[key] <= 1:
-                raise ConfigurationError(f'{key} must be in [0, 1]')
+        if supervisor['warning_speed_limit'] <= 0:
+            raise ConfigurationError('warning_speed_limit must be positive (m/s)')
+        for key in ('override_speed_scale',):
+            if not 0 < supervisor[key] <= 1:
+                raise ConfigurationError(f'{key} must be in (0, 1]')
+        if supervisor['startup_grace'] <= 0:
+            raise ConfigurationError('startup_grace must be positive')
+        if supervisor['mode_transition_timeout'] <= supervisor['mode_transition_stop_duration']:
+            raise ConfigurationError('mode_transition_timeout must exceed the standstill hold duration')
+        if manual['publish_period'] >= manual['joystick_timeout']:
+            raise ConfigurationError('manual publish_period must be less than joystick_timeout')
         odometry = self._parameters['odometry']
         for key in ('initial_pose', 'initial_pose_variances', 'twist_variances', 'process_variance_rates', 'gap_variance_rates'):
             if len(odometry[key]) != 3 or (key != 'initial_pose' and any(v < 0 for v in odometry[key])):
@@ -544,6 +553,12 @@ class Configuration:
         if self._parameters['driver']['telemetry_pdo_sync_divider'] not in range(1, 241):
             raise ConfigurationError('telemetry_pdo_sync_divider must be an integer in 1..240')
         driver = self._parameters['driver']
+        if driver['feedback_request_period'] >= driver['status_feedback_timeout']:
+            raise ConfigurationError('feedback_request_period must be less than status_feedback_timeout')
+        if driver['fault_feedback_timeout'] <= driver['diagnostic_sdo_period']:
+            raise ConfigurationError('fault_feedback_timeout must exceed diagnostic_sdo_period')
+        if supervisor['control_period'] >= min(driver['watchdog_timeout'], driver['supervisor_timeout']):
+            raise ConfigurationError('supervisor control_period must fit inside driver command and management timeouts')
         if not driver['traction_pdo_enabled'] or not driver['telemetry_pdo_enabled']:
             raise ConfigurationError('the synchronized feedback profile requires both motion PDO paths')
         if not 0 < driver['sample_skew_budget'] < driver['traction_pdo_period']:

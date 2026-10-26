@@ -1,9 +1,10 @@
 # Hardware monitoring and commissioning
 
 The updated contract is [supervisor_interfaces.md](supervisor_interfaces.md).
-Physical startup reads current controller state and Elmo 6064 through SDO,
-preserves the installed controller project, and enables only after fresh readiness
-checks pass. No external encoder-reference recovery is a startup prerequisite.
+Physical startup waits for external supervisor readiness, configures controller
+modes/PDOs/ramps and enables with zero targets before requiring position/velocity
+feedback. Actual fresh feedback then permits motion. Startup is bounded and
+cancelled on lost permission. No external encoder-reference recovery is required.
 See [drive startup and B2 recovery](drive_startup.md). The durable recovery helper
 does not establish continuity across controller coordinate resets.
 Older test descriptions below are commissioning scenarios, not completed checks
@@ -198,8 +199,13 @@ The platform node subscribes to `battery/system_state` (0.6 s), `safety/state`,
 (0.3 s) and both `scanner/<location>/scan` streams (0.5 s). It publishes at 2 Hz.
 It does not directly subscribe to `joint_states`, `wheel_modules/status`,
 `battery/state`, `vehicle/measured_velocity` or CAN; driver diagnostics cover CAN/wheel freshness.
-Scan loss raises diagnostics only; FlexiSoft protective fields remain the
-supervisor's scanner-related motion interlock.
+LaserScan loss raises stream diagnostics. Independently, the scanner adapter
+reads each scanner's evaluated application output paths from `raw_data`; both
+fresh `safety_zone_status` streams are supervisor motion prerequisites on every
+hardware profile. Red commands zero immediately, yellow ramps to a 0.3 m/s cap,
+and clear fields remove that cap. Missing/unknown field telemetry inhibits
+motion. The physical safety chain remains independent. See
+[scanner telemetry and validity](../src/mobotic_safety/README.md).
 
 Hardware bringup starts both scanners automatically. Confirm the PC NIC actually
 uses the configured address; override `scanner_host_ip` if necessary:

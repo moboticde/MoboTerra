@@ -356,6 +356,12 @@ class ManualControl(Node):
         state.turbo_active = self.turbo_active if connected else False
         if not connected:
             state.status_message = 'joystick unavailable or stale'
+        elif getattr(self, 'rearm_phase', 'armed') == 'neutral':
+            state.status_message = 'return controls to neutral to rearm'
+        elif getattr(self, 'rearm_phase', 'armed') == 'release':
+            state.status_message = 'release configured deadman while controls are neutral'
+        elif getattr(self, 'rearm_phase', 'armed') == 'press':
+            state.status_message = 'press configured deadman while controls are neutral'
         elif not self._manual_enabled():
             state.status_message = 'deadman released'
         else:

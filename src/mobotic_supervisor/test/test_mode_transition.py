@@ -40,7 +40,7 @@ class ModeTransitionTest(unittest.TestCase):
         node.max_direct_traction_velocity = 11.12
         node.max_acceleration_linear = 0.5
         node.max_acceleration_angular = 0.52
-        node.warning_speed_scale = 0.3
+        node.warning_speed_limit = 0.3
         node.override_speed_scale = 0.2
         node.output_frame_id = 'base_link'
         node.safety_io_state.front_left_warning_field_clear = True
@@ -60,12 +60,17 @@ class ModeTransitionTest(unittest.TestCase):
 
     def feedback(self, *, vx=0.0, vy=0.0, wz=0.0, joint_velocity=0.0):
         node = self.node
+        for name, (state, _) in node.scanner_states.items():
+            state.header.stamp = self.now.to_msg()
+            node.scanner_states[name] = (state, self.now)
         node.safety_received = node.safety_io_received = self.now
         node.battery_received = node.wheel_status_received = self.now
         for state in (node.safety_state, node.safety_io_state, node.battery_state):
             state.header.stamp = self.now.to_msg()
         node.wheel_status = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()), modules=[
-            SimpleNamespace(name=name, enabled=True, error_code=0, feedback_fresh=True)
+            SimpleNamespace(name=name, enabled=True, initialized=True, position_valid=True,
+                            startup_complete=True, startup_pending=False, startup_failed=False,
+                            error_code=0, feedback_fresh=True)
             for name in node.expected_module_names
         ])
         velocity = harness.TwistStamped()
@@ -269,13 +274,17 @@ class ModeTransitionTest(unittest.TestCase):
         self.advance(0.25)
         self.assertEqual(self.node.selected_mode, harness.MODES.AUTO_DIRECT)
 
-    def test_same_active_mode_can_recover_after_timeout(self):
+    def test_timeout_is_latched_before_any_mode_request_can_retry(self):
         self.request()
         self.advance(10.0)
-        self.request(harness.MODES.MANUAL)
-        self.node._control()
-        self.advance(0.25)
-        self.assertFalse(self.node.transition_in_progress)
+        # No intervening control tick may be needed to latch the fault.
+        self.assertIn('MODE_TRANSITION_TIMEOUT', self.node.fault_codes)
+        for requested in (harness.MODES.MANUAL, harness.MODES.AUTO_VELOCITY,
+                          harness.MODES.AUTO_DIRECT):
+            accepted, started, reason = self.node._request_mode(requested)
+            self.assertFalse(accepted or started)
+            self.assertIn('reset faults', reason)
+        self.assertTrue(self.node.transition_in_progress)
         self.assertEqual(self.node.selected_mode, harness.MODES.MANUAL)
 
     def test_reselecting_current_mode_also_stops_and_verifies_standstill(self):

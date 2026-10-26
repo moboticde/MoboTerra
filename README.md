@@ -5,6 +5,8 @@ autonomy. Autonomous planning/navigation is outside this project's scope.
 
 The implementation is present in `src/`; it is not yet hardware-commissioned.
 ROS integration and C++ build/test validation remain required before operation.
+The [software readiness review](docs/software_readiness.md) records the current
+checks, corrected startup dependencies and remaining target-machine validation.
 MoboTerra defaults to four powered steering/traction modules (`front_left`, `front_right`,
 `rear_left`, `rear_right`), eight actuator joints and no casters. User-confirmed
 spacing follows actual CAD axes: 1.69 m front–rear / 0.99 m left–right, with the
@@ -14,7 +16,8 @@ The same application also supports two powered modules: select the required
 records in the platform config's `modules` list. Driver bindings, feedback gates,
 kinematics, odometry, virtual drives and the robot model follow that list.
 See the [configuration and two-module setup](docs/two_module_setup.md); the
-prepared front-right/rear-left profile uses a 250-kbit/s platform bus.
+front-right/rear-left profile uses a 250-kbit/s platform bus, PAIL receiver node
+10, master node 11 and the confirmed B1/SP3 and B2/SP4 control mapping.
 
 The default `/moboterra/operator` provider uses PAIL/Ecobox CANopen node 9 on
 `can0` at 500 kbit/s, without a hold-to-drive button. Physical control mapping
@@ -31,7 +34,7 @@ passive capture. See the [PAIL capture guide](docs/remdevice_commissioning.md).
 - The driver publishes `joint_states` and `wheel_modules/status`. Missing required CAN feedback
   blocks motion on all units; a new motion command is required after recovery.
 
-Physical startup reads existing controller state and position, preserves the installed controller configuration, and enables drives when readiness checks pass. B2 requests fault reset followed by re-enable after verified clearance. No separate encoder-reference recovery is required at startup. See [drive startup and B2 behavior](docs/drive_startup.md). Physical operation still requires hardware validation.
+Physical startup waits for supervisor readiness, then initializes controller modes/PDOs/ramps and enables drives with zero targets, following the working EC flow. Motion feedback is acquired after enable and is required before driving. B2 requests verified fault reset and re-enable. Encoder reference and saved parameters are retained. See [drive startup and B2 behavior](docs/drive_startup.md). Physical operation still requires hardware validation.
 
 All topic names above are relative to the robot namespace, normally `/moboterra`.
 FlexiSoft profiles require both `safety/state` and `safety/io_state`. The explicit
@@ -77,8 +80,8 @@ The command asks for Ubuntu administrator authentication, installs missing host
 packages and Docker/Compose, and builds the runtime, GUI and offline CAD tools.
 ROS dependencies are installed inside Docker; no host ROS installation or manual
 pip commands are needed. The build runs the full ROS tests, validates the supplied
-configuration and starts an isolated virtual stack to check all eight joints,
-odometry, wheel status and diagnostics. The installer also checks the installed
+configuration and starts isolated four- and two-module virtual stacks to check
+enabled drives, supervisor readiness, joints, odometry and diagnostics. The installer also checks the installed
 entrypoint, healthcheck, RViz, ROS Graph and CAD imports. It installs `moboterra-gui`,
 `moboterra-tools` and desktop application entries. The default prepares software
 without CAN adapters and does not configure or start a robot service.
@@ -99,9 +102,8 @@ See [deployment instructions](deploy/README.md) for unattended provisioning,
 direct Docker builds, recovery and hardware startup.
 See the [installation and command reference](docs/commands.md) for copyable
 host/container commands, isolated virtual testing, updated operator/vehicle ROS
-services and the edit–rebuild–deploy workflow. The guide distinguishes the pulled
-installer from the newer local interface implementation saved before the pull;
-verify the built image's message definitions before using its updated ROS commands.
+services and the edit–rebuild–deploy workflow. Rebuild and verify the image's
+message definitions after interface changes.
 
 ## Build and launch
 
@@ -137,14 +139,15 @@ Use `publish_odom_tf:=false` if an external estimator owns that transform, or
 
 The four-wheel profile restores the 10 ms heartbeat and 116053 increments/s
 traction ceiling. The virtual driver acceleration/deceleration use the actual 0.325 m wheel
-radius (32093 increments/s^2 for nominal 1 m/s^2); physical drive ramps are preserved. The supervisor command ramp
+radius (32093 increments/s^2 for nominal 1 m/s^2); physical startup applies the selected ramps. The supervisor command ramp
 remains 0.5 m/s^2. See the [bringup configuration](src/mobotic_bringup/README.md).
 
 Before launching on a secured platform, verify the configuration against the
 machine. Scanner defaults: front `10.60.20.52`, rear `10.60.20.53`,
 PC NIC `10.60.20.186` (override with `scanner_host_ip`).
-The supervisor automatically requests enable when safety and battery are ready
-and minimum SOC is at least 20%, even without an active joystick command.
+The supervisor requests initialization/enable when battery, applicable safety,
+configured operator and required host checks pass, with minimum SOC at least 20%.
+An active motion command is not required to initialize or enable.
 The default USB profile requires no held button for manual motion: left stick
 steers, right stick translates/crabs, and L1 or R1 boosts. Manual motion still
 requires fresh joystick input and all supervisor readiness checks.
@@ -168,6 +171,8 @@ hardware stop/brake chain remain responsible for physical safety.
 ## Documentation and remaining work
 
 - [Whole-project node/topic graph](docs/moboterra_rqt_graph.md): source-derived hardware and virtual layouts.
+- [Wheel command path and latency](docs/control_path_and_latency.md): EC comparison, exact final-message fields, configured timing and measurement limits.
+- [ROS interface manual](docs/ros_interface_manual.md): topic/message descriptions, modes and recovery.
 - [Supervisor interface contract](docs/supervisor_interfaces.md): topics, modes and gates.
 - [Hardware monitoring and commissioning](docs/hardware_monitoring.md): battery/scanner mapping, STO limitations, diagnostics and loss tests.
 

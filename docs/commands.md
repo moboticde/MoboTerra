@@ -20,6 +20,12 @@ All host commands below run in **Ubuntu Bash**, not Windows PowerShell. Start in
 the MoboTerra repository root (the directory containing `install.sh`, `deploy/`
 and `src/`). No host ROS installation is needed for the Docker workflow.
 
+For software configuration and live operating readiness, use
+`ros2 run mobotic_bringup check_readiness --platform-config /etc/moboterra/platform.yaml`.
+The command is read-only and reports the exact missing/stale startup, drive,
+battery and operator prerequisites. `--offline` checks configuration only. See
+the [software readiness review](software_readiness.md) for rebuild and validation.
+
 ## 1. Install software without robot hardware
 
 ```bash

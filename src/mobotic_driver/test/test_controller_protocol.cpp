@@ -72,6 +72,24 @@ int main()
     require(sent && intFromFrame(*sent, 4) == 200, "obsolete queued motion target replaced");
     channel.push(read, now);
     require(channel.next(.1, now + std::chrono::milliseconds(101)).has_value(), "missing response has bounded recovery");
+    channel.clear();
+    channel.push(read, now);
+    channel.push(drive.changeDeviceStateRequest(ENABLE), now);
+    channel.push(drive.changeDeviceStateRequest(DISABLE), now);
+    sent = channel.next(.1, now + std::chrono::milliseconds(250));
+    require(sent && shortFromFrame(*sent, 1) == EC_CONTROLWORD && shortFromFrame(*sent, 4) == 0,
+            "disable survives queue delay and takes priority over polling and expired enable");
+    channel.clear();
+    channel.push(read, now);
+    channel.push(drive.setTargetRequest(EC_TRACTION_VELOCITY_INPUT, 0), now);
+    sent = channel.next(.1, now + std::chrono::milliseconds(250));
+    require(sent && shortFromFrame(*sent, 1) == EC_TRACTION_VELOCITY_INPUT && intFromFrame(*sent, 4) == 0,
+            "zero target cannot expire behind telemetry reads");
+    auto stop_ack = createAndFillMoboticHeader(drive.replyNodeID(), WRITE_REPLY, EC_TRACTION_VELOCITY_INPUT, 0);
+    require(channel.receive(stop_ack), "zero target acknowledged");
+    channel.push(drive.setTargetRequest(EC_TRACTION_VELOCITY_INPUT, 0), now + std::chrono::milliseconds(250));
+    sent = channel.next(.1, now + std::chrono::milliseconds(250));
+    require(sent && sent->data[0] == READ_FROM_DEVICE, "repeated idle zeros cannot starve status reads");
     std::cout << "PASS: preserved configuration, observed-state enable, explicit fault reset and serialized SDOs\n";
   }
   catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

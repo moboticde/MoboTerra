@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -32,6 +33,9 @@ class SoftwareInstallationTest(unittest.TestCase):
         (self.root / 'etc/os-release').write_text('ID=ubuntu\nVERSION_ID=24.04\n')
         self.bin = self.root / 'bin'
         self.bin.mkdir()
+        # Exercise the installer with the same supported interpreter running
+        # these tests, even if the Linux host's default Python is older.
+        (self.bin / 'python3').symlink_to(sys.executable)
         self.calls = self.root / 'calls.jsonl'
         stub = '''#!/usr/bin/python3
 import json, os, pathlib, sys

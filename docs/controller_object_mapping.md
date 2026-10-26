@@ -24,7 +24,7 @@ The supplied CANedsGoldV005_0.eds declares 6064 as signed 32-bit, read-only and 
 
 The driver therefore computes `current_A = raw_6078 * rated_current_6075_mA / 1000000`. Missing, zero or stale rating yields unknown current. It does not guess that 6078 is milliamps.
 
-Physical position is read through Elmo 6064 at startup and cyclically over SDO; installed PDO mappings are preserved. The virtual fixture uses TPDO3. The configured counts/revolution and gearing conversion must match the live 6064 user-unit scale. The EDS describes supported objects; it is not a dump of the installed drive's settings or its behavior after power loss. See [drive startup](drive_startup.md).
+After supervisor-authorized initialization and enable, physical position is acquired through Elmo 6064, cyclically using configured TPDO3 or SDO in a non-PDO profile. Both hardware and virtual startup configure the supported PDO mappings. The configured counts/revolution and gearing conversion must match the live 6064 user-unit scale. The EDS describes supported objects; it is not a dump of the installed drive's settings or its behavior after power loss. See [drive startup](drive_startup.md).
 
 The [iC-Haus MHM specification](https://www.ichaus.de/product/ic-mhm/) describes an absolute angle sensor with an external multiturn input. This does not establish the installed assembly's unpowered tracking capability. Verification must remain through Elmo as requested; no direct encoder access is required.
 
