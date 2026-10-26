@@ -27,6 +27,10 @@ The physical Siemens/scanner/STO chain controls torque independently. A known
 active STO reported by a configured drive still inhibits software enable.
 Battery readiness, drive feedback/faults, operator interlocks, command timeouts,
 and current controller position-feedback checks remain in force.
+This two-module option requires **one battery**, `battery1`; the four-module
+option requires `battery1` and `battery2`. The selected profile determines the
+required battery list. Both options keep the listen-only 500-kbit/s battery bus
+and require every configured pack healthy, HV-connected and at least 20% SOC.
 
 | Module | Steering node | Traction node | Steering-axis XY (m) |
 | --- | --- | --- | --- |
@@ -41,8 +45,9 @@ generated in the description.
 
 ## Prepare an installed robot's profile
 
-Retain the robot's calibrated limits, CAN settings, operator, scanners and
-battery configuration. From the repository root, generate a candidate from the
+Retain the robot's calibrated limits, CAN settings, operator, scanners and the
+installed pack's verified CAN mapping. Select only the one installed battery.
+From the repository root, generate a candidate from the
 installed hardware profile rather than copying the reference over it:
 
 ```bash
@@ -59,7 +64,13 @@ reference = read_yaml('src/mobotic_config/config/platform-front-right-rear-left.
 profile['can']['master_node_id'] = reference['can']['master_node_id']
 profile['operator'].update(source='remdevice', mapping=reference['operator']['mapping'])
 profile['safety'] = {'source': 'hardwired_sto'}  # This Siemens/STO chassis only.
+selected_battery = 'battery1'  # Use the installed pack's commissioned ID/mapping.
+profile['battery']['participants'] = [
+    b for b in profile['battery']['participants'] if b['id'] == selected_battery
+]
+profile['battery']['primary_id'] = selected_battery
 assert [m['name'] for m in profile['modules']] == selected
+assert [b['id'] for b in profile['battery']['participants']] == [selected_battery]
 validate_platform(profile)
 output = Path.home() / '.config/moboterra/platform-front-right-rear-left.yaml'
 output.parent.mkdir(parents=True, exist_ok=True)

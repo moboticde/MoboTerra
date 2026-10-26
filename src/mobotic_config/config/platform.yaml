@@ -112,7 +112,7 @@ safety:
   safety_enable_mask: 0  # Unknown independent mapping, not confirmed enable.
   sto_mask: 0            # Unknown independent mapping; hardware STO is independent.
 battery:
-  # Two fixed packs directly on the shared battery CAN bus; no separate controller.
+  # Two fixed packs for the four-module chassis on one CAN bus; no separate controller.
   # Retained reference SA/PGNs below are UNVERIFIED for the installed UTK packs.
   # Confirm each pack's identity and telegram layout from vendor data/CAN capture.
   primary_id: battery1

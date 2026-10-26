@@ -95,6 +95,27 @@ class TwoPackTest(unittest.TestCase):
         self.assertEqual(state.minimum_percentage, second.percentage)
         self.assertIs(self.node.messages['battery/state'][-1], first)
 
+    def test_one_pack_profile_becomes_ready_without_a_second_pack(self):
+        for key in self.parameters:
+            if key.startswith('batteries.'):
+                self.parameters[key] = self.parameters[key][:1]
+        self.node = self.construct()
+        self.node.get_clock = lambda: SimpleNamespace(now=lambda: self.now)
+        self.send('battery1')
+        state = self.system()
+        self.assertTrue(state.communication_ok)
+        self.assertTrue(state.system_ready)
+        self.assertEqual(state.stale_batteries, [])
+        self.assertEqual(set(self.node.messages), {
+            'battery/battery1/state', 'battery/state', 'battery/system_state',
+        })
+        self.assertEqual(state.minimum_percentage,
+                         self.node.messages['battery/battery1/state'][-1].percentage)
+        self.now = harness.Time(10.6)
+        state = self.system()
+        self.assertFalse(state.system_ready)
+        self.assertEqual(state.stale_batteries, ['battery1'])
+
     def test_one_pack_cannot_satisfy_both_required_participants(self):
         for identifier in ('battery1', 'battery2'):
             with self.subTest(identifier=identifier):

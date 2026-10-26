@@ -44,13 +44,15 @@ Autonomy can subscribe to the laser scans; no autonomy implementation was added.
 Scanner transforms and CAD-envelope corner frames are integrated through the
 shared description; physical extrinsic calibration remains a commissioning task.
 
-The installed battery system has **two fixed packs directly on the shared CAN
-bus**, with no separate Parallel Battery Controller. Both platform profiles now
-require only `battery1` and `battery2`; the old controller/battery3/battery4
-requirements are removed. Both packs must independently send status, SOC and
-electrical telegrams. `battery/<id>/state` exposes individual measurements;
+The **two-module profile requires one fixed pack** (`battery1`); the
+**four-module profile requires two** (`battery1`, `battery2`). The packs connect
+directly to the 500-kbit/s battery CAN bus, with no separate Parallel Battery
+Controller. The old controller/battery3/battery4 requirements are removed.
+Every configured pack must independently send status, SOC and electrical
+telegrams; the single-pack option does not wait for a second pack.
+`battery/<id>/state` exposes each configured pack's measurements;
 `battery/state` aliases pack 1, and `battery/system_state` gates the supervisor
-using both packs' health/HV/freshness and the lower SOC.
+using every configured pack's health/HV/freshness and the minimum SOC.
 
 The retained pack source addresses/PGNs are **unverified reference values** from
 the historical controller-based setup. The supplied Vanguard Fixed Pack Quick
@@ -60,8 +62,8 @@ pack's actual address, PGNs, byte layout/scaling, status codes and update period
 against the vendor CAN specification and a passive capture before commissioning.
 Edit `battery.participants` in the selected platform YAML; all five `batteries.*`
 arrays are generated together. Do not configure absent participants or assign
-the same telegram binding to both packs. See the
-[two-pack battery commissioning procedure](../src/mobotic_vanguard_battery/README.md#two-pack-commissioning).
+the same telegram binding to multiple packs. See the
+[battery commissioning procedure](../src/mobotic_vanguard_battery/README.md#battery-commissioning).
 SOC reference units are percent; `sensor_msgs/BatteryState.percentage` and
 `minimum_percentage` are fractions. Invalid/reserved values produce NaN and block
 readiness, not a clamped 100% SOC. The supervisor threshold remains 0.2 (20%).

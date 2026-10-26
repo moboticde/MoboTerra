@@ -4,20 +4,21 @@ Read-only Vanguard J1939 telemetry monitoring. The node's `can_rx` subscription
 is remapped by both launch files to `battery_can/can_rx`, isolated from drive CAN.
 Publishes:
 
-- `battery/battery1/state` and `battery/battery2/state`
-  (`sensor_msgs/msg/BatteryState`): separate measurements for the two packs.
+- `battery/<id>/state` (`sensor_msgs/msg/BatteryState`): individual measurements;
+  `battery1` for the two-module profile, `battery1` and `battery2` for four modules.
 - `battery/state` (`sensor_msgs/msg/BatteryState`): compatibility alias for
   `primary_battery_id` (now `battery1`); it is not an aggregate of both packs.
 - `battery/system_state` (`mobotic_interfaces/msg/BatterySystemState`): readiness
   and minimum SOC across the configured internal participants; consumed by the supervisor.
 
-Both supplied platform profiles configure two fixed packs directly on one
+The two-module profile configures **one fixed pack** (`battery1`); the four-module
+profile configures **two fixed packs** (`battery1`, `battery2`). Both use the same
 500-kbit/s battery CAN bus, with no separate Parallel Battery Controller. Each
 configured participant gets a `battery/<id>/state` publisher; IDs must be valid
 ROS topic tokens. The monitor separates traffic by source address and PGN and
 rejects duplicate telegram bindings so a single binding cannot satisfy two packs.
 
-**The two packs' telemetry mapping still requires commissioning.** The supplied
+**The installed packs' telemetry mapping still requires commissioning.** The supplied
 `battery1` (`0xF4`) and `battery2` (`0xF5`) source addresses and their PGNs are
 retained reference values from the previous controller-based setup. They are not
 confirmed addresses for the installed fixed packs. Edit `battery.participants`
@@ -51,11 +52,13 @@ when all required participants are fresh/ready and minimum SOC is at least `0.2`
 The supervisor does not subscribe to public `battery/state`; its gate uses the
 aggregate `battery/system_state`. External monitoring can consume either.
 
-Both packs must provide fresh status, SOC and electrical telegrams, with valid
-values, operational status and HV connected. Either pack's loss/fault/HV loss
-blocks readiness; either SOC below 20% blocks supervisor enable/motion. The
-aggregate reports the lower SOC, never an average that could hide a depleted
-pack. Per-pack current/voltage remain separate; no system current is synthesized.
+Every configured pack must provide fresh status, SOC and electrical telegrams,
+with valid values, operational status and HV connected. Any required pack's
+loss/fault/HV loss blocks readiness; any SOC below 20% blocks supervisor
+enable/motion. The two-module profile does not wait for pack 2 or publish its
+topic. The aggregate reports the minimum configured SOC, never an average that
+could hide a depleted pack. Per-pack current/voltage remain separate; no system
+current is synthesized.
 
 Contactor and charge control are intentionally excluded. ROS telemetry does not
 authorize inferred battery-control commands.
@@ -76,7 +79,7 @@ In integrated bringup, the corresponding switch is `start_battery_socketcan`.
 Do not run both launch files simultaneously for the same battery/namespace.
 See [mapping and commissioning](../../docs/hardware_monitoring.md).
 
-## Two-pack commissioning
+## Battery commissioning
 
 The supplied *Vanguard Battery Fixed Pack Quick Start Guide*, rev 3eu (08/2026),
 applies to Universal-Turn-Key firmware. Figure 3 (page 9) shows two packs on a
@@ -89,17 +92,17 @@ for wiring, termination, firmware compatibility and electrical enable/interlocks
 On a commissioned, listen-only Linux adapter, record and inspect traffic:
 
 ```bash
-candump -L can1 > battery-two-packs.log
+candump -L can1 > battery-packs.log
 ros2 topic echo /moboterra/battery/battery1/state
-ros2 topic echo /moboterra/battery/battery2/state
+ros2 topic echo /moboterra/battery/battery2/state  # Four-module/two-pack profile only.
 ros2 topic echo /moboterra/battery/system_state
 ```
 
 Identify each pack independently under the approved commissioning procedure,
-then confirm both together: source identity, PGNs, byte layout, scaling, status
-codes and update periods must match the installed firmware. Two transmitters
+then confirm all configured packs together: source identity, PGNs, byte layout,
+scaling, status codes and update periods must match the installed firmware. Two transmitters
 with indistinguishable CAN identities cannot be separated by this monitor;
 resolve addressing using the vendor procedure. The monitor does not transmit
-address-assignment, contactor or charging commands. Verify that losing either
-pack or any required telegram blocks readiness, and that either pack below 20%
+address-assignment, contactor or charging commands. Verify that losing any
+required pack or telegram blocks readiness, and that any pack below 20%
 inhibits motion. Local software tests do not establish physical acceptance.

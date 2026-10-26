@@ -45,15 +45,36 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(drive['encoder_resolution'], p['drives.resolutions'][index])
             self.assertEqual(drive['gear_ratio'], p['drives.gear_ratios'][index])
 
-    def test_both_platforms_require_two_direct_battery_packs(self):
-        for path in (self.cfg.path, self.cfg.path.with_name('platform-front-right-rear-left.yaml')):
+    def test_battery_count_matches_each_supplied_wheel_module_option(self):
+        profiles = (
+            (self.cfg.path, 4, ['battery1', 'battery2']),
+            (self.cfg.path.with_name('platform-front-right-rear-left.yaml'), 2, ['battery1']),
+        )
+        for path, module_count, identifiers in profiles:
             with self.subTest(path=path):
                 cfg = Configuration(path)
                 battery = cfg.parameters('battery')
-                self.assertEqual(battery['batteries.ids'], ['battery1', 'battery2'])
+                self.assertEqual(len(cfg.platform['modules']), module_count)
+                self.assertEqual(battery['batteries.ids'], identifiers)
+                for key in ('source_addresses', 'status_pgns', 'soc_pgns', 'voltage_pgns'):
+                    self.assertEqual(len(battery['batteries.' + key]), len(identifiers))
                 self.assertEqual(battery['primary_battery_id'], 'battery1')
                 self.assertEqual(cfg.platform['can']['battery'],
                                  {'interface': 'can1', 'bitrate': 500000, 'listen_only': True})
+
+    def test_integrated_and_standalone_battery_launch_follow_selected_pack_count(self):
+        for path, identifiers in (
+                (self.cfg.path, ['battery1', 'battery2']),
+                (self.cfg.path.with_name('platform-front-right-rear-left.yaml'), ['battery1'])):
+            with self.subTest(path=path):
+                overrides = {'platform_config': str(path)}
+                integrated, _ = resolve(
+                    factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(), overrides)
+                standalone, _ = resolve(environment()['standalone_launch']('battery'), overrides)
+                for actions in (integrated, standalone):
+                    node = next(a for a in actions if a.kind == 'Node'
+                                and a.kwargs['executable'] == 'vanguard_battery_monitor')
+                    self.assertEqual(node.kwargs['parameters'][0]['batteries.ids'], identifiers)
 
     def test_battery_topics_and_telegram_bindings_cannot_alias(self):
         for bad_id in ('battery/2', '2battery', 'bad name'):
@@ -112,6 +133,7 @@ class ConfigurationTest(unittest.TestCase):
         original['can']['master_node_id'] = '0x0B'
         original['operator'] = copy.deepcopy(cfg.platform['operator'])
         original['safety'] = {'source': 'hardwired_sto'}
+        original['battery']['participants'] = original['battery']['participants'][:1]
         original['commissioning_pending'] = [item.replace(
             'Confirm FlexiSoft/ELMO independent STO and enable bit mapping.',
             'Verify Siemens hardwired STO chain and fresh per-module drive STO feedback.')

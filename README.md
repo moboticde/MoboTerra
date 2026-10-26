@@ -22,10 +22,10 @@ front-right/rear-left profile uses a 250-kbit/s platform bus, PAIL receiver node
 
 Select the platform profile that matches the machine before hardware launch:
 
-| Profile | Modules | Platform CAN | PAIL operator |
-|:--|:--|:--|:--|
-| [platform.yaml](src/mobotic_config/config/platform.yaml), default | Four steering/traction modules | `can0`, 500 kbit/s | Receiver node 9; mapping unverified, zero motion/capture only |
-| [platform-front-right-rear-left.yaml](src/mobotic_config/config/platform-front-right-rear-left.yaml) | Front-right nodes 3/4 and rear-left nodes 7/8 | `can0`, 250 kbit/s | Receiver node 10, master node 11; confirmed stick, RP1, B1 and B2 assignments |
+| Profile | Modules | Batteries | Platform CAN | PAIL operator |
+|:--|:--|:--|:--|:--|
+| [platform.yaml](src/mobotic_config/config/platform.yaml), default | Four steering/traction modules | Two (`battery1`, `battery2`) | `can0`, 500 kbit/s | Receiver node 9; mapping unverified, zero motion/capture only |
+| [platform-front-right-rear-left.yaml](src/mobotic_config/config/platform-front-right-rear-left.yaml) | Front-right nodes 3/4 and rear-left nodes 7/8 | One (`battery1`) | `can0`, 250 kbit/s | Receiver node 10, master node 11; confirmed stick, RP1, B1 and B2 assignments |
 
 Both profiles use a separate battery bus. The two-module PAIL profile uses RP1
 for Manual/Autonomous selection, B1/SP3 for boost and B2/SP4 for reset, with no
@@ -51,11 +51,12 @@ manual physical `initialize_all_drives` / `enable_all_drives` step. See the
 All topic names above are relative to the robot namespace, normally `/moboterra`.
 FlexiSoft profiles require both `safety/state` and `safety/io_state`. The explicit
 two-module hardware-STO profile requires no Siemens network telemetry. Both
-variants require `battery/system_state`. Both platform profiles require two
-Vanguard fixed packs directly on the shared, listen-only 500-kbit/s battery bus.
-`battery/battery1/state` and `battery/battery2/state` expose their individual
-measurements. `battery/state` aliases pack 1; the supervisor uses aggregate
-readiness and the **lower SOC**, requiring both packs ready and at least 20% SOC.
+variants require `battery/system_state`. The two-module profile requires **one
+Vanguard fixed pack**; the four-module profile requires **two**. Both use the
+listen-only 500-kbit/s battery bus. `battery/battery1/state` exposes pack 1;
+`battery/battery2/state` is published only when pack 2 is configured.
+`battery/state` aliases pack 1; the supervisor requires every configured pack
+ready and at least 20% SOC, using the **minimum SOC** across those packs.
 The retained reference source addresses/PGNs need verification for the installed
 packs; see [battery telemetry and commissioning](src/mobotic_vanguard_battery/README.md).
 
