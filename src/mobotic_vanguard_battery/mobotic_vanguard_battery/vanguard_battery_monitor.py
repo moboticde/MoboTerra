@@ -1,4 +1,5 @@
 import math
+import re
 from dataclasses import dataclass, field
 
 import rclpy
@@ -70,6 +71,8 @@ class VanguardBatteryMonitor(Node):
             raise ValueError('all batteries.* arrays must have the same non-zero size')
         if len(set(identifiers)) != len(identifiers) or any(not name for name in identifiers):
             raise ValueError('battery identifiers must be non-empty and unique')
+        if any(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name) is None for name in identifiers):
+            raise ValueError('battery identifiers must be valid ROS topic tokens')
         if self.primary_battery_id not in identifiers:
             raise ValueError('primary_battery_id must name one configured battery')
         if (not all(math.isfinite(value) for value in (self.telemetry_timeout, self.publish_period))
@@ -77,6 +80,7 @@ class VanguardBatteryMonitor(Node):
             raise ValueError('telemetry timeout and publish period must be positive')
 
         self.batteries = {}
+        telegrams = set()
         for index, identifier in enumerate(identifiers):
             battery = BatteryTelemetry(
                 identifier=identifier,
@@ -87,8 +91,19 @@ class VanguardBatteryMonitor(Node):
             )
             if not 0 <= battery.source_address <= 0xFF:
                 raise ValueError(f'invalid J1939 source address for {identifier}')
+            for pgn in (battery.status_pgn, battery.soc_pgn, battery.voltage_pgn):
+                if not 0 <= pgn <= 0x3FFFF:
+                    raise ValueError(f'invalid J1939 PGN for {identifier}')
+                binding = (battery.source_address, pgn)
+                if binding in telegrams:
+                    raise ValueError('battery telegram bindings must be unique')
+                telegrams.add(binding)
             self.batteries[identifier] = battery
 
+        self.battery_publishers = {
+            identifier: self.create_publisher(BatteryState, f'battery/{identifier}/state', 1)
+            for identifier in self.batteries
+        }
         self.primary_publisher = self.create_publisher(BatteryState, 'battery/state', 1)
         self.system_state_publisher = self.create_publisher(
             BatterySystemState, 'battery/system_state', 1
@@ -209,6 +224,7 @@ class VanguardBatteryMonitor(Node):
         all_high_voltage_connected = True
         for identifier, battery in self.batteries.items():
             message = self._message(battery, now)
+            self.battery_publishers[identifier].publish(message)
             if identifier == self.primary_battery_id:
                 primary_message = message
             fields_fresh = (

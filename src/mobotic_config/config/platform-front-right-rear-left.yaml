@@ -107,13 +107,13 @@ scanners:
 safety:
   source: hardwired_sto
 battery:
-  primary_id: parallel_battery_controller
+  # Two fixed packs directly on the shared battery CAN bus; no separate controller.
+  # Retained reference SA/PGNs below are UNVERIFIED for the installed UTK packs.
+  # Confirm each pack's identity and telegram layout from vendor data/CAN capture.
+  primary_id: battery1
   participants:
-    - {id: parallel_battery_controller, source_address: '0xF3', status_pgn: '0xF096', soc_pgn: '0xF091', voltage_pgn: '0xF090'}
     - {id: battery1, source_address: '0xF4', status_pgn: '0xF197', soc_pgn: '0xF192', voltage_pgn: '0xF191'}
     - {id: battery2, source_address: '0xF5', status_pgn: '0xF1A6', soc_pgn: '0xF1A1', voltage_pgn: '0xF1A0'}
-    - {id: battery3, source_address: '0xF6', status_pgn: '0xF1B5', soc_pgn: '0xF1B0', voltage_pgn: '0xF1AF'}
-    - {id: battery4, source_address: '0x80', status_pgn: '0xF1C4', soc_pgn: '0xF1BF', voltage_pgn: '0xF1BE'}
 commissioning_pending:
   - Verify drive IDs, encoder zero/sign, gearing, current and mechanical travel limits.
   - Verify actual battery participants and CAN telegram mapping.

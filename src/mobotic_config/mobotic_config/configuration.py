@@ -316,6 +316,8 @@ def validate_platform(platform):
         for participant in participants:
             _record(participant, ('id', 'source_address', 'status_pgn', 'soc_pgn', 'voltage_pgn'), 'battery participant')
             identifiers.append(_text(participant['id'], 'battery ID'))
+            if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', participant['id']) is None:
+                raise ConfigurationError('battery IDs must be valid ROS topic tokens')
             address = _id(participant['source_address'], 255, 'battery address')
             for field in ('status_pgn', 'soc_pgn', 'voltage_pgn'):
                 telegrams.append((address, _id(participant[field], 0x3FFFF, field)))

@@ -45,6 +45,28 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(drive['encoder_resolution'], p['drives.resolutions'][index])
             self.assertEqual(drive['gear_ratio'], p['drives.gear_ratios'][index])
 
+    def test_both_platforms_require_two_direct_battery_packs(self):
+        for path in (self.cfg.path, self.cfg.path.with_name('platform-front-right-rear-left.yaml')):
+            with self.subTest(path=path):
+                cfg = Configuration(path)
+                battery = cfg.parameters('battery')
+                self.assertEqual(battery['batteries.ids'], ['battery1', 'battery2'])
+                self.assertEqual(battery['primary_battery_id'], 'battery1')
+                self.assertEqual(cfg.platform['can']['battery'],
+                                 {'interface': 'can1', 'bitrate': 500000, 'listen_only': True})
+
+    def test_battery_topics_and_telegram_bindings_cannot_alias(self):
+        for bad_id in ('battery/2', '2battery', 'bad name'):
+            profile = copy.deepcopy(self.cfg.platform)
+            profile['battery']['participants'][1]['id'] = bad_id
+            with self.subTest(identifier=bad_id), self.assertRaises(ConfigurationError):
+                validate_platform(profile)
+        profile = copy.deepcopy(self.cfg.platform)
+        duplicate = dict(profile['battery']['participants'][0], id='another_battery')
+        profile['battery']['participants'][1] = duplicate
+        with self.assertRaisesRegex(ConfigurationError, 'unique'):
+            validate_platform(profile)
+
     def test_confirmed_two_module_pail_assignments_and_distinct_master(self):
         cfg = Configuration(self.cfg.path.with_name('platform-front-right-rear-left.yaml'))
         mapping = cfg.platform['operator']['mapping']

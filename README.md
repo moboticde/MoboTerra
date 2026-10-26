@@ -51,7 +51,13 @@ manual physical `initialize_all_drives` / `enable_all_drives` step. See the
 All topic names above are relative to the robot namespace, normally `/moboterra`.
 FlexiSoft profiles require both `safety/state` and `safety/io_state`. The explicit
 two-module hardware-STO profile requires no Siemens network telemetry. Both
-variants require `battery/system_state`. One public `battery/state` supplies standard battery telemetry.
+variants require `battery/system_state`. Both platform profiles require two
+Vanguard fixed packs directly on the shared, listen-only 500-kbit/s battery bus.
+`battery/battery1/state` and `battery/battery2/state` expose their individual
+measurements. `battery/state` aliases pack 1; the supervisor uses aggregate
+readiness and the **lower SOC**, requiring both packs ready and at least 20% SOC.
+The retained reference source addresses/PGNs need verification for the installed
+packs; see [battery telemetry and commissioning](src/mobotic_vanguard_battery/README.md).
 
 ## Packages
 

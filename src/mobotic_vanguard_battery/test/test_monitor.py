@@ -1,6 +1,7 @@
 """Exercise actual battery monitor methods with ROS message/clock doubles."""
 import ast
 import math
+import re
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -36,7 +37,7 @@ tree = ast.parse(source.read_text(encoding='utf-8'))
 cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'VanguardBatteryMonitor')
 cls.bases = []
 cls.body = [node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name != '__init__']
-namespace = dict(math=math, Time=Time, BatteryState=Message, BatterySystemState=Message,
+namespace = dict(math=math, re=re, Time=Time, BatteryState=Message, BatterySystemState=Message,
                  HIGH_VOLTAGE_CONNECTED=1, OPERATIONAL=2,
                  decode_soc=telemetry.decode_soc, decode_electrical=telemetry.decode_electrical,
                  values_valid=telemetry.values_valid)
@@ -57,14 +58,19 @@ class BatteryMonitorTest(unittest.TestCase):
             soc_stamp=self.now, electrical_stamp=self.now, acquisition_stamps={})
         node.batteries = {'system': self.battery}
         self.primary, self.system = [], []
+        self.pack_messages = {'system': []}
+        node.battery_publishers = {
+            'system': SimpleNamespace(publish=self.pack_messages['system'].append),
+        }
         node.primary_publisher = SimpleNamespace(publish=self.primary.append)
         node.system_state_publisher = SimpleNamespace(publish=self.system.append)
 
-    def test_valid_system_and_single_public_battery(self):
+    def test_valid_system_primary_alias_and_individual_telemetry(self):
         self.node._publish()
         self.assertTrue(self.system[-1].system_ready)
         self.assertEqual(self.system[-1].minimum_percentage, 0.5)
         self.assertEqual(len(self.primary), 1)
+        self.assertIs(self.primary[-1], self.pack_messages['system'][-1])
 
     def test_invalid_soc_blocks_readiness(self):
         self.battery.percentage = math.nan
@@ -78,6 +84,7 @@ class BatteryMonitorTest(unittest.TestCase):
         missing.identifier = 'internal'
         missing.soc_stamp = None
         self.node.batteries['internal'] = missing
+        self.node.battery_publishers['internal'] = SimpleNamespace(publish=lambda message: None)
         self.node._publish()
         self.assertFalse(self.system[-1].communication_ok)
         self.assertEqual(self.system[-1].stale_batteries, ['internal'])

@@ -1,41 +1,26 @@
 {
   "battery": {
     "batteries.ids": [
-      "parallel_battery_controller",
       "battery1",
-      "battery2",
-      "battery3",
-      "battery4"
+      "battery2"
     ],
     "batteries.status_pgns": [
-      "0xF096",
       "0xF197",
-      "0xF1A6",
-      "0xF1B5",
-      "0xF1C4"
+      "0xF1A6"
     ],
     "batteries.soc_pgns": [
-      "0xF091",
       "0xF192",
-      "0xF1A1",
-      "0xF1B0",
-      "0xF1BF"
+      "0xF1A1"
     ],
     "batteries.voltage_pgns": [
-      "0xF090",
       "0xF191",
-      "0xF1A0",
-      "0xF1AF",
-      "0xF1BE"
+      "0xF1A0"
     ],
     "batteries.source_addresses": [
-      "0xF3",
       "0xF4",
-      "0xF5",
-      "0xF6",
-      "0x80"
+      "0xF5"
     ],
-    "primary_battery_id": "parallel_battery_controller",
+    "primary_battery_id": "battery1",
     "telemetry_timeout": 0.5,
     "publish_period": 0.1
   },

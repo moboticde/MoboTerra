@@ -68,7 +68,8 @@ Types in the following table use ROS 2 `package/msg/Type` notation.
 | `wheel_modules/status` | mobotic_interfaces/msg/WheelModuleStatusArray | Driver; steering/traction health and current |
 | `vehicle/measured_velocity` | geometry_msgs/msg/TwistStamped | Kinematics; measured body velocity |
 | `vehicle/odom` | nav_msgs/msg/Odometry | Odometry; wheel-derived pose and twist |
-| `battery/state` | sensor_msgs/msg/BatteryState | Public battery telemetry, SOC as a fraction |
+| `battery/state` | sensor_msgs/msg/BatteryState | Alias for configured primary pack (`battery1`); SOC as a fraction, not a two-pack aggregate |
+| `battery/<id>/state` | sensor_msgs/msg/BatteryState | Individual pack telemetry; supplied profiles expose `battery1` and `battery2` |
 | `battery/system_state` | mobotic_interfaces/msg/BatterySystemState | Battery monitor; aggregate pack readiness/faults |
 | `safety/state` | mobotic_interfaces/msg/SafetyState | Safety monitor; software motion permission and stop state |
 | `safety/io_state` | mobotic_interfaces/msg/SafetyIOState | Safety monitor; mapped I/O and known flags |

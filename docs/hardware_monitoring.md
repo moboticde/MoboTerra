@@ -19,9 +19,9 @@ Verify the independent hardware watchdog/STO and brake behavior on the machine.
 
 The local `terra_spiro` files were read as reference data; only MoboTerra was edited.
 
-- `mobotic_launch/launch/terraspiro.launch.py`: Vanguard controller/internal
-  participant source addresses and status/SOC/electrical PGNs. MoboTerra keeps
-  one public `battery/state`, plus `battery/system_state` for readiness.
+- `mobotic_launch/launch/terraspiro.launch.py`: historical Vanguard controller/
+  participant source addresses and status/SOC/electrical PGNs. These are
+  reference data, not a verified mapping for the installed fixed packs.
 - `startup/README.md` and `vanguard_charge_monitor.launch.py`: separate 500 kbit/s
   CAN buses, `can0` for drives and `can1` for listen-only battery telemetry.
   MoboTerra bringup now launches a receiver-only battery transport under
@@ -36,17 +36,32 @@ The local `terra_spiro` files were read as reference data; only MoboTerra was ed
   and 0x60FD:0 (digital inputs). They are polled even when drives are disabled.
 
 The scanner API/remappings follow the [SICK ROS 2 driver documentation](https://github.com/SICKAG/sick_safetyscanners2).
-Both nodes publish separate scan/raw/output-path topics. They do not feed a new
-ROS safety algorithm: protective fields still reach the supervisor through FlexiSoft.
+Both nodes publish separate scan/raw/output-path topics. The scanner adapter
+reads raw evaluation paths directly and publishes per-scanner field status for
+the supervisor's yellow speed cap and red/unknown stop policy. The independent
+physical safety chain remains responsible for the safety-rated stop.
 Autonomy can subscribe to the laser scans; no autonomy implementation was added.
 Scanner transforms and CAD-envelope corner frames are integrated through the
 shared description; physical extrinsic calibration remains a commissioning task.
 
-The reference battery is a single **system** containing a controller and four
-configured internal participants. Every configured participant must send all
-three telegrams. If the actual battery has fewer participants, reduce all five
-`batteries.*` arrays together; do not leave absent modules configured or readiness
-will correctly remain false.
+The installed battery system has **two fixed packs directly on the shared CAN
+bus**, with no separate Parallel Battery Controller. Both platform profiles now
+require only `battery1` and `battery2`; the old controller/battery3/battery4
+requirements are removed. Both packs must independently send status, SOC and
+electrical telegrams. `battery/<id>/state` exposes individual measurements;
+`battery/state` aliases pack 1, and `battery/system_state` gates the supervisor
+using both packs' health/HV/freshness and the lower SOC.
+
+The retained pack source addresses/PGNs are **unverified reference values** from
+the historical controller-based setup. The supplied Vanguard Fixed Pack Quick
+Start Guide, rev 3eu (08/2026), confirms two packs on primary battery CAN0,
+J1939 at 500 kbit/s, but does not define telemetry identity/encoding. Confirm each
+pack's actual address, PGNs, byte layout/scaling, status codes and update periods
+against the vendor CAN specification and a passive capture before commissioning.
+Edit `battery.participants` in the selected platform YAML; all five `batteries.*`
+arrays are generated together. Do not configure absent participants or assign
+the same telegram binding to both packs. See the
+[two-pack battery commissioning procedure](../src/mobotic_vanguard_battery/README.md#two-pack-commissioning).
 SOC reference units are percent; `sensor_msgs/BatteryState.percentage` and
 `minimum_percentage` are fractions. Invalid/reserved values produce NaN and block
 readiness, not a clamped 100% SOC. The supervisor threshold remains 0.2 (20%).
