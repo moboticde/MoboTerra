@@ -156,10 +156,90 @@ class FreshnessTest(unittest.TestCase):
         self.now += 1_000_000
         self.assertIsNotNone(self.pair())
 
+    def test_queued_emcy_reset_clears_fault_but_requires_post_callback_pdos(self):
+        fault_stamp = self.now
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0],
+                  stamp=fault_stamp, dt=10_000_000)
+        self.send(self.rx.emergency_id, [0] * 8,
+                  stamp=fault_stamp + 1_000_000, dt=1_000_000)
+        self.assertEqual((self.rx.emergency_code, self.rx.emergency_register), (0, 0))
+        # Clearing the fault must not revive PDOs queued before the clear callback.
+        self.send(stamp=fault_stamp + 2_000_000)
+        self.send(self.rx.analog_id, stamp=fault_stamp + 3_000_000)
+        self.assertIsNone(self.rx.snapshot(self.now))
+        self.now += 1_000_000
+        self.assertIsNotNone(self.pair())
+
+    def test_queued_new_emergency_is_not_hidden_by_input_invalidation(self):
+        fault_stamp = self.now
+        self.rx.invalidate('authority changed', self.now + 5_000_000)
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0],
+                  stamp=fault_stamp, dt=10_000_000)
+        self.assertEqual(self.rx.emergency_code, 0x8110)
+        self.assertIsNone(self.pair())
+
+    def test_older_or_duplicate_emcy_reset_cannot_clear_newer_fault(self):
+        fault_stamp = self.now
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0],
+                  stamp=fault_stamp, dt=10_000_000)
+        for stamp in (fault_stamp - 1, fault_stamp):
+            self.send(self.rx.emergency_id, [0] * 8, stamp=stamp, dt=1_000_000)
+            self.assertEqual(self.rx.emergency_code, 0x8110)
+        self.send(self.rx.emergency_id, [0] * 8,
+                  stamp=fault_stamp + 1, dt=1_000_000)
+        self.assertEqual(self.rx.emergency_code, 0)
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0],
+                  stamp=fault_stamp + 2, dt=1_000_000)
+        self.assertEqual(self.rx.emergency_code, 0x8110)
+
+    def test_expired_or_future_emcy_reset_cannot_clear_fault(self):
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
+        self.send(self.rx.emergency_id, [0] * 8, stamp=self.now + 1)
+        self.assertEqual(self.rx.emergency_code, 0x8110)
+        self.send(self.rx.emergency_id, [0] * 8, stamp=self.now + 1, dt=300_000_000)
+        self.assertEqual(self.rx.emergency_code, 0x8110)
+
     def test_zero_emcy_with_nonzero_error_register_does_not_clear_fault(self):
         self.send(self.rx.emergency_id, [0, 0, 1, 0, 0, 0, 0, 0])
         self.now += 1_000_000
         self.assertIsNone(self.pair())
+
+    def test_latched_emergency_exposes_recovery_inputs_but_never_motion(self):
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
+        self.assertIsNone(self.pair())
+        observed = self.rx.recovery_snapshot(self.now)
+        self.assertIsNotNone(observed)
+        self.assertTrue(observed.digital['LINK'] and observed.digital['EMGY'])
+        self.assertIsNone(self.rx.snapshot(self.now, consume=True))
+        self.assertEqual(self.rx.reason, 'receiver EMCY is uncleared')
+
+    def test_acknowledgement_discards_pre_verification_inputs(self):
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
+        emergency_stamp = self.now
+        self.pair()
+        self.assertTrue(self.rx.acknowledge_recovery(emergency_stamp, self.now + 1))
+        self.assertIsNone(self.rx.snapshot(self.now + 1))
+        self.now += 2
+        self.assertIsNotNone(self.pair())
+
+    def test_new_emergency_and_clock_rollback_reject_old_acknowledgement(self):
+        for rollback in (False, True):
+            self.setUp()
+            self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
+            stamp = self.now
+            if rollback:
+                self.now -= 1
+            else:
+                self.send(self.rx.emergency_id, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0], dt=1)
+            self.assertFalse(self.rx.acknowledge_recovery(stamp, self.now))
+            self.assertNotEqual(self.rx.emergency_register, 0)
+
+    def test_recovery_inputs_keep_normal_freshness_and_skew_limits(self):
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
+        self.send(dt=1)
+        self.send(self.rx.analog_id, dt=80_000_000)
+        self.assertIsNone(self.rx.recovery_snapshot(self.now))
+        self.assertIsNone(self.rx.recovery_snapshot(self.now + 251_000_000))
 
     def test_clock_reversal_clears_pair_and_accepts_new_epoch(self):
         self.pair()
@@ -185,6 +265,43 @@ class FreshnessTest(unittest.TestCase):
         self.pair()
         self.assertFalse(self.send(0x20000040, is_error=True))
         self.assertIsNone(self.rx.snapshot(self.now))
+
+    def test_physical_status_survives_emcy_without_preserving_motion(self):
+        self.pair()
+        stamp = self.rx.samples[self.rx.digital_id][0]
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0], dt=1_000_000)
+        observed_stamp, digital = self.rx.physical_snapshot(self.now)
+        self.assertEqual(observed_stamp, stamp)
+        self.assertTrue(digital['LINK'] and digital['EMGY'])
+        self.assertIsNone(self.rx.snapshot(self.now))
+        self.send(self.rx.emergency_id, [0] * 8, dt=1_000_000)
+        self.assertEqual(self.rx.physical_snapshot(self.now)[0], stamp)
+        self.assertIsNone(self.rx.snapshot(self.now))
+        self.assertIsNone(self.rx.physical_snapshot(stamp + 251_000_000))
+
+    def test_digital_only_updates_physical_status_but_never_motion(self):
+        self.send(data=[0] * 7 + [0x28])
+        self.assertIsNotNone(self.rx.physical_snapshot(self.now))
+        self.assertIsNone(self.rx.snapshot(self.now))
+        self.send(data=[0] * 7 + [0x80], dt=1_000_000)
+        self.assertTrue(self.rx.physical_snapshot(self.now)[1]['STOP'])
+        self.assertIsNone(self.rx.snapshot(self.now))
+
+    def test_boot_and_bus_error_discard_physical_state_and_queued_samples(self):
+        for bus_error in (False, True):
+            self.setUp()
+            self.pair()
+            old = self.now
+            if bus_error:
+                self.send(0x20000040, is_error=True, dt=10_000_000)
+            else:
+                self.send(self.rx.heartbeat_id, [0], dt=10_000_000)
+            self.assertIsNone(self.rx.physical_snapshot(self.now))
+            self.send(data=[0] * 7 + [0x28], stamp=old)
+            self.assertIsNone(self.rx.physical_snapshot(self.now))
+            self.send(data=[0] * 7 + [0x28], dt=1_000_000)
+            self.assertIsNotNone(self.rx.physical_snapshot(self.now))
+            self.assertIsNone(self.rx.snapshot(self.now))
 
     def test_invalid_receiver_configuration(self):
         for node in (0, 128, True, '10'):

@@ -92,11 +92,16 @@ class RemdeviceReceiver:
         self.consumed = {}
         self.last_now_ns = None
         self.epoch_ns = 0
+        self.physical_sample = None
+        self.physical_epoch_ns = 0
         self.emergency_code = 0
         self.emergency_register = 0
         self.reason = 'waiting for both PDOs'
 
-    def invalidate(self, reason, now_ns):
+    def invalidate(self, reason, now_ns, *, preserve_physical=False):
+        if not preserve_physical:
+            self.physical_sample = None
+            self.physical_epoch_ns = now_ns
         self.samples.clear()
         self.consumed.clear()
         self.epoch_ns = now_ns
@@ -110,7 +115,7 @@ class RemdeviceReceiver:
             self.invalidate('clock moved backwards', now_ns)
         self.last_now_ns = now_ns
         if any(not 0 <= now_ns - stamp <= self.timeout_ns for stamp, _ in self.samples.values()):
-            self.invalidate('PDO timeout', now_ns)
+            self.invalidate('PDO timeout', now_ns, preserve_physical=True)
 
     def update(self, cob_id, dlc, data, stamp_ns, now_ns, *, is_extended=False,
                is_rtr=False, is_error=False):
@@ -137,7 +142,25 @@ class RemdeviceReceiver:
         except (TypeError, ValueError):
             self.invalidate('invalid CAN payload', now_ns)
             return False
-        if stamp_ns < self.epoch_ns or stamp_ns <= self.last_stamps.get(cob_id, -1):
+        if stamp_ns <= self.last_stamps.get(cob_id, -1):
+            return False
+        if cob_id == self.emergency_id:
+            # EMCYs describe receiver state in acquisition order. A fault and its
+            # zero-code reset can both be queued before the first callback runs;
+            # the PDO cutoff (callback time) must not hide either newer event.
+            # Keep that cutoff for motion: recovery still needs fresh PDOs and
+            # neutral rearm after processing the event.
+            self.last_stamps[cob_id] = stamp_ns
+            self.emergency_code = int.from_bytes(payload[:2], 'little')
+            self.emergency_register = payload[2]
+            self.invalidate(f'EMCY 0x{self.emergency_code:04x}', now_ns, preserve_physical=True)
+            return False
+        # Physical LINK/EMGY/STOP observation is independent of motion-pair
+        # invalidation. Never refresh it from an EMCY or a publishing timer.
+        if (cob_id == self.digital_id and stamp_ns >= self.physical_epoch_ns
+                and (self.physical_sample is None or stamp_ns > self.physical_sample[0])):
+            self.physical_sample = (stamp_ns, payload)
+        if stamp_ns < self.epoch_ns:
             return False
         self.last_stamps[cob_id] = stamp_ns
         if cob_id == self.heartbeat_id:
@@ -145,17 +168,22 @@ class RemdeviceReceiver:
             if payload[0] & 0x7f != 5:
                 self.invalidate('receiver boot-up or non-operational', now_ns)
             return False
-        if cob_id == self.emergency_id:
-            self.emergency_code = int.from_bytes(payload[:2], 'little')
-            self.emergency_register = payload[2]
-            self.invalidate(f'EMCY 0x{self.emergency_code:04x}', now_ns)
-            return False
-        if self.emergency_code or self.emergency_register:
-            self.invalidate('receiver EMCY is uncleared', now_ns)
-            return False
         self.samples[cob_id] = (stamp_ns, payload)
+        if self.emergency_code or self.emergency_register:
+            # Keep fresh physical inputs observable for explicit B2 recovery.
+            # snapshot() still denies every motion sample while the fault is latched.
+            self.reason = 'receiver EMCY is uncleared'
+            return False
         self.reason = 'waiting for both PDOs'
         return True
+
+    def physical_snapshot(self, now_ns):
+        """Fresh radio/STOP evidence only; never a motion or reset-admission sample."""
+        self._tick(now_ns)
+        sample = self.physical_sample
+        if sample is None or not 0 <= now_ns - sample[0] <= self.timeout_ns:
+            return None
+        return sample[0], decode_digital(sample[1])
 
     def digital(self, now_ns):
         """Fresh status, including STOP/radio loss, independent of analog PDO."""
@@ -164,6 +192,27 @@ class RemdeviceReceiver:
         return decode_digital(sample[1]) if sample is not None else None
 
     def snapshot(self, now_ns, *, consume=False):
+        self._tick(now_ns)
+        if self.emergency_code or self.emergency_register:
+            self.reason = 'receiver EMCY is uncleared'
+            return None
+        return self._snapshot(now_ns, consume=consume)
+
+    def recovery_snapshot(self, now_ns):
+        """Physical inputs for reset admission only; never authorize motion."""
+        return self._snapshot(now_ns, consume=False)
+
+    def acknowledge_recovery(self, emergency_stamp_ns, now_ns):
+        """Caller must first verify a fresh, targeted 0x1001:0 zero reply."""
+        self._tick(now_ns)
+        if (type(emergency_stamp_ns) is not int or
+                self.last_stamps.get(self.emergency_id) != emergency_stamp_ns):
+            return False
+        self.emergency_code = self.emergency_register = 0
+        self.invalidate('receiver fault acknowledged; waiting for fresh PDOs', now_ns)
+        return True
+
+    def _snapshot(self, now_ns, *, consume=False):
         self._tick(now_ns)
         if not {self.digital_id, self.analog_id} <= self.samples.keys():
             return None
@@ -177,5 +226,6 @@ class RemdeviceReceiver:
             return None
         if consume:
             self.consumed = {cob: self.samples[cob][0] for cob in (self.digital_id, self.analog_id)}
-        self.reason = 'fresh PDO pair'
+        self.reason = ('receiver EMCY is uncleared' if self.emergency_code or self.emergency_register
+                       else 'fresh PDO pair')
         return PdoSample(min(digital_stamp, analog_stamp), decode_digital(digital), tuple(analog))

@@ -51,6 +51,7 @@ class DeploymentConfig:
     start_timeout: float = 120.0
     battery_bitrate: int | None = None
     platform_digest: str = ""
+    battery_listen_only: bool = True
 
     @property
     def effective_battery_bitrate(self) -> int:
@@ -186,7 +187,8 @@ class HostBackend:
         config = DeploymentConfig.from_values(values)
         digest = hashlib.sha256(json.dumps(platform, sort_keys=True).encode()).hexdigest()
         return dataclasses.replace(config, battery_bitrate=platform['can']['battery']['bitrate'],
-                                   platform_digest=digest)
+                                   platform_digest=digest,
+                                   battery_listen_only=platform['can']['battery']['listen_only'])
 
     def list_can_devices(self) -> list[CanDevice]:
         devices: list[CanDevice] = []
@@ -272,7 +274,7 @@ class HostBackend:
         return bool(
             platform_bitrate.search(platform_details)
             and battery_bitrate.search(battery_details)
-            and battery_listen_only
+            and battery_listen_only == config.battery_listen_only
             and not platform_listen_only
         )
 
@@ -308,13 +310,25 @@ class HostBackend:
         self.runner.run(["ip", "link", "set", "dev", temporary["battery"], "name", "can1"])
         self.runner.run(["udevadm", "settle"], check=False)
 
-        self.runner.run([
+        platform_command = [
             "ip", "link", "set", "dev", "can0", "type", "can",
             "bitrate", str(config.bitrate), "restart-ms", "100", "listen-only", "off",
-        ])
+        ]
+        try:
+            self.runner.run(platform_command)
+        except CommandError as exc:
+            if "doesn't support restart from Bus Off" not in str(exc):
+                raise
+            # Some gs_usb adapters cannot restart automatically. Keep bus-off
+            # monitoring and motion inhibition; do not force a bus-off recovery.
+            LOG.warning("can0 does not support automatic bus-off restart; using restart-ms 0")
+            fallback_command = platform_command.copy()
+            fallback_command[fallback_command.index("restart-ms") + 1] = "0"
+            self.runner.run(fallback_command)
         self.runner.run([
             "ip", "link", "set", "dev", "can1", "type", "can",
-            "bitrate", str(config.effective_battery_bitrate), "listen-only", "on",
+            "bitrate", str(config.effective_battery_bitrate), "listen-only",
+            "on" if config.battery_listen_only else "off",
         ])
         self.runner.run(["ip", "link", "set", "dev", "can0", "up"])
         self.runner.run(["ip", "link", "set", "dev", "can1", "up"])
@@ -390,7 +404,8 @@ class Supervisor:
         try:
             mapping = select_devices(self.backend.list_can_devices(), config)
             identity = (config.platform_serial, config.battery_serial, config.bitrate,
-                        config.effective_battery_bitrate, config.ros_domain_id, config.platform_digest)
+                        config.effective_battery_bitrate, config.ros_domain_id,
+                        config.platform_digest, config.battery_listen_only)
             if self.config_identity is not None and identity != self.config_identity:
                 # Do not silently apply new deployment identity to live processes.
                 issues.append("Deployment configuration changed; explicit service restart required")

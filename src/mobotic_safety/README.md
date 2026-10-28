@@ -102,3 +102,17 @@ inhibited after its status timeout until new complete telegrams arrive. Hardware
 STO remains independent. ROS-free tests cover real loopback sockets on Windows
 and Linux plus injected worker faults; actual ROS executor/launch respawning and
 hardware reconnection still require integration testing.
+
+Scanner field telemetry publishes each new acquisition and any stale/loss transition
+once. Repeated timer checks and updates from the other scanner do not republish
+an unchanged sample. Unchanged diagnostics publish at 1 Hz; severity/state changes
+publish immediately. Original acquisition stamps and all expiry checks remain.
+
+Hardware bringup runs `mobotic_scanner_projection` to copy scanner headers,
+derived values, general system state and application inputs/outputs from each
+`raw_data` acquisition to `evaluation_data`. The Python field adapter consumes
+that smaller message, avoiding conversion of per-beam arrays. Original raw, range
+and intrusion publications and scanner device settings remain unchanged. Device
+faults, evaluated-path validity, red fields and the 0.3 s expiry checks still apply.
+Standalone adapters default to `scanner_input_suffix:=raw_data`; hardware bringup
+selects `evaluation_data`. The projection does not infer physical OSSD state.

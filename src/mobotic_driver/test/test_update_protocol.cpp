@@ -10,6 +10,17 @@ int main()
 {
   try {
     MoboticDriveCanCommunication backend("traction", 2, VELOCITY, 4096, 16, {});
+    bool rpdo_type_verified = false;
+    for (const auto& frame : backend.tractionPdoConfigurationRequests(1))
+    {
+      if (frame.id == backend.canNodeID() && shortFromFrame(frame, 1) == 0x1400 && frame.data[3] == 2)
+      {
+        check(frame.data[0] == WRITE_TO_DEVICE_4B && intFromFrame(frame, 4) == 1,
+              "installed Gold RPDO transmission type requires a 32-bit SDO write");
+        rpdo_type_verified = true;
+      }
+    }
+    check(rpdo_type_verified, "Gold RPDO transmission type is configured explicitly");
     VirtualDriveProtocol virtual_drive(2, true, 4096, 16);
     PdoConfiguration setup; setup.start(backend.tractionPdoConfigurationRequests(1));
     for (unsigned attempt = 0; !setup.ready() && attempt < 200; ++attempt)

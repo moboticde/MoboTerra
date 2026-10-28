@@ -50,6 +50,16 @@ class VanguardBatteryMonitor(Node):
         self.declare_parameter('primary_battery_id', '')
         self.declare_parameter('telemetry_timeout', 0.5)
         self.declare_parameter('publish_period', 0.1)
+        self.declare_parameter('require_operational_status', True)
+        self.declare_parameter('require_not_charging', False)
+        self.require_operational_status = bool(self.get_parameter('require_operational_status').value)
+        self.require_not_charging = bool(self.get_parameter('require_not_charging').value)
+        if not self.require_operational_status and not self.require_not_charging:
+            raise ValueError('Telemetry-only readiness requires the noncharging interlock')
+        self.charger_stamp = None
+        self.charger_inhibits = False
+        self.charge_request_stamp = None
+        self.charge_request_inhibits = False
 
         identifiers = list(self.get_parameter('batteries.ids').value)
         source_addresses = list(self.get_parameter('batteries.source_addresses').value)
@@ -137,6 +147,26 @@ class VanguardBatteryMonitor(Node):
         # freshness to samples slightly ahead of our clock.
         sample_stamp = acquisition_stamp if age_ns >= 0 else now
 
+        if frame.id == 0x18FF10F3:
+            previous = getattr(self, 'charge_request_stamp', None)
+            if previous is None or sample_stamp.nanoseconds > previous.nanoseconds:
+                self.charge_request_stamp = sample_stamp
+                command = int(frame.data[0])
+                raw_current = int(frame.data[1]) | (int(frame.data[2]) << 8)
+                self.charge_request_inhibits = (command not in (0xFE, 0xFB)
+                    or (command == 0xFE and (raw_current > 0xFAFF or raw_current * 0.05 - 1600 > 0.1)))
+            return
+
+        if frame.id == 0x0CFFBC49:
+            previous = getattr(self, 'charger_stamp', None)
+            if previous is None or sample_stamp.nanoseconds > previous.nanoseconds:
+                self.charger_stamp = sample_stamp
+                # Vanguard charging guide Rev B: byte 4 state, byte 5 mains.
+                # Unknown charger values inhibit; absence expires after 1 s.
+                self.charger_inhibits = (int(frame.data[5]) != 0
+                    or int(frame.data[4]) not in (0, 9, 11))
+            return
+
         for battery in self.batteries.values():
             if source_address != battery.source_address:
                 continue
@@ -178,6 +208,25 @@ class VanguardBatteryMonitor(Node):
             and 0 <= (now - stamp).nanoseconds <= int(self.telemetry_timeout * 1e9)
         )
 
+    def _charging_inhibited(self, battery, now):
+        if not getattr(self, 'require_not_charging', False):
+            return False
+        stamp = getattr(self, 'charger_stamp', None)
+        charger_active = (stamp is not None and 0 <= (now - stamp).nanoseconds <= 1_000_000_000
+                          and getattr(self, 'charger_inhibits', True))
+        request = getattr(self, 'charge_request_stamp', None)
+        request_active = (request is not None and 0 <= (now - request).nanoseconds <= 1_000_000_000
+                          and getattr(self, 'charge_request_inhibits', True))
+        # Positive pack current can be regenerative braking, so use the
+        # documented charger/BMS charge protocol rather than current sign alone.
+        return charger_active or request_active
+
+    def _operational_ready(self, battery):
+        # This platform reports a cycling nibble, not a verified readiness enum.
+        # The explicitly selected telemetry-only policy does not gate on it.
+        return (not getattr(self, 'require_operational_status', True)
+                or battery.operational_status == OPERATIONAL)
+
     def _message(self, battery, now):
         status_fresh = self._fresh(battery.status_stamp, now)
         soc_fresh = self._fresh(battery.soc_stamp, now)
@@ -199,7 +248,8 @@ class VanguardBatteryMonitor(Node):
 
         if not status_fresh:
             msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_WATCHDOG_TIMER_EXPIRE
-        elif (battery.operational_status == OPERATIONAL and soc_fresh and electrical_fresh
+        elif (self._operational_ready(battery) and not self._charging_inhibited(battery, now)
+              and soc_fresh and electrical_fresh
               and values_valid(battery.percentage, battery.voltage, battery.current)):
             msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_GOOD
         else:
@@ -238,7 +288,7 @@ class VanguardBatteryMonitor(Node):
                 percentages.append(battery.percentage)
             if (
                 self._fresh(battery.status_stamp, now)
-                and (battery.operational_status != OPERATIONAL or
+                and (not self._operational_ready(battery) or self._charging_inhibited(battery, now) or
                      (fields_fresh and not values_valid(battery.percentage, battery.voltage, battery.current)))
             ):
                 faulted_batteries.append(identifier)
@@ -265,6 +315,8 @@ class VanguardBatteryMonitor(Node):
         system_state.faulted_batteries = faulted_batteries
         if stale_batteries:
             system_state.status_message = 'stale battery telemetry'
+        elif any(self._charging_inhibited(battery, now) for battery in self.batteries.values()):
+            system_state.status_message = 'charging or charger mains connected; drive readiness inhibited'
         elif faulted_batteries:
             system_state.status_message = 'battery participant fault or invalid telemetry'
         elif not all_high_voltage_connected:

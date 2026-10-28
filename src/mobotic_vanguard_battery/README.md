@@ -106,3 +106,27 @@ resolve addressing using the vendor procedure. The monitor does not transmit
 address-assignment, contactor or charging commands. Verify that losing any
 required pack or telegram blocks readiness, and that any pack below 20%
 inhibits motion. Local software tests do not establish physical acceptance.
+
+## Commissioned noncharging readiness policy
+
+The installed one-pack platform can explicitly select this readiness policy:
+
+```yaml
+battery:
+  # Retain primary_id and participants with their measured CAN bindings.
+  readiness:
+    require_operational_status: false
+    require_not_charging: true
+```
+
+This is the operator-requested telemetry policy. The previously decoded high
+nibble of status byte 5 cycles 0..15 on the installed idle pack; it is not a
+verified operational-state enum and is excluded from this profile's readiness
+decision. Status/SOC/electrical freshness, valid
+measurements, connected HV, and the supervisor's 20% minimum SOC remain required.
+A fresh BMS charge request above 0.1 A inhibits readiness. Regenerative current
+alone does not indicate an attached charger. The Vanguard charger
+status frame `0x0CFFBC49` also inhibits while its mains/state indicates charging
+or an unknown state; that indication expires one second after the last frame.
+No charging or contactor commands are sent. Without this profile record, the
+previous status-2 policy remains the default and charging is reported normally.

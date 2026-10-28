@@ -46,6 +46,39 @@ class DriveStartupTest(unittest.TestCase):
         self.assertIn('BMS_MONITOR_LOST', node.fault_codes)
         self.assertIn('OPERATOR_LOST', node.fault_codes)
 
+    def test_initial_host_discovery_wait_does_not_latch_before_drive_startup(self):
+        node = self.node
+        node.required_health_sources = ['host']
+        node.component_health = {}
+        node._control()
+        self.assertFalse(node.module_command_publisher.messages[-1].enable)
+        self.assertEqual(node.fault_codes, set())
+        record = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()),
+                                 monitoring_valid=True, fault_active=False)
+        node.component_health = {'host': (record, self.now)}
+        node._control()
+        self.assertTrue(node.module_command_publisher.messages[-1].enable)
+        record.fault_active = True
+        node._control()
+        self.assertIn('COMPONENT_HEALTH_LOST:host', node.fault_codes)
+        self.assertFalse(node.module_command_publisher.messages[-1].enable)
+
+    def test_physical_operator_can_authorize_zero_initialization_while_command_rearms(self):
+        node = self.node
+        node.require_operator_interlock = True
+        node.selected_mode = harness.MODES.MANUAL
+        node.manual_state_received = self.now
+        node.manual_state = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()),
+            connected=True, command_active=False, controls_neutral=False,
+            estop_state_known=True, estop_pressed=False)
+        node._control()
+        self.assertTrue(node.module_command_publisher.messages[-1].enable)
+        self.assertFalse(node._source_gate(self.now)[0])
+        self.assertEqual(node.last_output, [0.0, 0.0, 0.0])
+        node.manual_state.connected = False
+        node._control()
+        self.assertFalse(node.module_command_publisher.messages[-1].enable)
+
     def test_initial_battery_fault_can_resolve_before_first_startup(self):
         node = self.node
         node.battery_state.faulted_batteries = ['battery1']

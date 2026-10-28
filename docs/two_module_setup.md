@@ -179,3 +179,10 @@ sudo bash ./deploy/install.sh --no-start
 The installer preserves the selected host profile. Starting the physical robot
 and establishing motor-enable readiness still require the outstanding hardware
 commissioning work; a passing virtual check does not establish that readiness.
+
+The optional commissioned RP2 reduced-speed mode is described in
+[the REMdevice guide](remdevice_commissioning.md#two-module-rp2-reduced-speed-option).
+Its explicit verified selector is the exception to the ordinary scanner gate:
+Safety Disabled permits MANUAL at at most 0.3 m/s without scanner-field readiness;
+Safety Enabled restores the normal scanner gate. It does not bypass STOP,
+receiver faults, battery/drive readiness, or the independent hardware STO chain.

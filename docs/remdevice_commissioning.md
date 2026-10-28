@@ -319,7 +319,14 @@ Commands preserve the oldest acquisition timestamp of the PDO pair. A new
 command requires both PDOs to advance within 75 ms of one another. A 250 ms
 timeout, bad relevant DLC/time, receiver restart/non-operational NMT, CAN error
 or EMCY invalidates the input. EMCY stays inhibited until its explicit zero-code
-reset with a zero error register. Heartbeat is observed when present; it need not be enabled to receive PDOs.
+reset with a zero error register, or B2 verifies a fresh zero error-register reply
+as described below. Error and zero-code reset EMCYs are processed in CAN acquisition
+order, including when both are queued before the first ROS callback. The command
+freshness cutoff must not discard a newer reset event or hide a newer fault.
+Recovery requires new neutral inputs acquired after the recovery callback. A
+historical EMCY alone does not establish that the current error register is nonzero.
+Heartbeat is observed
+when present; it need not be enabled to receive PDOs.
 The bridge must preserve CAN acquisition time (`use_bus_time: true`).
 
 `LINK` alone is receiver-internal connectivity, not proof of a transmitter link.
@@ -358,3 +365,79 @@ C-24, C-40/41), and `Example_CANopen.pdf`. The latter's TPDO2 paragraph contains
 an inconsistent `0x180` addition; its resulting `0x28A`, the EDS and main manual
 agree on **0x280 + node ID**. The customized delivery notes identify a PAIL and
 Ecobox-CAN but supply no physical signal assignment.
+
+## Two-module RP2 reduced-speed option
+
+On the commissioned node-10 receiver, passive captures with the user's two RP2
+positions confirmed **D5 high = Safety Disabled**, **D5 low = Safety Enabled**.
+The receiver's `SFTY` bit stayed low in both positions and must not select this
+mode. Opt in only on the two-module `hardwired_sto` profile by adding
+`scanner_override: {signal: D5, active_high: true}` to the verified mapping's
+buttons. This assignment must be measured again for a different receiver.
+
+The operator publishes this selector as button index 10 on
+`operator/scanner_selector` (`sensor_msgs/Joy`, 11 buttons, no motion axes),
+independently of motion-pair validity and rearming. It also remains visible in the
+ordinary normalized `joy` message. The dedicated sample preserves the physical
+digital PDO acquisition timestamp; timer republication cannot refresh it. Fresh
+REMdevice `operator/state` with known, released STOP is also required. Receiver
+EMCYs inhibit motion commands without fabricating radio loss or an RP2 switch
+change. STOP, stale/missing physical status, battery readiness, drive feedback
+and independent hardwired STO remain in force. Safety Disabled exempts scanner fields only in MANUAL; translation and
+each wheel's surface speed are capped at 0.3 m/s. Either selector edge clears
+buffered motion. Missing selector/operator state inhibits motion. Safety Enabled
+restores the ordinary red/unknown scanner stop and yellow speed policy. This
+software selector does not establish or change the physical Siemens safety wiring.
+
+## Receiver EEPROM and CAN-ID fault recovery
+
+### B2 acknowledgement of a recovered receiver emergency
+
+Receiver EMCY errors inhibit motion while leaving the ROS stack running. A fresh
+release and press of B2 with neutral controls now acknowledges a recovered
+receiver fault before requesting the ordinary supervisor-owned drive reset.
+The provider continues observing fresh digital and analog PDOs for this reset
+admission while the motion decoder remains inhibited.
+
+B2 sends only an SDO upload of the receiver's error register `0x1001:0`. The
+reply must be fresh, match the target node/object and report zero; a newer
+emergency, STOP/link loss, deflected controls, malformed reply or timeout blocks
+recovery. The provider then discards pre-verification inputs, waits for fresh
+neutral PDOs and requests `wheel_modules/clear_errors`. Drive reset still
+requires the supervisor's existing interlocks and standstill/disabled-drive
+proof. The response does not establish that drive recovery completed; observe
+`vehicle/mode`. Inputs must rearm from neutral after the reset response.
+
+A held B2 never retries. Release and press again after correcting a rejected
+condition. The operation does not reset receiver communication, save EEPROM,
+change PDO mapping or mask an active receiver fault. Persistent errors and
+failed/unverified drive startup remain inhibited and require diagnosis.
+`operator/raw` includes the latched receiver error code/register and B2 reset
+status for diagnosis.
+
+The supplied REMdevice service manual v2.0, C-24, defines `0x8150` as transmit
+COB-ID collision and `0x6000` as EEPROM not programmed or EEPROM error. A healthy
+radio PDO is not evidence that CANopen error register `0x1001:0` is zero.
+Keep the operator emergency interlock active while these faults are present.
+
+On this node-10/V1.20 receiver, the collision/communication indication persisted
+with the robot service stopped. A targeted communication reset removed that
+indication and exposed `0x6000`. We backed up the EDS-listed writable objects,
+then issued the manual C-26 Store Parameters operation: SDO download
+`0x1010:1 = 0x65766173` (ASCII `save`, CAN payload `23 10 10 01 73 61 76 65`).
+After the acknowledged save, the error register returned to zero. A subsequent
+targeted communication reset and receiver start retained the settings and zero
+error register. Comparison of 147 readable backed-up objects found only the
+error register changed; parameter values were retained. No factory-restore
+operation or CAN-ID change was needed. Zero CANopen errors do not establish
+radio readiness: `LINK` and `EMGY` and fresh neutral motion inputs must also be
+verified. This receiver continued to publish zero radio inputs after software
+restarts, so physical receiver/base-unit restart was requested before resuming.
+
+This is a maintenance operation with the ROS robot service stopped and native
+readback confirming every drive disabled. Back up the current object dictionary
+first; verify the target receiver, node/bitrate/PDO settings, successful save
+acknowledgement, zero error register, and fresh neutral radio inputs before
+resuming. Do not repeat EEPROM saves or clear errors blindly; a recurring write
+or EEPROM error needs supplier diagnosis. Recovery records for this machine are
+under `~/robot_repair/receiver-can-repair/`.

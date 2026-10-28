@@ -3,6 +3,9 @@
 This deployment supports ARM64 or AMD64 Ubuntu 24.04 hosts, configures two
 serial-numbered USB-to-CAN adapters, and starts the ROS 2 Jazzy hardware stack.
 Operational faults keep the stack running in ERROR with motion inhibited.
+Adapters that reject automatic bus-off restart are configured with `restart-ms 0`;
+bus-off monitoring and motion inhibition remain active. A bus-off on these
+adapters requires operator recovery.
 
 The host owns CAN configuration and Docker lifecycle. The container has no
 `NET_ADMIN` capability and does not run privileged. Docker restart policies are

@@ -29,6 +29,61 @@ class SocketCanLaunchTest(unittest.TestCase):
             self.assertEqual(operator.kwargs['parameters'][0].get('stationary_steering_enabled', False), stack == 'virtual')
             self.assertEqual(supervisor.kwargs['parameters'][0].get('manual_stationary_steering_enabled', False), stack == 'virtual')
 
+    def hardware_operator_receiver(self, overrides=None):
+        actions, context = resolve(factory(SOURCE)(), overrides)
+        group = next(a for a in actions if a.kind == 'GroupAction' and any(
+            child.kind == 'PushRosNamespace' and child.args == ('operator_rx',)
+            for child in a.kwargs['actions']))
+        include = next(a for a in group.kwargs['actions'] if a.kind == 'IncludeLaunchDescription')
+        operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
+        return group, dict(include.kwargs['launch_arguments']), operator, context
+
+    def test_hardware_operator_has_filtered_receive_only_acquisition_channel(self):
+        group, arguments, operator, context = self.hardware_operator_receiver()
+        self.assertTrue(group.kwargs['condition'].perform(context))
+        self.assertEqual(arguments['interface'].perform(context), 'can0')
+        self.assertEqual(arguments['use_bus_time'], 'true')
+        self.assertNotIn('to_can_bus_topic', arguments)
+        import json
+        node = json.loads(operator.kwargs['parameters'][0]['remdevice_mapping'])['node_id']
+        expected = {f'{base + node:03X}:7FF' for base in (0x80, 0x180, 0x280, 0x580, 0x700)}
+        self.assertEqual(set(arguments['filters'].split(',')), expected | {'#1FFFFFFF'})
+        self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx')])
+
+    def test_legacy_usb_profile_does_not_require_a_can_mapping_or_receiver(self):
+        import json, tempfile
+        from mobotic_config.configuration import Configuration
+        profile = Configuration().platform
+        profile.pop('operator')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'legacy-usb.json'
+            path.write_text(json.dumps(profile))
+            group, _, operator, context = self.hardware_operator_receiver({'platform_config': str(path)})
+            self.assertFalse(group.kwargs['condition'].perform(context))
+            self.assertEqual(operator.kwargs['executable'], 'manual_control')
+            self.assertEqual(operator.kwargs['remappings'], [])
+
+    def test_projection_preserves_all_scanner_streams_and_evaluated_output_checks(self):
+        actions, context = resolve(factory(SOURCE)())
+        projection = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'scanner_evaluation_projection')
+        self.assertTrue(projection.kwargs['condition'].perform(context))
+        adapter = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'scanner_safety_adapter')
+        self.assertEqual(adapter.kwargs['parameters'][0]['scanner_input_suffix'], 'evaluation_data')
+        scanners = [a for a in actions if a.kind == 'Node' and a.kwargs['package'] == 'sick_safetyscanners2']
+        self.assertEqual(len(scanners), 2)
+        for scanner in scanners:
+            params = scanner.kwargs['parameters'][0]
+            self.assertTrue(params['measurement_data'] and params['intrusion_data'] and params['application_io_data'])
+        for override in ({'stack_type': 'virtual'}, {'start_scanners': 'false'}):
+            actions, context = resolve(factory(SOURCE)(), override)
+            projection = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'scanner_evaluation_projection')
+            self.assertFalse(projection.kwargs['condition'].perform(context))
+
+    def test_hardware_operator_receiver_never_runs_in_virtual_or_without_manual(self):
+        for overrides in ({'stack_type': 'virtual'}, {'start_manual_interface': 'false'}):
+            group, _, _, context = self.hardware_operator_receiver(overrides)
+            self.assertFalse(group.kwargs['condition'].perform(context))
+
     def test_virtual_pail_topics_stay_isolated_without_a_physical_receiver(self):
         actions, context = resolve(factory(SOURCE)(), {'stack_type': 'virtual', 'operator_can_interface': ''})
         operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
@@ -126,7 +181,7 @@ class SocketCanLaunchTest(unittest.TestCase):
                 self.assertEqual(action.kwargs['remappings'], [('can_rx', 'can_tx'), ('can_tx', 'can_rx')])
         hardware, _ = resolve(factory(SOURCE)(), {'operator_can_interface': 'can0'})
         operator = next(a for a in hardware if a.kind == 'Node' and a.kwargs['name'] == 'operator')
-        self.assertEqual(operator.kwargs['remappings'], [])
+        self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx')])
 
     def test_battery_transport_is_receiver_only_with_acquisition_timestamps(self):
         group, include, arguments = self.battery_receiver()

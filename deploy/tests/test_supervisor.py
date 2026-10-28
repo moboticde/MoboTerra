@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src/mobotic_config'))
 from mobotic_config.configuration import Configuration
@@ -38,6 +39,17 @@ class ConfigurationTest(unittest.TestCase):
             self.assertNotEqual(*digests)
             env.write_text(env.read_text() + 'CAN_BITRATE=125000\n')
             self.assertEqual(backend.read_config().bitrate, 250000)
+
+    def test_host_reads_battery_ack_mode_from_shared_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = root / 'moboterra.env'
+            env.write_text('PLATFORM_CAN_SERIAL=p\nBATTERY_CAN_SERIAL=b\nROS_DOMAIN_ID=42\n')
+            profile = Configuration().platform
+            profile['can']['battery']['listen_only'] = False
+            (root / 'platform.yaml').write_text(json.dumps(profile))
+            backend = MODULE.HostBackend(env, root / 'compose.yaml', FakeRunner())
+            self.assertFalse(backend.read_config().battery_listen_only)
 
     def test_host_rejects_missing_invalid_or_duplicate_platform_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -143,6 +155,19 @@ class BackendTest(unittest.TestCase):
         details["can1"] = "can state ERROR-ACTIVE bitrate 500000 listen-only off"
         self.assertFalse(self.backend.links_ready(self.mapping, self.config))
 
+    def test_battery_ack_mode_is_configured_and_verified_without_changing_drive_mode(self):
+        config = MODULE.dataclasses.replace(self.config, battery_listen_only=False)
+        details = {'can0': 'can state ERROR-ACTIVE bitrate 500000',
+                   'can1': 'can state ERROR-ACTIVE bitrate 500000'}
+        self.backend.link_details = lambda name: details[name]
+        self.assertTrue(self.backend.links_ready(self.mapping, config))
+        details['can1'] += ' <LISTEN-ONLY>'
+        self.assertFalse(self.backend.links_ready(self.mapping, config))
+        self.backend._link_exists = lambda name: name in {'can0', 'can1'}
+        self.backend.configure_links(self.mapping, config)
+        self.assertIn(['ip', 'link', 'set', 'dev', 'can1', 'type', 'can', 'bitrate',
+                       '500000', 'listen-only', 'off'], self.backend.runner.commands)
+
     def test_independent_platform_and_battery_bitrates_are_verified_and_configured(self):
         config = MODULE.dataclasses.replace(self.config, bitrate=250000, battery_bitrate=500000)
         details = {'can0': 'can state ERROR-ACTIVE bitrate 250000 listen-only off',
@@ -165,6 +190,62 @@ class BackendTest(unittest.TestCase):
         }
         self.backend.link_details = lambda name: details[name]
         self.assertFalse(self.backend.links_ready(self.mapping, self.config))
+
+    def test_adapter_without_busoff_restart_still_configures_both_buses(self):
+        self.backend._link_exists = lambda name: name in {'can0', 'can1'}
+        original_run = self.backend.runner.run
+
+        def run(command, **kwargs):
+            result = original_run(command, **kwargs)
+            if 'restart-ms' in command and command[command.index('restart-ms') + 1] == '100':
+                raise MODULE.CommandError("Error: Device doesn't support restart from Bus Off.")
+            return result
+
+        config = MODULE.dataclasses.replace(self.config, bitrate=250000, battery_bitrate=500000)
+        with patch.object(self.backend.runner, 'run', side_effect=run):
+            self.backend.configure_links(self.mapping, config)
+        commands = self.backend.runner.commands
+        self.assertIn(['ip', 'link', 'set', 'dev', 'can0', 'type', 'can', 'bitrate',
+                       '250000', 'restart-ms', '0', 'listen-only', 'off'], commands)
+        self.assertIn(['ip', 'link', 'set', 'dev', 'can1', 'type', 'can', 'bitrate',
+                       '500000', 'listen-only', 'on'], commands)
+        self.assertEqual(commands[-2:], [
+            ['ip', 'link', 'set', 'dev', 'can0', 'up'],
+            ['ip', 'link', 'set', 'dev', 'can1', 'up'],
+        ])
+
+    def test_other_can_configuration_errors_do_not_trigger_fallback(self):
+        self.backend._link_exists = lambda name: name in {'can0', 'can1'}
+        original_run = self.backend.runner.run
+
+        def run(command, **kwargs):
+            result = original_run(command, **kwargs)
+            if 'restart-ms' in command:
+                raise MODULE.CommandError('RTNETLINK answers: Invalid argument')
+            return result
+
+        with patch.object(self.backend.runner, 'run', side_effect=run):
+            with self.assertRaisesRegex(MODULE.CommandError, 'Invalid argument'):
+                self.backend.configure_links(self.mapping, self.config)
+        self.assertEqual(sum('restart-ms' in cmd for cmd in self.backend.runner.commands), 1)
+        self.assertNotIn(['ip', 'link', 'set', 'dev', 'can0', 'up'], self.backend.runner.commands)
+
+    def test_failed_busoff_restart_fallback_does_not_bring_interfaces_up(self):
+        self.backend._link_exists = lambda name: name in {'can0', 'can1'}
+        original_run = self.backend.runner.run
+
+        def run(command, **kwargs):
+            result = original_run(command, **kwargs)
+            if 'restart-ms' in command:
+                if command[command.index('restart-ms') + 1] == '100':
+                    raise MODULE.CommandError("Error: Device doesn't support restart from Bus Off.")
+                raise MODULE.CommandError('Fallback configuration failed')
+            return result
+
+        with patch.object(self.backend.runner, 'run', side_effect=run):
+            with self.assertRaisesRegex(MODULE.CommandError, 'Fallback configuration failed'):
+                self.backend.configure_links(self.mapping, self.config)
+        self.assertNotIn(['ip', 'link', 'set', 'dev', 'can0', 'up'], self.backend.runner.commands)
 
     def test_rename_uses_temporary_names_for_reversed_kernel_order(self):
         mapping = MODULE.CanMapping(

@@ -416,7 +416,9 @@ public:
       make_sdo_u8(EC_TPDO2_MAPPING_PARAMETER, 0x00, 2),
       make_sdo_u8(EC_TPDO3_MAPPING_PARAMETER, 0x00, 1),
       make_sdo_u8(EC_TPDO3_COMMUNICATION_PARAMETER, 0x02, CANOPEN_SYNCHRONOUS_EVERY_SYNC),
-      make_sdo_u8(EC_RPDO1_COMMUNICATION_PARAMETER, 0x02, CANOPEN_SYNCHRONOUS_EVERY_SYNC),
+      // The installed Gold controllers expose 0x1400:2 as a 32-bit object.
+      // Match the actual SDO width so acknowledgement/readback stays strict.
+      make_sdo_u32(EC_RPDO1_COMMUNICATION_PARAMETER, 0x02, CANOPEN_SYNCHRONOUS_EVERY_SYNC),
       make_sdo_u8(EC_TPDO1_COMMUNICATION_PARAMETER, 0x02, CANOPEN_SYNCHRONOUS_EVERY_SYNC),
       make_sdo_u8(EC_TPDO2_COMMUNICATION_PARAMETER, 0x02, telemetry_sync_divider),
       make_sdo_u32(EC_RPDO1_COMMUNICATION_PARAMETER, 0x01, rpdo_cob_id),

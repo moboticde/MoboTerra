@@ -54,6 +54,15 @@ telegrams; the single-pack option does not wait for a second pack.
 `battery/state` aliases pack 1, and `battery/system_state` gates the supervisor
 using every configured pack's health/HV/freshness and the minimum SOC.
 
+The battery application remains receive-only: no battery CAN sender or contactor
+commands are added. `can.battery.listen_only: true` also suppresses hardware ACKs;
+it requires another active node to acknowledge the pack's frames. A lone pack
+with only a silent adapter can retry one telegram indefinitely, preventing its
+other telemetry from arriving. After confirming that bus topology, explicitly
+select `listen_only: false` to permit normal controller ACK/error handling while
+retaining the receive-only ROS transport. Changing this flag requires an explicit
+managed-service restart. Existing reference profiles keep their original value.
+
 The retained pack source addresses/PGNs are **unverified reference values** from
 the historical controller-based setup. The supplied Vanguard Fixed Pack Quick
 Start Guide, rev 3eu (08/2026), confirms two packs on primary battery CAN0,

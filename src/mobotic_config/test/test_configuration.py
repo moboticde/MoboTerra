@@ -27,6 +27,7 @@ class ConfigurationTest(unittest.TestCase):
         baseline['manual']['remdevice_mapping'] = json.dumps(
             {'verified': False, 'node_id': 9, 'axes': {}, 'buttons': {}}, sort_keys=True)
         baseline['supervisor']['require_operator_interlock'] = True
+        baseline['supervisor']['operator_scanner_override_enabled'] = False
         baseline['supervisor']['safety_source'] = 'flexisoft'
         baseline['supervisor'].pop('warning_speed_scale')
         baseline['supervisor']['warning_speed_limit'] = 0.3
@@ -44,6 +45,30 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(drive['can_node_id'], p['drives.can_node_ids'][index])
             self.assertEqual(drive['encoder_resolution'], p['drives.resolutions'][index])
             self.assertEqual(drive['gear_ratio'], p['drives.gear_ratios'][index])
+
+    def test_battery_readiness_requires_booleans_and_noncharging_interlock(self):
+        for operational, charge in ((False, False), ('false', True), (True, 1), (None, True)):
+            p = copy.deepcopy(self.cfg.platform)
+            p['battery']['readiness'] = {'require_operational_status': operational, 'require_not_charging': charge}
+            with self.assertRaises(ConfigurationError):
+                validate_platform(p)
+
+    def test_scanner_selector_is_restricted_to_commissioned_two_module_hardware(self):
+        p = copy.deepcopy(self.cfg.platform)
+        p['operator']['mapping'] = {
+            'verified': True, 'node_id': 10,
+            'axes': {role: {'channel': channel, 'zero': 0, 'full_scale': 255, 'invert': False}
+                     for role, channel in (('speed', 3), ('steer', 2), ('crab', 4))},
+            'buttons': {'mode': {'signal': 'U5', 'active_high': False},
+                        'boost': {'signal': 'SP3', 'active_high': True},
+                        'reset': {'signal': 'SP4', 'active_high': True}, 'deadman': None,
+                        'scanner_override': {'signal': 'D5', 'active_high': True}}}
+        p['can']['master_node_id'] = '0x0B'
+        with self.assertRaises(ConfigurationError):
+            validate_platform(p)
+        p['modules'] = [m for m in p['modules'] if m['name'] in ('front_right', 'rear_left')]
+        p['safety'] = {'source': 'hardwired_sto'}
+        validate_platform(p)
 
     def test_battery_count_matches_each_supplied_wheel_module_option(self):
         profiles = (
@@ -255,7 +280,7 @@ class ConfigurationTest(unittest.TestCase):
                      lambda p: p['modules'][0]['traction'].update(can_node_id='0x01'),
                      lambda p: p['modules'].reverse(),
                      lambda p: p['can']['battery'].update(interface='can0'),
-                     lambda p: p['can']['battery'].update(listen_only=False),
+                     lambda p: p['can']['battery'].update(listen_only='false'),
                      lambda p: p['motion_limits'].update(max_traction_velocity=1000),
                      lambda p: p['safety'].pop('emergency_stop_mask'),
                      lambda p: p['safety'].update(sto_mask=16),
@@ -267,6 +292,17 @@ class ConfigurationTest(unittest.TestCase):
                 mutation(p)
                 with self.assertRaises(ConfigurationError):
                     validate_platform(p)
+
+    def test_battery_ack_mode_requires_an_explicit_boolean(self):
+        for value in (True, False):
+            profile = copy.deepcopy(self.cfg.platform)
+            profile['can']['battery']['listen_only'] = value
+            validate_platform(profile)
+        for value in ('false', 'true', 0, 1, None):
+            profile = copy.deepcopy(self.cfg.platform)
+            profile['can']['battery']['listen_only'] = value
+            with self.subTest(value=value), self.assertRaises(ConfigurationError):
+                validate_platform(profile)
 
     def test_duplicate_yaml_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

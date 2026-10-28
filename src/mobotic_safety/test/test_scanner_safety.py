@@ -51,7 +51,7 @@ class ReadOnlyPublisherNode:
         pass
 
     def get_parameter(self, name):
-        return SimpleNamespace(value={'status_timeout': 0.3, 'scanner_source': 'scanner'}[name])
+        return SimpleNamespace(value={'status_timeout': 0.3, 'scanner_source': 'scanner', 'scanner_input_suffix': 'raw_data'}[name])
 
     def create_publisher(self, kind, topic, depth):
         publisher = SimpleNamespace(topic=topic, messages=[])
@@ -168,6 +168,58 @@ class ScannerSafetyTest(unittest.TestCase):
             self.node.now += .02
             self.node._receive_scanner('front_left', raw)
             self.assertFalse(self.latest().communication_ok)
+
+    def test_other_scanner_and_timer_do_not_duplicate_unchanged_acquisitions(self):
+        self.node._receive_scanner('front_left', self.raw())
+        first = len(self.node.scanner_publishers['front_left'].messages)
+        self.node._receive_scanner('rear_right', self.raw())
+        self.assertEqual(len(self.node.scanner_publishers['front_left'].messages), first)
+        counts = {name: len(pub.messages) for name, pub in self.node.scanner_publishers.items()}
+        for _ in range(3):
+            self.node.now += .05
+            self.node._publish()
+        self.assertEqual({name: len(pub.messages) for name, pub in self.node.scanner_publishers.items()}, counts)
+        self.node.now += .01
+        self.node._receive_scanner('front_left', self.raw(sequence=2, red=True))
+        self.assertFalse(self.latest().protective_field_clear)
+        self.assertEqual(len(self.node.scanner_publishers['rear_right'].messages), counts['rear_right'])
+
+    def test_loss_and_field_changes_publish_immediately_with_bounded_diagnostics(self):
+        self.node._receive_scanner('front_left', self.raw())
+        diagnostics = self.node.diagnostics['front_left'].messages
+        initial = len(diagnostics)
+        for seq in range(2, 6):
+            self.node.now += .02
+            self.node._receive_scanner('front_left', self.raw(sequence=seq))
+        self.assertEqual(len(diagnostics), initial)
+        self.node.now += .02
+        self.node._receive_scanner('front_left', self.raw(sequence=6, red=True))
+        self.assertEqual(len(diagnostics), initial + 1)
+        self.assertFalse(self.latest().protective_field_clear)
+        stamp = self.latest().header.stamp
+        self.node.now += .31
+        self.node._publish()
+        self.assertFalse(self.latest().communication_ok)
+        self.assertEqual(len(diagnostics), initial + 2)
+        count = len(self.node.scanner_publishers['front_left'].messages)
+        self.node.now += .05
+        self.node._publish()
+        self.assertEqual(len(self.node.scanner_publishers['front_left'].messages), count)
+        self.assertEqual(self.latest().header.stamp.nanosec, stamp.nanosec)
+        self.node.now += 1.0
+        self.node._publish()
+        self.assertEqual(len(diagnostics), initial + 3)
+
+    def test_expiry_does_not_mutate_cached_acquisition_or_published_state(self):
+        self.node._receive_scanner('front_left', self.raw())
+        acquired = self.latest()
+        stamp = acquired.header.stamp
+        self.node.now += .31
+        self.node._publish()
+        self.assertFalse(self.latest().communication_ok)
+        self.assertTrue(acquired.communication_ok)
+        self.assertEqual(acquired.header.stamp, stamp)
+        self.assertTrue(self.node.samples['front_left'][0].communication_ok)
 
     def test_steady_clock_timeout_even_if_ros_time_pauses(self):
         self.node._receive_scanner('front_left', self.raw())

@@ -1,5 +1,4 @@
 """Non-safety-rated field telemetry from scanner evaluated output paths."""
-import copy
 import math
 import time
 
@@ -17,8 +16,12 @@ class ScannerSafetyAdapter(Node):
         super().__init__('scanner_safety_adapter')
         self.declare_parameter('status_timeout', 0.3)
         self.declare_parameter('scanner_source', 'scanner')
+        self.declare_parameter('scanner_input_suffix', 'raw_data')
         self.timeout = float(self.get_parameter('status_timeout').value)
         self.source = str(self.get_parameter('scanner_source').value)
+        self.input_suffix = str(self.get_parameter('scanner_input_suffix').value)
+        if self.input_suffix not in ('raw_data', 'evaluation_data'):
+            raise ValueError('unsupported scanner input suffix')
         if not math.isfinite(self.timeout) or self.timeout <= 0:
             raise ValueError('status timeout must be positive and finite')
         if self.source not in ('scanner', 'safety_io'):
@@ -27,6 +30,9 @@ class ScannerSafetyAdapter(Node):
         self.samples = {}
         self.sequences = {}
         self.paths = {}
+        self._last_output_signatures = {}
+        self._last_diagnostic_signatures = {}
+        self._last_diagnostic_at = {}
         self.input_subscriptions = []
         if self.source == 'safety_io':
             self.input_subscriptions.append(self.create_subscription(
@@ -34,7 +40,7 @@ class ScannerSafetyAdapter(Node):
         else:
             for name in ('front_left', 'rear_right'):
                 self.input_subscriptions.append(self.create_subscription(
-                    RawMicroScanData, f'scanner/{name}/raw_data',
+                    RawMicroScanData, f'scanner/{name}/{self.input_suffix}',
                     lambda msg, location=name: self._receive_scanner(location, msg),
                     qos_profile_sensor_data))
         self.scanner_publishers = {name: self.create_publisher(ScannerSafetyState, f'scanner/{name}/safety_zone_status', 1)
@@ -107,7 +113,7 @@ class ScannerSafetyAdapter(Node):
                 fresh = (sample is not None and 0 <= time.monotonic() - received <= self.timeout
                          and 0 <= (now - Time.from_msg(sample.header.stamp)).nanoseconds <= int(self.timeout * 1e9))
                 if fresh:
-                    output = copy.deepcopy(sample)
+                    output = sample
                 else:
                     output = ScannerSafetyState()
                     output.scanner_id = name
@@ -125,22 +131,41 @@ class ScannerSafetyAdapter(Node):
                     output.ossd_active = getattr(self.state, name + '_ossd_active')
                 output.source = 'virtual safety I/O; field-set number unavailable'
             valid = output.communication_ok and output.protective_state_known and output.warning_state_known
-            publisher.publish(output)
-            diagnostic = DiagnosticStatus()
-            diagnostic.name = 'scanner/' + name
-            diagnostic.hardware_id = name
-            diagnostic.level = (DiagnosticStatus.ERROR if not valid else
-                                DiagnosticStatus.WARN if not output.protective_field_clear or not output.warning_field_clear else
-                                DiagnosticStatus.OK)
-            diagnostic.message = ('Field monitoring unavailable' if not valid else
-                                  'Protective stop' if not output.protective_field_clear else
-                                  'Warning field active' if not output.warning_field_clear else 'Fields clear')
-            diagnostic.values = [KeyValue(key='source', value=output.source),
-                                 KeyValue(key='field_set_known', value='false')]
-            array = DiagnosticArray()
-            array.header = output.header
-            array.status = [diagnostic]
-            self.diagnostics[name].publish(array)
+            acquired = name in self.samples if self.source == 'scanner' else self.state is not None
+            stamp_ns = Time.from_msg(output.header.stamp).nanoseconds if acquired else 0
+            signature = (stamp_ns, output.communication_ok, output.protective_state_known,
+                         output.warning_state_known, output.ossd_state_known,
+                         output.protective_field_clear, output.warning_field_clear,
+                         output.ossd_active, output.field_set_known, output.source)
+            if signature != self._last_output_signatures.get(name):
+                # Publish each new acquisition and every loss/state change once.
+                # A timer or the other scanner cannot refresh this source.
+                publisher.publish(output)
+                self._last_output_signatures[name] = signature
+            level = (DiagnosticStatus.ERROR if not valid else
+                     DiagnosticStatus.WARN if not output.protective_field_clear or not output.warning_field_clear else
+                     DiagnosticStatus.OK)
+            message = ('Field monitoring unavailable' if not valid else
+                       'Protective stop' if not output.protective_field_clear else
+                       'Warning field active' if not output.warning_field_clear else 'Fields clear')
+            diagnostic_signature = (level, message, output.source)
+            steady_now = time.monotonic()
+            previous = self._last_diagnostic_at.get(name)
+            if (diagnostic_signature != self._last_diagnostic_signatures.get(name)
+                    or previous is None or not 0 <= steady_now - previous < 1.0):
+                diagnostic = DiagnosticStatus()
+                diagnostic.name = 'scanner/' + name
+                diagnostic.hardware_id = name
+                diagnostic.level = level
+                diagnostic.message = message
+                diagnostic.values = [KeyValue(key='source', value=output.source),
+                                     KeyValue(key='field_set_known', value='false')]
+                array = DiagnosticArray()
+                array.header = output.header
+                array.status = [diagnostic]
+                self.diagnostics[name].publish(array)
+                self._last_diagnostic_signatures[name] = diagnostic_signature
+                self._last_diagnostic_at[name] = steady_now
 
 
 def main(args=None):

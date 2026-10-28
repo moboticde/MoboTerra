@@ -87,7 +87,11 @@ int main(int argc, char** argv)
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(timeout);
       while (std::chrono::steady_clock::now() < deadline)
       {
-        executor.spin_some();
+        // A SYNC produces several CAN replies. Drain ready callbacks in a
+        // bounded batch before sleeping; spin_some() only collects work once
+        // and can leave replies queued until their acquisition stamps expire
+        // on a busy build host.
+        executor.spin_all(std::chrono::milliseconds(5));
         if (predicate()) { return true; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
@@ -131,8 +135,25 @@ int main(int argc, char** argv)
         commands->publish(command);
       }
     });
-    require(spin_until([&] { return all([](const auto& m) { return m.startup_complete && m.enabled && m.feedback_fresh && m.position_valid; }) && joints.name.size() == 4; }, 12),
-            "supervised initialization/enable must acquire the first real motion feedback");
+    const bool startup_ready = spin_until([&] { return all([](const auto& m) { return m.startup_complete && m.enabled && m.feedback_fresh && m.position_valid; }) && joints.name.size() == 4; }, 12);
+    if (!startup_ready)
+    {
+      for (const auto& module : latest.modules)
+      {
+        std::cerr << module.name << ": startup_complete=" << module.startup_complete
+                  << ", enabled=" << module.enabled << ", feedback_fresh=" << module.feedback_fresh
+                  << ", position_valid=" << module.position_valid << ", " << module.status_message << '\n';
+        for (const auto* drive : {&module.steering, &module.traction})
+        {
+          std::cerr << "  " << drive->name << ": initialized=" << drive->initialized
+                    << ", status_known=" << drive->status_known << ", enabled=" << drive->enabled
+                    << ", error_register=" << drive->error_register << ", error_code=" << drive->error_code << '\n';
+        }
+      }
+      for (const auto& [node, controller] : controllers)
+      { std::cerr << "  controller " << node << ": enabled=" << controller.enabled() << '\n'; }
+    }
+    require(startup_ready, "supervised initialization/enable must acquire the first real motion feedback");
     for (std::size_t i = 0; i < joints.name.size(); ++i)
     {
       const bool traction = joints.name[i].find("traction") != std::string::npos;
@@ -194,6 +215,12 @@ int main(int argc, char** argv)
     driver = std::make_shared<MoboticDriver>(timeout_options); executor.add_node(driver);
     require(spin_until([&] { return all([](const auto& m) { return m.startup_failed && !m.startup_complete; }); }, 3),
             "missing configuration/feedback responses must fail bounded startup");
+    spin_until([] { return false; }, 0.1); // Drain replies already in DDS queues.
+    const auto failed_transmissions = transmitted.size();
+    spin_until([] { return false; }, 0.3);
+    require(std::none_of(transmitted.begin() + failed_transmissions, transmitted.end(), [](const auto& frame) {
+      return frame.id == 0x204 || frame.id == 0x208 || frame.id == 0x80;
+    }), "failed physical startup must not keep publishing unverified RPDO/SYNC cycles");
     executor.remove_node(driver); driver.reset();
     // Successful configuration/enable without motion samples is bounded too.
     drop_replies = false; drop_motion = true;

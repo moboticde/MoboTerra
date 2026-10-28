@@ -20,6 +20,22 @@ supervisor. It also publishes `mobotic_interfaces/msg/OperatorState` on `operato
 The node never calls drive services. A stale joystick or invalid joystick layout immediately produces
 a zero command and an inactive state. The supervisor remains the only component allowed to select this command
 source and authorize motion.
+
+For CAN, `operator/state.connected` reports fresh physical LINK/EMGY/STOP
+evidence. It is independent of command readiness: an EMCY or incomplete PDO pair
+sets `command_active: false`, discards motion, and requires fresh neutral rearm.
+The physical status retains its own digital acquisition time and expires after
+250 ms; EMCYs and publishing timers cannot refresh it. STOP/radio loss still
+inhibit immediately. This lets supervised zero-target controller initialization
+continue while the motion source rearms, without accepting an old command.
+The measured RP2 selector is published separately on `operator/scanner_selector`
+with its digital acquisition timestamp and no motion axes. Publishing that
+physical switch state never feeds the teleop callback or rearms motion.
+Hardware bringup uses a separate receive-only SocketCAN channel filtered to the
+operator receiver IDs and CAN errors. This prevents drive-message bursts from
+dropping operator samples; all input freshness checks still use CAN acquisition
+time. The operator sends its permitted NMT/SDO recovery traffic through the
+existing shared sender.
 No hold-to-drive button is required in the default profile (`button_deadman: -1`).
 An optional configured deadman still stops immediately when released. In MANUAL,
 stick input can command motion without pressing a button, subject to supervisor
@@ -119,7 +135,11 @@ The physical USB mapping and stop behavior still require hardware validation.
 
 The CAN provider decodes the documented unsigned-magnitude/direction format and
 supports mapped B2 rising-edge requests to the supervisor's
-`wheel_modules/clear_errors`. RP2/STOP retain their independent safety functions.
+`wheel_modules/clear_errors`. If a receiver emergency is latched, B2 first
+verifies its error register is zero, then requires fresh neutral PDOs before
+requesting the supervisor reset. Active receiver faults remain inhibited;
+the stack stays running. See [receiver B2 recovery](../../docs/remdevice_commissioning.md#b2-acknowledgement-of-a-recovered-receiver-emergency).
+RP2/STOP retain their independent safety functions.
 The provider never rewrites PDO mappings, node ID or bitrate. Its explicit
 commissioning service can send targeted NMT start; after mapping verification,
 targeted NMT startup is automatic. See the guide for hardware acceptance.

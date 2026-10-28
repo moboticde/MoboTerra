@@ -239,6 +239,30 @@ def _launch_setup(context):
             ),
         ],
     )
+    # A dedicated receive-only socket keeps drive bursts out of the operator's
+    # ROS receive queue. Acquisition stamps and CAN-error reception are retained.
+    receiver_node_id = cfg.platform['operator']['mapping']['node_id'] if operator_source == 'remdevice' else None
+    operator_filters = ','.join(
+        f'{base + receiver_node_id:03X}:7FF' for base in (0x80, 0x180, 0x280, 0x580, 0x700)
+    ) + ',#1FFFFFFF' if receiver_node_id is not None else ''
+    hardware_operator_socketcan = GroupAction(
+        condition=_hardware_component_condition(
+            stack_type, start_manual_interface, str(operator_source == 'remdevice').lower()),
+        actions=[
+            PushRosNamespace(robot_name),
+            PushRosNamespace('operator_rx'),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(PathJoinSubstitution([
+                    FindPackageShare('ros2_socketcan'), 'launch', 'socket_can_receiver.launch.py',
+                ])),
+                launch_arguments={
+                    'interface': can_interface, 'from_can_bus_topic': 'can_rx',
+                    'enable_can_fd': 'false', 'filters': operator_filters,
+                    'interval_sec': '0.01', 'use_bus_time': 'true',
+                }.items(),
+            ),
+        ],
+    )
     manual_control = Node(
         condition=IfCondition(start_manual_interface),
         package='mobotic_manual_control',
@@ -247,7 +271,8 @@ def _launch_setup(context):
         namespace=robot_name,
         parameters=[manual_config],
         remappings=[('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx')]
-                   if virtual_operator else [],
+                   if virtual_operator else [('can_rx', 'operator_rx/can_rx')]
+                   if operator_source == 'remdevice' else [],
         output='screen',
         respawn=True,
     )
@@ -319,10 +344,16 @@ def _launch_setup(context):
         namespace=robot_name, output='screen',
         parameters=[{'robot_description': ParameterValue(render_description(cfg), value_type=str)}],
         remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')])
+    scanner_projection = Node(
+        condition=_hardware_component_condition(stack_type, start_scanners),
+        package='mobotic_scanner_projection', executable='scanner_evaluation_projection',
+        name='scanner_evaluation_projection', namespace=robot_name,
+        output='screen', respawn=True, respawn_delay=1.0)
     scanner_adapter = Node(package='mobotic_safety', executable='scanner_safety_adapter',
         name='scanner_safety_adapter', namespace=robot_name, output='screen',
         parameters=[{'status_timeout': supervisor_config['safety_timeout'],
-                     'scanner_source': 'safety_io' if stack_type.perform(context) == 'virtual' else 'scanner'}],
+                     'scanner_source': 'safety_io' if stack_type.perform(context) == 'virtual' else 'scanner',
+                     'scanner_input_suffix': 'evaluation_data' if stack_type.perform(context) == 'hardware' else 'raw_data'}],
         respawn=True, respawn_delay=1.0)
 
     return resolved + [
@@ -336,6 +367,7 @@ def _launch_setup(context):
         odometry,
         joystick,
         operator_socketcan,
+        hardware_operator_socketcan,
         manual_control,
         *([flexisoft_bridge] if flexisoft_enabled else []),
         safety_monitor,
@@ -344,6 +376,7 @@ def _launch_setup(context):
         diagnostics,
         supervisor,
         description,
+        scanner_projection,
         scanner_adapter,
     ]
 

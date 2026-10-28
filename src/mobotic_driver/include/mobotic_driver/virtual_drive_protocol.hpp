@@ -153,7 +153,8 @@ private:
     {
       const bool comm = index == 0x1400 || (index >= 0x1800 && index <= 0x1802);
       const bool mapping = index == 0x1600 || (index >= 0x1A00 && index <= 0x1A02);
-      return result(found->second, (comm && sub == 2) || (mapping && sub == 0) ? 1 : 4);
+      const bool gold_rpdo_type = traction_ && index == 0x1400 && sub == 2;
+      return result(found->second, !gold_rpdo_type && ((comm && sub == 2) || (mapping && sub == 0)) ? 1 : 4);
     }
     // In particular: never fabricate decoded STO/digital-input telemetry.
     return std::nullopt;
@@ -164,7 +165,8 @@ private:
     const bool mapping = (index >= 0x1A00 && index <= 0x1A02) || (traction_ && index == 0x1600);
     if (comm || mapping)
     {
-      const unsigned expected = comm ? (sub == 1 ? 4 : sub == 2 ? 1 : 0) : (sub == 0 ? 1 : sub <= 8 ? 4 : 0);
+      const bool gold_rpdo_type = traction_ && index == 0x1400 && sub == 2;
+      const unsigned expected = gold_rpdo_type ? 4 : comm ? (sub == 1 ? 4 : sub == 2 ? 1 : 0) : (sub == 0 ? 1 : sub <= 8 ? 4 : 0);
       if (!expected) { return 0x06090011; }
       if (size != expected) { return 0x06070010; }
       // Standard TPDOs may prohibit RTR via bit 30; it is reserved for RPDOs.

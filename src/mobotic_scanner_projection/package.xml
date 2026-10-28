@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mobotic_scanner_projection</name>
+  <version>0.1.0</version>
+  <description>Read-only projection of scanner evaluation data for lightweight safety observation.</description>
+  <maintainer email="development@mobotic.local">Mobotic Development Team</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sick_safetyscanners2_interfaces</depend>
+  <test_depend>ament_cmake_test</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

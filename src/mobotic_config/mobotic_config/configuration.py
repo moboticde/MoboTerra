@@ -145,7 +145,7 @@ def validate_platform(platform):
                 'max_acceleration_angular', 'max_steering_velocity', 'max_traction_velocity', 'max_traction_current'), 'motion_limits')
         _record(platform['usb_joystick'], ('device_id', 'autorepeat_rate', 'deadzone', 'sticky_buttons'), 'usb_joystick')
         _record(platform['scanners'], ('host_ip', 'units'), 'scanners')
-        _record(platform['battery'], ('primary_id', 'participants'), 'battery')
+        _record(platform['battery'], ('primary_id', 'participants', 'readiness'), 'battery', required=('primary_id', 'participants'))
         if type(platform['schema_version']) is not int or platform['schema_version'] != 1:
             raise ConfigurationError('schema_version must be 1')
         _text(platform['robot_name'], 'robot_name')
@@ -178,8 +178,8 @@ def validate_platform(platform):
             _number(can[bus]['bitrate'], 'CAN bitrate', positive=True, integer=True)
         if can['drives']['interface'] == can['battery']['interface']:
             raise ConfigurationError('drive and battery CAN interfaces must be separate')
-        if can['battery']['listen_only'] is not True:
-            raise ConfigurationError('battery transport must remain listen-only')
+        if type(can['battery']['listen_only']) is not bool:
+            raise ConfigurationError('can.battery.listen_only must be boolean')
         modules = platform['modules']
         if not isinstance(modules, list) or not 2 <= len(modules) <= len(MODULE_NAMES):
             raise ConfigurationError('modules must contain two to four powered steering/traction modules')
@@ -281,6 +281,10 @@ def validate_platform(platform):
             raise ConfigurationError('odom frame cannot belong to the robot description tree')
         safety = platform['safety']
         safety_source = safety.get('source', 'flexisoft')
+        override = operator.get('mapping', {}).get('buttons', {}).get('scanner_override')
+        if override and (safety_source != 'hardwired_sto' or len(modules) != 2
+                         or operator['source'] != 'remdevice' or not operator['mapping']['verified']):
+            raise ConfigurationError('scanner override requires verified REMdevice controls on the two-module hardwired STO platform')
         if safety_source not in ('flexisoft', 'hardwired_sto'):
             raise ConfigurationError('safety.source must be flexisoft or hardwired_sto')
         mask_names = ('front_protective_ossd_mask', 'rear_protective_ossd_mask',
@@ -309,6 +313,13 @@ def validate_platform(platform):
                 raise ConfigurationError('safety signal masks overlap')
             occupied |= mask
         battery = platform['battery']
+        if 'readiness' in battery:
+            readiness = battery['readiness']
+            _record(readiness, ('require_operational_status', 'require_not_charging'), 'battery.readiness')
+            if any(type(readiness[key]) is not bool for key in readiness):
+                raise ConfigurationError('battery readiness options must be boolean')
+            if not readiness['require_operational_status'] and not readiness['require_not_charging']:
+                raise ConfigurationError('telemetry-only readiness requires noncharging detection')
         participants = battery['participants']
         if not isinstance(participants, list) or not participants:
             raise ConfigurationError('battery participants must be nonempty')
@@ -407,6 +418,8 @@ class Configuration:
         supervisor['wheel_radius'] = float(p['geometry']['wheel_radius'])
         operator = p.get('operator', {'source': 'usb'})
         supervisor['require_operator_interlock'] = operator['source'] == 'remdevice'
+        supervisor['operator_scanner_override_enabled'] = bool(
+            operator.get('mapping', {}).get('buttons', {}).get('scanner_override'))
         manual = {'frame_id': frame, **vehicle_limits}
         if operator['source'] == 'usb':
             manual['input_mapping_verified'] = operator.get(
@@ -416,6 +429,7 @@ class Configuration:
         supervisor.update({'max_direct_' + key.removeprefix('max_'): value for key, value in joint_limits.items()})
         participants = p['battery']['participants']
         battery = {'primary_battery_id': p['battery']['primary_id']}
+        battery.update(p['battery'].get('readiness', {}))
         for key, field in (('ids', 'id'), ('source_addresses', 'source_address'), ('status_pgns', 'status_pgn'),
                            ('soc_pgns', 'soc_pgn'), ('voltage_pgns', 'voltage_pgn')):
             battery['batteries.' + key] = [str(b[field]) for b in participants]

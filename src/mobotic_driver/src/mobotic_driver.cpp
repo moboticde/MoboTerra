@@ -828,6 +828,12 @@ void MoboticDriver::tractionPdoTimerCallback()
 
 void MoboticDriver::publishTractionPdoCycle()
 {
+  // Stop and authority callbacks also enter here, independently of the timer.
+  // A partial/failed mapping must use the native SDO disable path; sending a
+  // six-byte RPDO against an unverified layout can itself create CAN faults.
+  if (!virtual_position_source_ && (!controller_control_started_ || startup_.failed() ||
+      !std::all_of(configuration_.begin(), configuration_.end(),
+                   [](const auto& item) { return item.second.ready(); }))) { return; }
   // Stop/enable paths can request extra cycles between timer ticks. In the
   // software simulator, allow the outstanding synchronous sample to complete
   // before replacing its acquisition window. A missing reply still times out.

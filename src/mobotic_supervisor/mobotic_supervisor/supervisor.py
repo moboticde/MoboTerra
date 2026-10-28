@@ -23,7 +23,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.time import Time
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Joy
 from std_srvs.srv import Trigger
 
 from .control_math import clamp, clamp_planar, slew, steering_position_representable
@@ -39,6 +39,7 @@ class MoboticSupervisor(Node):
         self.declare_parameter('required_health_sources', Parameter.Type.STRING_ARRAY)
         self.declare_parameter('health_timeout', 0.3)
         self.declare_parameter('require_operator_interlock', False)
+        self.declare_parameter('operator_scanner_override_enabled', False)
         self.declare_parameter('manual_stationary_steering_enabled', False)
         # Required topology is supplied by mobotic_config, not duplicated here.
         self.declare_parameter('expected_module_names', Parameter.Type.STRING_ARRAY)
@@ -171,6 +172,12 @@ class MoboticSupervisor(Node):
         self.required_health_sources = list(self.get_parameter('required_health_sources').value)
         self.health_timeout = float(self.get_parameter('health_timeout').value)
         self.require_operator_interlock = bool(self.get_parameter('require_operator_interlock').value)
+        self.operator_scanner_override_enabled = bool(self.get_parameter('operator_scanner_override_enabled').value)
+        if self.operator_scanner_override_enabled and (self.safety_source != 'hardwired_sto'
+                                                      or len(self.expected_module_names) != 2):
+            raise ValueError('operator scanner override requires two-module hardwired STO')
+        self.operator_selector = None
+        self.operator_selector_received = None
         self.manual_stationary_steering_enabled = bool(self.get_parameter('manual_stationary_steering_enabled').value)
         self.manual_steering_requests = {}
         self.last_final = {}
@@ -277,6 +284,9 @@ class MoboticSupervisor(Node):
         self.mode_service = self.create_service(
             SetVehicleMode, 'vehicle/set_mode', self._set_mode_service
         )
+        if self.operator_scanner_override_enabled:
+            self.selector_subscription = self.create_subscription(
+                Joy, 'operator/scanner_selector', self._operator_selector_callback, 1)
         for name in self.scanner_states:
             self.input_subscriptions.append(self.create_subscription(
                 ScannerSafetyState, f'scanner/{name}/safety_zone_status',
@@ -488,12 +498,16 @@ class MoboticSupervisor(Node):
             self.get_logger().warning('Rejected invalid autonomous joint setpoints.')
 
     def _safety_callback(self, msg):
+        if not self._requires_safety_telemetry():
+            return
         if self._stamp_valid(msg.header.stamp, self.safety_timeout):
             self.safety_state = msg
             self.safety_received = self.get_clock().now()
         self._refresh_motion_readiness(self.get_clock().now())
 
     def _safety_io_callback(self, msg):
+        if not self._requires_safety_telemetry():
+            return
         if self._stamp_valid(msg.header.stamp, self.safety_timeout):
             self.safety_io_state = msg
             self.safety_io_received = self.get_clock().now()
@@ -534,6 +548,14 @@ class MoboticSupervisor(Node):
             self._publish_direct_stop(now)
 
     def _scanner_gate(self, now):
+        if getattr(self, 'operator_scanner_override_enabled', False):
+            selector = self._operator_selector_value(now)
+            if selector is None:
+                return False, 'RP2 selector or physical operator state unavailable'
+            if selector:
+                if self.selected_mode != VehicleModeState.MANUAL:
+                    return False, 'RP2 Safety Disabled permits reduced-speed MANUAL only'
+                return True, 'RP2 Safety Disabled; manual wheel speed limited to 0.3 m/s'
         for name, (state, received) in self.scanner_states.items():
             if (not self._message_fresh(state, received, self.safety_timeout, now)
                     or not state.communication_ok or not state.protective_state_known
@@ -543,12 +565,49 @@ class MoboticSupervisor(Node):
                 return False, f'{name} scanner red protective field active'
         return True, 'scanner fields monitored'
 
+    def _operator_selector_value(self, now):
+        msg = getattr(self, 'operator_selector', None)
+        operator = self.manual_state
+        if (not self._message_fresh(msg, getattr(self, 'operator_selector_received', None), self.manual_timeout, now)
+                or len(msg.buttons) != 11 or any(v not in (0, 1) for v in msg.buttons)
+                or msg.header.frame_id != self.output_frame_id
+                or not self._message_fresh(operator, self.manual_state_received, self.manual_timeout, now)
+                or operator.source_id != 'remdevice' or not operator.connected
+                or not operator.estop_state_known or operator.estop_pressed):
+            return None
+        return bool(msg.buttons[10])
+
+    def _operator_selector_callback(self, msg):
+        now = self.get_clock().now()
+        if (not self._stamp_valid(msg.header.stamp, self.manual_timeout, now)
+                or msg.header.frame_id != self.output_frame_id):
+            return
+        previous = getattr(self, 'operator_selector', None)
+        if previous is not None and Time.from_msg(msg.header.stamp).nanoseconds <= Time.from_msg(previous.header.stamp).nanoseconds:
+            return
+        valid = len(msg.buttons) == 11 and all(v in (0, 1) for v in msg.buttons)
+        changed = (previous is None or not valid or len(previous.buttons) != 11
+                   or previous.buttons[10] != msg.buttons[10])
+        self.operator_selector, self.operator_selector_received = msg, now
+        if changed:
+            # Stop on either switch edge; buffered motion must never resume
+            # under a different scanner/speed policy.
+            self._invalidate_motion_commands(now)
+            self._publish_velocity(None, now, immediate_stop=True)
+            self._publish_direct_stop(now)
+        self._refresh_motion_readiness(now)
+
+    def _operator_scanner_override_active(self, now=None):
+        return bool(getattr(self, 'operator_scanner_override_enabled', False)
+                    and self.selected_mode == VehicleModeState.MANUAL
+                    and self._operator_selector_value(now or self.get_clock().now()) is True)
+
     def _scanner_warning_active(self):
         return any(state is not None and state.warning_state_known and not state.warning_field_clear
                    for state, _ in self.scanner_states.values())
 
     def _warning_active(self):
-        return self._scanner_warning_active() or (self._requires_safety_telemetry() and (
+        return self._operator_scanner_override_active() or self._scanner_warning_active() or (self._requires_safety_telemetry() and (
             (self.safety_state is not None and self.safety_state.warning_field_active)
             or self._io_warning_active()))
 
@@ -1000,9 +1059,10 @@ class MoboticSupervisor(Node):
         linear_limit = self.max_velocity_linear * scale
         angular_limit = self.max_velocity_angular * scale
         if self._warning_active():
-            linear_limit = min(linear_limit, self.warning_speed_limit)
+            speed_limit = min(self.warning_speed_limit, 0.3) if self._operator_scanner_override_active(now) else self.warning_speed_limit
+            linear_limit = min(linear_limit, speed_limit)
             angular_limit = min(angular_limit, self.max_velocity_angular * min(
-                1.0, self.warning_speed_limit / self.max_velocity_linear))
+                1.0, speed_limit / self.max_velocity_linear))
         target_x, target_y = clamp_planar(
             source.twist.linear.x,
             source.twist.linear.y,
@@ -1071,7 +1131,8 @@ class MoboticSupervisor(Node):
         if self._warning_active():
             traction = [indices[name] for name in self.expected_traction_joint_names]
             peak = max(abs(output.velocity[i]) for i in traction)
-            limit = self.warning_speed_limit / self.wheel_radius
+            speed_limit = min(self.warning_speed_limit, 0.3) if self._operator_scanner_override_active(now) else self.warning_speed_limit
+            limit = speed_limit / self.wheel_radius
             ratio = min(1.0, limit / peak) if peak else 1.0
             targets = [output.velocity[i] * ratio for i in traction]
             previous = [self.last_final.get(name, 0.0) for name in self.expected_module_names]
@@ -1335,6 +1396,8 @@ class MoboticSupervisor(Node):
                  and getattr(io, 'scanner_state_known', False))
              or (getattr(io, 'safety_enable_state_known', False) and not io.safety_enable_active)))
         for name, (state, received) in self.scanner_states.items():
+            if self._operator_scanner_override_active(now):
+                continue
             known = (self._message_fresh(state, received, self.safety_timeout, now)
                      and state.communication_ok and state.protective_state_known and state.warning_state_known)
             if not known and not grace:
@@ -1644,6 +1707,12 @@ class MoboticSupervisor(Node):
                 else:
                     record.traction_velocity = math.copysign(min(abs(previous), abs(record.traction_velocity)), previous)
             output.modules.append(record)
+        if purpose == WheelModuleCommandArray.MOTION and self._operator_scanner_override_active(now):
+            peak = max(abs(m.traction_velocity) for m in output.modules)
+            limit = min(0.3, self.warning_speed_limit) / self.wheel_radius
+            ratio = min(1.0, limit / peak) if peak else 1.0
+            for module in output.modules:
+                module.traction_velocity *= ratio
         self.last_final = {m.name: m.traction_velocity for m in output.modules}
         self.final_command_publisher.publish(output)
 

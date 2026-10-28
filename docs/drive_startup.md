@@ -87,3 +87,19 @@ expires, zero-target re-enable, reset-time motion rejection, timeout, cancellati
 loss. Standalone protocol tests and ROS-free supervisor checks are also provided.
 The Jazzy integration test must run on the ROS build host; no software test
 validates real motor, brake, scanner, STO or electrical behavior.
+
+### Installed Gold RPDO type and failed-startup traffic
+
+Read-only SDO captures on this chassis show Gold `0x1400:2` (RPDO transmission
+Type) returned as a four-byte expedited upload. The startup writer now uses a
+32-bit download for that object, and the Gold simulator enforces the same width.
+All other acknowledgement, width, value and timestamp checks remain strict.
+The protocol regression fails against the previous 8-bit writer and passes with
+the 32-bit request.
+
+Every physical RPDO/SYNC publication path, including stop/authority callbacks,
+requires completed PDO configuration and nonfailed startup. An incomplete mapping
+uses startup's native SDO disable path; it must not receive periodic six-byte
+RPDOs. The real-driver integration test verifies that RPDO/SYNC traffic ceases
+after failed initialization, while the normal heartbeat and safe SDO handling
+remain available. These software tests do not establish physical drive readiness.
