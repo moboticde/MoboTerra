@@ -338,7 +338,12 @@ rollback_install() {
     exit 1
 }
 
-systemctl enable --now moboterra-supervisor.service
+# `enable --now` starts an inactive unit but deliberately leaves an already
+# active supervisor untouched.  A release switch must replace that process so
+# it reads the new image/environment rather than reporting the prior release
+# as healthy through the shared state file.
+systemctl enable moboterra-supervisor.service
+systemctl restart moboterra-supervisor.service
 deadline=$((SECONDS + 180))
 while (( SECONDS < deadline )); do
     if [[ -r /run/moboterra-supervisor/state.json ]] \
