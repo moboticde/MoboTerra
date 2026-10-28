@@ -48,9 +48,10 @@ python3 deploy/checks/map_pail.py --interface can0 --node-id 10
 
 This requires no ROS installation, Docker or CAN transmission. It prompts for
 neutral, both directions of the cross joystick and paddle, RP1 Manual/Auto,
-B1 boost and B2 reset. Before each step, return other controls to neutral; press
-Enter, then hold the requested control until COMPLETE. The default recording is
-six seconds per step. Leave the transmitter's normal radio link established.
+RP2 Safety Enabled/Disabled, B1 boost and B2 reset. Before each step, return
+other controls to neutral; press Enter, then hold the requested control until
+COMPLETE. The default recording is six seconds per step. Leave the transmitter's
+normal radio link established.
 
 Raw labelled frames, decoder output and a per-step JSON summary are saved in
 `can_telemetry_records/pail-mapping-<timestamp>.*`. Completed data survives Ctrl+C.
@@ -60,17 +61,18 @@ The recorder does not change or verify the mapping automatically. Review its
 labelled directions, ranges and switch polarities, then populate only the
 virtual profile for the first simulation test.
 
-The completed capture `pail-mapping-20261020-110023.jsonl` measured these
+The completed capture `pail-mapping-20261028-110523.jsonl` measured these
 assignments for the node-10/250-kbit/s **virtual test profile**:
 
 | Physical control | Signal | Calibration/polarity |
 | --- | --- | --- |
 | Cross joystick forward/reverse | A3, U3/D3 | Neutral 0, full scale 255; U3 is forward |
-| Cross joystick left/right | A4, U4/D4 | Neutral 0, full scale 255; U4 is left |
-| Paddle left/right | A2, U2/D2 | Neutral 0, full scale 255; U2 is left |
+| Right-stick left/right (crab) | A4, U4/D4 | Neutral 0, full scale 255; U4 is left |
+| Left-paddle left/right (steering) | A2, U2/D2 | Neutral 0, full scale 255; U2 is left |
 | RP1 Manual/Auto | U5 | High = Manual; low = Auto |
 | B1 boost | SP3 | High while pressed |
 | B2 reset | SP4 | High while pressed |
+| RP2 Safety Enable/Disable | D5 | Low = Safety Enabled; high = Safety Disabled |
 | Hold-to-drive | Unassigned | `deadman: null` |
 
 The confirmed physical layout is **left paddle = steering (A2)** and **right
