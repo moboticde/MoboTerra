@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+    <name>mobotic_launch</name>
+    <version>1.0.0</version>
+    <description>The launch meta-package for Mobotic project.</description>
+
+    <maintainer email="tibor.bataljak-savic@romb-technologies.hr">Tibor Bataljak Savić</maintainer>
+    <license>(c) Copyright 2025 RoMb Technologies d.o.o. All rights reserved.</license>
+
+    <exec_depend>four_wheel_teleop</exec_depend>
+    <exec_depend>mobotic_driver</exec_depend>
+    <exec_depend>mobotic_simulation</exec_depend>
+    <exec_depend>kinematics_conversions</exec_depend>
+
+    <depend>roadmap_search_msgs</depend>
+    <depend>follow_path_msgs</depend>
+    <depend>agv_msgs</depend>
+    <depend>rclpy</depend>
+    <depend>std_msgs</depend>
+    <depend>can_msgs</depend>
+    <depend>geometry_msgs</depend>
+    <depend>sensor_msgs</depend>
+    <depend>std_srvs</depend>
+
+    <exec_depend>vanguard_battery_driver</exec_depend>
+    <exec_depend>ros2_socketcan</exec_depend>
+
+    <test_depend>ament_cmake_pytest</test_depend>
+
+    <export>
+        <build_type>ament_cmake</build_type>
+    </export>
+</package>

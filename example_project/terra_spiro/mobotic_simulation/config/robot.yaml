@@ -1,0 +1,12 @@
+/**/kinematics:
+  ros__parameters:
+    wheelbase: 0.85
+    track: 0.45
+    wheel_radius: 0.1125
+    # Max velocities are given at the joint axle (after transmission)
+    max_velocity_steering: 4.32 # 5000 rpm / 60 / 121 (gear ratio) * 2pi
+    max_velocity_traction: 11.12 # traction joint velocity limit in rad/s
+    max_current_traction: 4.0
+    # Wheel ordering is clockwise, starting from front_left:
+    # front_left, rear_left, rear_right, front_right
+    wheel_mount_angles: [0.0, 3.141592, 3.141592, 0.0]

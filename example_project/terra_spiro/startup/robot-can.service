@@ -1,0 +1,14 @@
+[Unit]
+Description=Configure platform and battery CANable interfaces
+Wants=systemd-udev-settle.service
+After=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/robot-can
+ExecStart=/usr/local/sbin/configure-robot-can
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

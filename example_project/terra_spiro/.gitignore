@@ -1,0 +1,16 @@
+# IntelliJ project files
+.idea
+
+# Python virtual environment
+.venv
+/data
+
+# Autosave files
+*~
+build
+
+# VS Code files
+.vscode
+
+# Python cache
+__pycache__

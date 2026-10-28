@@ -1,0 +1,190 @@
+<?xml version="1.0"?>
+<roadmap version="2.3">
+	<points_of_interest>
+		<poi name="POI_0" type="Waypoint" exportable_to_gui="false">
+			<position x="0" y="0" />
+			<orientations>
+				<orientation>-0.43633231299858238</orientation>
+				<orientation>2.7052603405912108</orientation>
+				<orientation>0.43633231299858238</orientation>
+				<orientation>-2.7052603405912108</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="POI_1" type="Waypoint" exportable_to_gui="false">
+			<position x="1.9600000000000002" y="1.98" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="POI_2" type="Waypoint" exportable_to_gui="false">
+			<position x="4" y="0.02" />
+			<orientations>
+				<orientation>1.5707963267948966</orientation>
+				<orientation>-1.5707963267948966</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="POI_3" type="Waypoint" exportable_to_gui="false">
+			<position x="2" y="-2" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="POI_4" type="Waypoint" exportable_to_gui="false">
+			<position x="-3.9799999999999982" y="-0.019999999999999997" />
+			<orientations>
+				<orientation>1.5707963267948966</orientation>
+				<orientation>-1.5707963267948966</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="POI_5" type="Waypoint" exportable_to_gui="false">
+			<position x="-1.9800000000000009" y="1.9999999999999978" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="POI_6" type="Waypoint" exportable_to_gui="false">
+			<position x="-2.0200000000000005" y="-2" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+	</points_of_interest>
+	<curves>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_1" orientation="-3.1415926535897931" />
+			<poi_end name="POI_0" orientation="0.43633231299858238" />
+			<control_points>
+				<cp x="1.9600000000000004" y="1.9799999999999998" />
+				<cp x="1.6813963388610984" y="1.9799999999999998" />
+				<cp x="1.1048012807642176" y="1.9109553563053352" />
+				<cp x="0.68718391488740838" y="1.4874680988731674" />
+				<cp x="1.4488970730966346" y="0.31627358329363631" />
+				<cp x="0.56578669873795928" y="0.16297472819901357" />
+				<cp x="0.25250066758710699" y="0.11774299498511751" />
+				<cp x="2.5227497727519214e-16" y="-7.405942310974552e-18" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_1" orientation="0" />
+			<poi_end name="POI_2" orientation="1.5707963267948966" />
+			<control_points>
+				<cp x="1.9600000000000002" y="1.98" />
+				<cp x="2.9029975845379692" y="1.98" />
+				<cp x="4" y="0.96299758453796913" />
+				<cp x="4" y="0.02" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_2" orientation="-1.5707963267948966" />
+			<poi_end name="POI_3" orientation="0" />
+			<control_points>
+				<cp x="3.9999999999999996" y="0.020000000000000229" />
+				<cp x="4" y="-0.26426044395940845" />
+				<cp x="3.9224691020775491" y="-0.9423246557221806" />
+				<cp x="3.3631638097590311" y="-1.3033443915243383" />
+				<cp x="2.7950369492883516" y="-1.9202140984501315" />
+				<cp x="2.4201447395577325" y="-1.8867646906734066" />
+				<cp x="2.2842604439594085" y="-2" />
+				<cp x="1.9999999999999998" y="-2" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_0" orientation="-0.43633231299858238" />
+			<poi_end name="POI_3" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="0" y="0" />
+				<cp x="0.85447517607438483" y="-0.39844831830682648" />
+				<cp x="1.0571909584179369" y="-2" />
+				<cp x="2" y="-2" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_5" orientation="-3.1415926535897931" />
+			<poi_end name="POI_4" orientation="1.5707963267948966" />
+			<control_points>
+				<cp x="-1.9800000000000009" y="1.9999999999999978" />
+				<cp x="-2.9275348131980281" y="1.9999999999999976" />
+				<cp x="-3.9799999999999982" y="0.927534813198027" />
+				<cp x="-3.9799999999999982" y="-0.019999999999999997" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_0" orientation="2.7052603405912108" />
+			<poi_end name="POI_5" orientation="0" />
+			<control_points>
+				<cp x="-2.3269268402715499e-16" y="-2.175925409505054e-18" />
+				<cp x="-0.25506406042170354" y="0.11893832469474955" />
+				<cp x="-0.55214378861833158" y="0.15302685588722861" />
+				<cp x="-1.3975604916867035" y="0.30967351173842617" />
+				<cp x="-0.77126522287574861" y="1.4202457533233868" />
+				<cp x="-1.055047031235594" y="1.9264139487416143" />
+				<cp x="-1.6985679478097786" y="1.9999999999999976" />
+				<cp x="-1.9800000000000013" y="1.9999999999999976" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_4" orientation="-1.5707963267948966" />
+			<poi_end name="POI_6" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="-3.9799999999999978" y="-0.019999999999999764" />
+				<cp x="-3.9799999999999982" y="-0.29860366113890169" />
+				<cp x="-3.9092304298553291" y="-0.98121920064495194" />
+				<cp x="-3.3798800676874499" y="-1.3352216450476417" />
+				<cp x="-2.8224915518633571" y="-1.8971556721179399" />
+				<cp x="-2.4498010965007126" y="-1.8924432041107357" />
+				<cp x="-2.2986036611389022" y="-2" />
+				<cp x="-2.0200000000000005" y="-2" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="POI_6" orientation="0" />
+			<poi_end name="POI_0" orientation="-2.7052603405912108" />
+			<control_points>
+				<cp x="-2.0200000000000005" y="-2" />
+				<cp x="-1.0724651868019723" y="-2" />
+				<cp x="-0.8587581796896907" y="-0.40044551569254921" />
+				<cp x="0" y="0" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+	</curves>
+	<maps />
+	<missions>
+		<mission name="Mission">
+			<mission_tasks />
+		</mission>
+	</missions>
+</roadmap>

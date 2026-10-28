@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<roadmap version="2.3">
+	<points_of_interest>
+		<poi name="center" type="Waypoint" exportable_to_gui="false">
+			<position x="0" y="0.0056748672362106813" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="right" type="Waypoint" exportable_to_gui="false">
+			<position x="3.7000000000000002" y="0" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="left" type="Waypoint" exportable_to_gui="false">
+			<position x="-3.7000000000000002" y="0" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+	</points_of_interest>
+	<curves>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="right" orientation="-3.1415926535897931" />
+			<poi_end name="center" orientation="0" />
+			<control_points>
+				<cp x="3.7000000000000002" y="0" />
+				<cp x="4.9333347839684336" y="0" />
+				<cp x="1.233334783968433" y="0.0056748672362106813" />
+				<cp x="0" y="0.0056748672362106813" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.69999999999999996" locked="true">
+			<poi_start name="left" orientation="0" />
+			<poi_end name="center" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="-3.7000000000000002" y="0" />
+				<cp x="-3.1714279497278155" y="0" />
+				<cp x="-2.2904751543082629" y="0.00081069531945866899" />
+				<cp x="-1.2685701851699147" y="0.0021078078305925389" />
+				<cp x="-0.97277594743668017" y="0.0060397348793676652" />
+				<cp x="0.53870951973074044" y="0.005277626529675933" />
+				<cp x="0.37000043519052916" y="0.0056748672362106822" />
+				<cp x="-1.2776257645874015e-15" y="0.0056748672362106822" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+	</curves>
+	<maps />
+	<missions>
+		<mission name="Mission">
+			<mission_tasks />
+		</mission>
+	</missions>
+</roadmap>

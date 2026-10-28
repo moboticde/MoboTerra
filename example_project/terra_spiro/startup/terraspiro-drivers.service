@@ -1,0 +1,12 @@
+[Unit]
+Description=Terraspiro ROS2 Drivers 
+After=network.target
+
+[Service]
+ExecStart=/bin/bash -c "sleep 5;source /opt/ros/jazzy/setup.bash && source /home/romb/terraspiro_ws/install/setup.bash && ROBOT_NAME='terraspiro' ros2 launch mobotic_launch terraspiro.launch.py"
+WorkingDirectory=/home/romb/terraspiro_ws
+User=romb
+Group=romb
+
+[Install]
+WantedBy=multi-user.target

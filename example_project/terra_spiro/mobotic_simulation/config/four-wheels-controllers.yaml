@@ -1,0 +1,75 @@
+/*/controller_manager:
+  ros__parameters:
+    update_rate: 50
+    use_sim_time: true
+
+    # 1. Broadcasters
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    # 2. Traction Controllers (Velocity)
+    front_left_traction_controller:
+      type: velocity_controllers/JointGroupVelocityController
+    front_right_traction_controller:
+      type: velocity_controllers/JointGroupVelocityController
+    rear_left_traction_controller:
+      type: velocity_controllers/JointGroupVelocityController
+    rear_right_traction_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
+    # 3. Steering Controllers (Position)
+    front_left_steering_controller:
+      type: position_controllers/JointGroupPositionController
+    front_right_steering_controller:
+      type: position_controllers/JointGroupPositionController
+    rear_left_steering_controller:
+      type: position_controllers/JointGroupPositionController
+    rear_right_steering_controller:
+      type: position_controllers/JointGroupPositionController
+
+
+# ==========================================
+# Individual Controller Configurations
+# ==========================================
+
+/*/front_left_traction_controller:
+  ros__parameters:
+    joints:
+      - front_left_traction
+
+/*/front_right_traction_controller:
+  ros__parameters:
+    joints:
+      - front_right_traction
+
+/*/rear_left_traction_controller:
+  ros__parameters:
+    joints:
+      - rear_left_traction
+
+/*/rear_right_traction_controller:
+  ros__parameters:
+    joints:
+      - rear_right_traction
+
+# ------------------------------------------
+
+/*/front_left_steering_controller:
+  ros__parameters:
+    joints:
+      - front_left_steering
+
+/*/front_right_steering_controller:
+  ros__parameters:
+    joints:
+      - front_right_steering
+
+/*/rear_left_steering_controller:
+  ros__parameters:
+    joints:
+      - rear_left_steering
+
+/*/rear_right_steering_controller:
+  ros__parameters:
+    joints:
+      - rear_right_steering

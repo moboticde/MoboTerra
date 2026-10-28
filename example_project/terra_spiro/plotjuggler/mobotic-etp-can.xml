@@ -1,0 +1,228 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<root>
+ <tabbed_widget name="Main Window" parent="main_window">
+  <Tab containers="1" tab_name="set-feed-can">
+   <Container>
+    <DockSplitter orientation="-" sizes="1" count="1">
+     <DockArea name="...">
+      <plot flip_x="false" flip_y="false" line_width="1.0" mode="TimeSeries">
+       <range top="510.900000" right="52.311004" bottom="-450.900000" left="0.000000"/>
+       <limitY/>
+       <curve color="#1f77b4" name="front_traction_feedback"/>
+       <curve color="#d62728" name="rear_traction_feedback"/>
+       <curve color="#1ac938" name="front_traction_setpoints"/>
+       <curve color="#ff7f0e" name="rear_traction_setpoints"/>
+       <curve color="#f14cc1" name="rear_traction_setpoints_relay"/>
+       <curve color="#9467bd" name="front_traction_setpoints_relay"/>
+      </plot>
+     </DockArea>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <currentTabIndex index="0"/>
+ </tabbed_widget>
+ <use_relative_time_offset enabled="1"/>
+ <!-- - - - - - - - - - - - - - - -->
+ <!-- - - - - - - - - - - - - - - -->
+ <Plugins>
+  <plugin ID="DataLoad CSV">
+   <parameters delimiter="0" time_axis=""/>
+  </plugin>
+  <plugin ID="DataLoad MCAP">
+   <parameters clamp_large_arrays="1" use_timestamp="0" use_mcap_log_time="0" max_array_size="500" selected_topics="/mobotic/can_tx;/mobotic/can_rx;/mobotic/tracking_error;/mobotic/relative_localization_pose;/mobotic/relative_odom_pose;/mobotic/twist_estimate;/mobotic/agv_vel;/map_metadata;/map;/mobotic/odometry;/rosout;/mobotic/joint_states;/mobotic/joint_setpoints;/mobotic/cmd_js;/mobotic/agv_js;/mobotic/joy;/mobotic/front_scanner/scan;/mobotic/front_scanner/extended_scan;/mobotic/front_scanner/output_paths;/mobotic/front_scanner/raw_data;/tf_static;/tf;/slam_toolbox/graph_visualization;/diagnostics"/>
+  </plugin>
+  <plugin ID="DataLoad ROS2 bags">
+   <use_header_stamp value="false"/>
+   <discard_large_arrays value="true"/>
+   <max_array_size value="100"/>
+   <boolean_strings_to_number value="true"/>
+   <remove_suffix_from_strings value="true"/>
+   <selected_topics value=""/>
+  </plugin>
+  <plugin ID="DataLoad ULog"/>
+  <plugin ID="ROS2 Topic Subscriber">
+   <use_header_stamp value="false"/>
+   <discard_large_arrays value="true"/>
+   <max_array_size value="100"/>
+   <boolean_strings_to_number value="true"/>
+   <remove_suffix_from_strings value="true"/>
+   <selected_topics value="/amcl_pose;/mobotic/relative_localization_pose;/mobotic/relative_odom_pose;/tf;/tf_recorded"/>
+  </plugin>
+  <plugin ID="UDP Server"/>
+  <plugin ID="WebSocket Server"/>
+  <plugin ID="ZMQ Subscriber"/>
+  <plugin ID="Fast Fourier Transform"/>
+  <plugin ID="Quaternion to RPY"/>
+  <plugin ID="Reactive Script Editor">
+   <library code="--[[ Helper function to create a series from arrays&#xa;&#xa; new_series: a series previously created with ScatterXY.new(name)&#xa; prefix:     prefix of the timeseries, before the index of the array&#xa; suffix_X:   suffix to complete the name of the series containing the X value. If [nil], use the index of the array.&#xa; suffix_Y:   suffix to complete the name of the series containing the Y value&#xa; timestamp:   usually the tracker_time variable&#xa;              &#xa; Example:&#xa; &#xa; Assuming we have multiple series in the form:&#xa; &#xa;   /trajectory/node.{X}/position/x&#xa;   /trajectory/node.{X}/position/y&#xa;   &#xa; where {N} is the index of the array (integer). We can create a reactive series from the array with:&#xa; &#xa;   new_series = ScatterXY.new(&quot;my_trajectory&quot;) &#xa;   CreateSeriesFromArray( new_series, &quot;/trajectory/node&quot;, &quot;position/x&quot;, &quot;position/y&quot;, tracker_time );&#xa;--]]&#xa;&#xa;function CreateSeriesFromArray( new_series, prefix, suffix_X, suffix_Y, timestamp )&#xa;  &#xa;  --- clear previous values&#xa;  new_series:clear()&#xa;  &#xa;  --- Append points to new_series&#xa;  index = 0&#xa;  while(true) do&#xa;&#xa;    x = index;&#xa;    -- if not nil, get the X coordinate from a series&#xa;    if suffix_X ~= nil then &#xa;      series_x = TimeseriesView.find( string.format( &quot;%s.%d/%s&quot;, prefix, index, suffix_X) )&#xa;      if series_x == nil then break end&#xa;      x = series_x:atTime(timestamp)&#x9; &#xa;    end&#xa;    &#xa;    series_y = TimeseriesView.find( string.format( &quot;%s.%d/%s&quot;, prefix, index, suffix_Y) )&#xa;    if series_y == nil then break end &#xa;    y = series_y:atTime(timestamp)&#xa;    &#xa;    new_series:push_back(x,y)&#xa;    index = index+1&#xa;  end&#xa;end&#xa;&#xa;--[[ Similar to the built-in function GetSeriesNames(), but select only the names with a give prefix. --]]&#xa;&#xa;function GetSeriesNamesByPrefix(prefix)&#xa;  -- GetSeriesNames(9 is a built-in function&#xa;  all_names = GetSeriesNames()&#xa;  filtered_names = {}&#xa;  for i, name in ipairs(all_names)  do&#xa;    -- check the prefix&#xa;    if name:find(prefix, 1, #prefix) then&#xa;      table.insert(filtered_names, name);&#xa;    end&#xa;  end&#xa;  return filtered_names&#xa;end&#xa;&#xa;--[[ Modify an existing series, applying offsets to all their X and Y values&#xa;&#xa; series: an existing timeseries, obtained with TimeseriesView.find(name)&#xa; delta_x: offset to apply to each x value&#xa; delta_y: offset to apply to each y value &#xa;  &#xa;--]]&#xa;&#xa;function ApplyOffsetInPlace(series, delta_x, delta_y)&#xa;  -- use C++ indeces, not Lua indeces&#xa;  for index=0, series:size()-1 do&#xa;    x,y = series:at(index)&#xa;    series:set(index, x + delta_x, y + delta_y)&#xa;  end&#xa;end&#xa;"/>
+   <scripts/>
+  </plugin>
+  <plugin ID="CSV Exporter"/>
+  <plugin ID="ROS2 Topic Re-Publisher"/>
+ </Plugins>
+ <!-- - - - - - - - - - - - - - - -->
+ <previouslyLoaded_Datafiles>
+  <fileInfo prefix="" filename="../../../data/positioning_tests/2026-04-24/pf-test-turns-2/pf-test-turns-2_0.mcap"/>
+ </previouslyLoaded_Datafiles>
+ <!-- - - - - - - - - - - - - - - -->
+ <customMathEquations>
+  <snippet name="front_traction_setpoints_relay">
+   <global></global>
+   <function>local raw_val = v3 + (v4 * 0x100) + (v5 * 0x10000) + (v6 * 0x1000000)
+
+if raw_val > 0x7FFFFFFF then
+    raw_val = raw_val - 0x100000000
+end
+ 
+-- Front traction RPDO echoed on CAN RX: 0x204, controlword bytes 0..1, target velocity bytes 2..5.
+if(value == 0x204) 
+then return raw_val
+end 
+return 0/0
+</function>
+   <linked_source>/mobotic/can_rx/id</linked_source>
+   <additional_sources>
+    <v1>/mobotic/can_rx/data[0]</v1>
+    <v2>/mobotic/can_rx/data[1]</v2>
+    <v3>/mobotic/can_rx/data[2]</v3>
+    <v4>/mobotic/can_rx/data[3]</v4>
+    <v5>/mobotic/can_rx/data[4]</v5>
+    <v6>/mobotic/can_rx/data[5]</v6>
+    <v7>/mobotic/can_rx/data[6]</v7>
+    <v8>/mobotic/can_rx/data[7]</v8>
+   </additional_sources>
+  </snippet>
+  <snippet name="rear_traction_setpoints_relay">
+   <global></global>
+   <function>local raw_val = v3 + (v4 * 0x100) + (v5 * 0x10000) + (v6 * 0x1000000)
+
+if raw_val > 0x7FFFFFFF then
+    raw_val = raw_val - 0x100000000
+end
+ 
+-- Rear traction RPDO echoed on CAN RX: 0x208, controlword bytes 0..1, target velocity bytes 2..5.
+if(value == 0x208) 
+then return raw_val
+end 
+return 0/0
+</function>
+   <linked_source>/mobotic/can_rx/id</linked_source>
+   <additional_sources>
+    <v1>/mobotic/can_rx/data[0]</v1>
+    <v2>/mobotic/can_rx/data[1]</v2>
+    <v3>/mobotic/can_rx/data[2]</v3>
+    <v4>/mobotic/can_rx/data[3]</v4>
+    <v5>/mobotic/can_rx/data[4]</v5>
+    <v6>/mobotic/can_rx/data[5]</v6>
+    <v7>/mobotic/can_rx/data[6]</v7>
+    <v8>/mobotic/can_rx/data[7]</v8>
+   </additional_sources>
+  </snippet>
+  <snippet name="front_traction_setpoints">
+   <global></global>
+   <function>local raw_val = v3 + (v4 * 0x100) + (v5 * 0x10000) + (v6 * 0x1000000)
+
+if raw_val > 0x7FFFFFFF then
+    raw_val = raw_val - 0x100000000
+end
+ 
+-- Front traction RPDO command: 0x204, controlword bytes 0..1, target velocity bytes 2..5.
+if(value == 0x204) 
+then return raw_val
+end 
+return 0/0
+</function>
+   <linked_source>/mobotic/can_tx/id</linked_source>
+   <additional_sources>
+    <v1>/mobotic/can_tx/data[0]</v1>
+    <v2>/mobotic/can_tx/data[1]</v2>
+    <v3>/mobotic/can_tx/data[2]</v3>
+    <v4>/mobotic/can_tx/data[3]</v4>
+    <v5>/mobotic/can_tx/data[4]</v5>
+    <v6>/mobotic/can_tx/data[5]</v6>
+    <v7>/mobotic/can_tx/data[6]</v7>
+    <v8>/mobotic/can_tx/data[7]</v8>
+   </additional_sources>
+  </snippet>
+  <snippet name="rear_traction_setpoints">
+   <global></global>
+   <function>local raw_val = v3 + (v4 * 0x100) + (v5 * 0x10000) + (v6 * 0x1000000)
+
+if raw_val > 0x7FFFFFFF then
+    raw_val = raw_val - 0x100000000
+end
+ 
+-- Rear traction RPDO command: 0x208, controlword bytes 0..1, target velocity bytes 2..5.
+if(value == 0x208) 
+then return raw_val
+end 
+return 0/0
+</function>
+   <linked_source>/mobotic/can_tx/id</linked_source>
+   <additional_sources>
+    <v1>/mobotic/can_tx/data[0]</v1>
+    <v2>/mobotic/can_tx/data[1]</v2>
+    <v3>/mobotic/can_tx/data[2]</v3>
+    <v4>/mobotic/can_tx/data[3]</v4>
+    <v5>/mobotic/can_tx/data[4]</v5>
+    <v6>/mobotic/can_tx/data[5]</v6>
+    <v7>/mobotic/can_tx/data[6]</v7>
+    <v8>/mobotic/can_tx/data[7]</v8>
+   </additional_sources>
+  </snippet>
+  <snippet name="rear_traction_feedback">
+   <global></global>
+   <function>local raw_val = v4 + (v5 * 0x100) + (v6 * 0x10000) + (v7 * 0x1000000)
+
+if raw_val > 0x7FFFFFFF then
+    raw_val = raw_val - 0x100000000
+end
+ 
+-- Rear traction TPDO feedback: 0x188, actual velocity in bytes 3..6.
+if(value == 0x188 and v3 == 0x03) 
+then return raw_val
+end 
+return 0/0
+</function>
+   <linked_source>/mobotic/can_rx/id</linked_source>
+   <additional_sources>
+    <v1>/mobotic/can_rx/data[0]</v1>
+    <v2>/mobotic/can_rx/data[1]</v2>
+    <v3>/mobotic/can_rx/data[2]</v3>
+    <v4>/mobotic/can_rx/data[3]</v4>
+    <v5>/mobotic/can_rx/data[4]</v5>
+    <v6>/mobotic/can_rx/data[5]</v6>
+    <v7>/mobotic/can_rx/data[6]</v7>
+    <v8>/mobotic/can_rx/data[7]</v8>
+   </additional_sources>
+  </snippet>
+  <snippet name="front_traction_feedback">
+   <global></global>
+   <function>local raw_val = v4 + (v5 * 0x100) + (v6 * 0x10000) + (v7 * 0x1000000)
+
+if raw_val > 0x7FFFFFFF then
+    raw_val = raw_val - 0x100000000
+end
+ 
+-- Front traction TPDO feedback: 0x184, actual velocity in bytes 3..6.
+if(value == 0x184 and v3 == 0x03) 
+then return raw_val
+end 
+return 0/0
+</function>
+   <linked_source>/mobotic/can_rx/id</linked_source>
+   <additional_sources>
+    <v1>/mobotic/can_rx/data[0]</v1>
+    <v2>/mobotic/can_rx/data[1]</v2>
+    <v3>/mobotic/can_rx/data[2]</v3>
+    <v4>/mobotic/can_rx/data[3]</v4>
+    <v5>/mobotic/can_rx/data[4]</v5>
+    <v6>/mobotic/can_rx/data[5]</v6>
+    <v7>/mobotic/can_rx/data[6]</v7>
+    <v8>/mobotic/can_rx/data[7]</v8>
+   </additional_sources>
+  </snippet>
+ </customMathEquations>
+ <snippets/>
+ <!-- - - - - - - - - - - - - - - -->
+</root>

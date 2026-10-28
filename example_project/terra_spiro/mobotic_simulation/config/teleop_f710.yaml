@@ -1,0 +1,41 @@
+terraspiro/teleop:
+  ros__parameters:
+    ## Velocity and acceleration limits
+
+    # Computed from traction velocity
+    # limit and wheel radius
+    max_velocity_linear: 1.25 # m/s
+    # Computed from linear velocity
+    # limit and vehicle dimensions
+    max_velocity_angular: 2.6 # rad/s
+
+    # Set based on experience with other vehicles
+    max_acceleration_linear: 0.5 # m/s^2
+    # Computed from linear acceleration limit
+    # and vehicle dimensions
+    max_acceleration_angular: 1.04 # rad/s^2
+
+    ## Joystick axes and button mappings
+    ## for Logitech F710
+
+    # Triggers actuate forward and backwards motion
+    axis_forward: 5  # Right trigger
+    axis_reverse: 2 # Left trigger
+
+    # Joysticks actuate rotation and crab motion
+    axis_steer: 0  # Left joystick
+    axis_crab: 3  # Right joystick
+
+    button_turbo_1: 4  # Left-front pushbutton
+    button_turbo_2: 5  # Right-front pushbutton
+    button_enable: 2  # X button
+    button_disable: 3 # Y button
+    button_clear: 1   # B button
+
+    # Velocity scaling factors
+    # Applied when turbo is not active
+    scale_linear: 0.4
+    scale_angular: 0.4
+
+    commands_timeout_sec: 0.25
+    commands_publish_sec: 0.02

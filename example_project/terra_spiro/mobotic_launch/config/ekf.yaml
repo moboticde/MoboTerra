@@ -1,0 +1,39 @@
+/mobotic/ekf_filter_node:
+  ros__parameters:
+    frequency: 50.0
+    two_d_mode: true
+    publish_tf: true
+
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+    base_link_frame_output: base_link_ekf_filtered
+
+    # ---------------------------------------
+    # Input 1: Wheel Encoders
+    # ---------------------------------------
+    odom0: /mobotic/odometry
+    odom0_config: [false, false, false, # Position (X, Y, Z) - Ignore to avoid drift
+                   false, false, false, # Orientation (R, P, Y)
+                   true,  true,  false, # Linear Velocity (v_x, v_y, v_z) - USE THIS
+                   false, false, true,  # Angular Velocity (v_roll, v_pitch, v_yaw) - USE THIS
+                   false, false, false] # Acceleration
+    odom0_queue_size: 10
+    odom0_relative: false
+
+    # ---------------------------------------
+    # Input 2: AR Markers (Vision-based Odom)
+    # ---------------------------------------
+    odom1: /tag_odom
+    odom1_config: [true,  true,  false, # Position (X, Y, Z) - USE THIS
+                   false, false, true,  # Orientation (R, P, Y) - USE THIS (Yaw)
+                   false, false, false, # Velocities - AR markers usually don't give good velocity
+                   false, false, false,
+                   false, false, false]
+    odom1_queue_size: 5
+    odom1_relative: false # Absolute positions are preferred for AR markers
+
+    # Differential mode:
+    # Set to true for AR markers if the marker odom starts at a random (non-zero) pose
+    # and you want the EKF to handle the offset.
+    odom1_differential: false

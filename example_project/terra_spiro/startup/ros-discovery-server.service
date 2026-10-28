@@ -1,0 +1,11 @@
+[Unit]
+Description=Terraspiro ROS2 Discovery Server 
+After=network.target
+
+[Service]
+ExecStart=/bin/bash -c "source /opt/ros/jazzy/setup.bash && fastdds discovery --server-id 0" 
+User=romb
+Group=romb
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,40 @@
+/*/controller_manager:
+  ros__parameters:
+    update_rate: 50
+    use_sim_time: true
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    front_traction_controller:
+      type: velocity_controllers/JointGroupVelocityController
+    rear_traction_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
+    front_steering_controller:
+      type: position_controllers/JointGroupPositionController
+    rear_steering_controller:
+      type: position_controllers/JointGroupPositionController
+
+
+
+/*/front_traction_controller:
+  ros__parameters:
+    joints:
+      - front_traction
+
+/*/rear_traction_controller:
+  ros__parameters:
+    joints:
+      - rear_traction
+
+
+/*/front_steering_controller:
+  ros__parameters:
+    joints:
+      - front_steering
+
+/*/rear_steering_controller:
+  ros__parameters:
+    joints:
+      - rear_steering

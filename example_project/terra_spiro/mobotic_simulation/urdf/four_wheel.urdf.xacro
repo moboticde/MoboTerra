@@ -1,0 +1,189 @@
+<?xml version="1.0"?>
+<robot name="$(env ROBOT_NAME)" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <ros2_control name="GazeboSimSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+    <joint name="front_left_steering">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_left_traction">
+      <command_interface name="velocity">
+        <param name="min">-5</param>
+        <param name="max">5</param>
+      </command_interface>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_right_steering">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_right_traction">
+      <command_interface name="velocity">
+        <param name="min">-5</param>
+        <param name="max">5</param>
+      </command_interface>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+
+    <joint name="rear_left_steering">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_left_traction">
+      <command_interface name="velocity">
+        <param name="min">-5</param>
+        <param name="max">5</param>
+      </command_interface>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_right_steering">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_right_traction">
+      <command_interface name="velocity">
+        <param name="min">-5</param>
+        <param name="max">5</param>
+      </command_interface>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+  </ros2_control>
+
+  <gazebo>
+    <!-- Joint state publisher -->
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <ros>
+        <namespace>$(arg robot_name)</namespace>
+      </ros>
+      <parameters>$(find mobotic_simulation)/config/four-wheels-controllers.yaml</parameters>
+    </plugin>
+
+    <plugin filename="gz-sim-pose-publisher-system"
+            name="gz::sim::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <publish_nested_model_pose>true</publish_nested_model_pose>
+      <use_pose_vector_msg>true</use_pose_vector_msg>
+      <update_frequency>50</update_frequency>
+    </plugin>
+  </gazebo>
+
+
+  <!-- Base names -->
+  <xacro:arg name="robot_name" default="$(env ROBOT_NAME)" />
+  <xacro:arg name="base_link_frame_id" default="base_link" />
+  <xacro:arg name="odometry_topic" default="odometry" />
+  <xacro:arg name="odometry_frame_id" default="odom" />
+
+  <!-- Include vehicle xacros -->
+  <xacro:include filename="$(find mobotic_simulation)/urdf/trans.urdf.xacro"/>
+  <xacro:include filename="$(find mobotic_simulation)/urdf/wheels.urdf.xacro"/>
+  <xacro:include filename="$(find mobotic_simulation)/urdf/inertia.urdf.xacro"/>
+  <xacro:include filename="$(find mobotic_simulation)/urdf/materials.urdf.xacro"/>
+
+  <!-- Define a base for the robot spawn it on 0,0,0 -->
+  <link name="base_link"/>
+
+  <!-- Forklift parts -->
+  <link name="mast">
+    <visual>
+      <origin xyz="0 0 0.25" rpy="0 0 0"/>
+      <geometry>
+        <box size="2.3 1.3 0.82"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.82" rpy="0 0 0"/>
+      <geometry>
+        <box size="2.3 1.3 0.82"/>
+      </geometry>
+    </collision>
+    <inertial>
+        <origin xyz="0 0 0.82"/>
+        <mass value="100"/>
+        <xacro:box_inertia m="100" x="2.3" y="1.3" z="0.82"/>
+    </inertial>
+  </link>
+
+  <joint name="base_link_to_mast" type="fixed">
+    <parent link="base_link"/>
+    <child link="mast"/>
+    <origin xyz="0 0 0"/>
+  </joint>
+
+  <!-- Wheels -->
+  <xacro:wheel_actuated
+    name="front_left"
+    parent="base_link"
+    xyz="0.825 0.495 0.25"
+    rpy="0 0 0"
+    radius="0.325"
+    length="0.31"
+    friction="0.0"/>
+
+  <xacro:wheel_actuated
+    name="front_right"
+    parent="base_link"
+    xyz="0.825 -0.495 0.25"
+    rpy="0 0 0"
+    radius="0.325"
+    length="0.31"
+    friction="0.0"/>
+
+  <xacro:wheel_actuated
+    name="rear_left"
+    parent="base_link"
+    xyz="-0.825 0.495 0.25"
+    rpy="0 0 0"
+    radius="0.325"
+    length="0.31"
+    friction="0.0"/>
+
+  <xacro:wheel_actuated
+    name="rear_right"
+    parent="base_link"
+    xyz="-0.825 -0.495 0.25"
+    rpy="0 0 0"
+    radius="0.325"
+    length="0.31"
+    friction="0.0"/>
+
+  <!-- Transitions
+  <xacro:trans trans_number="1" joint_name="front_left_steering"/>
+  <xacro:trans trans_number="2" joint_name="rear_left_steering"/>
+  <xacro:trans trans_number="3" joint_name="rear_right_steering"/>
+  <xacro:trans trans_number="4" joint_name="front_right_steering"/>
+  <xacro:trans trans_number="5" joint_name="front_left_traction"/>
+  <xacro:trans trans_number="6" joint_name="rear_left_traction"/>
+  <xacro:trans trans_number="7" joint_name="rear_right_traction"/>
+  <xacro:trans trans_number="8" joint_name="front_right_traction"/>
+  -->
+</robot>

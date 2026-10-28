@@ -1,0 +1,247 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<root>
+ <tabbed_widget parent="main_window" name="Main Window">
+  <Tab tab_name="js-pf" containers="1">
+   <Container>
+    <DockSplitter sizes="0.501085;0.498915" count="2" orientation="-">
+     <DockSplitter sizes="0.5;0.5" count="2" orientation="|">
+      <DockArea name="...">
+       <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+        <range bottom="-19.609759" top="-14.933947" left="0.000000" right="1.000000"/>
+        <limitY/>
+       </plot>
+      </DockArea>
+      <DockArea name="...">
+       <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+        <range bottom="-0.376558" top="0.013710" left="0.000000" right="1.000000"/>
+        <limitY/>
+       </plot>
+      </DockArea>
+     </DockSplitter>
+     <DockSplitter sizes="0.5;0.5" count="2" orientation="|">
+      <DockArea name="...">
+       <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+        <range bottom="-7.120470" top="-2.364133" left="0.000000" right="1.000000"/>
+        <limitY/>
+       </plot>
+      </DockArea>
+      <DockArea name="...">
+       <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+        <range bottom="-0.364880" top="0.026627" left="0.000000" right="1.000000"/>
+        <limitY/>
+       </plot>
+      </DockArea>
+     </DockSplitter>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <Tab tab_name="js-raw" containers="1">
+   <Container>
+    <DockSplitter sizes="1" count="1" orientation="-">
+     <DockSplitter sizes="0.5;0.5" count="2" orientation="|">
+      <DockSplitter sizes="0.334419;0.331162;0.334419" count="3" orientation="-">
+       <DockArea name="...">
+        <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+         <range bottom="-0.121866" top="3.347183" left="0.000000" right="1.000000"/>
+         <limitY/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+         <range bottom="-3.243375" top="0.236687" left="0.000000" right="1.000000"/>
+         <limitY/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+         <range bottom="-73.604200" top="95.244200" left="0.000000" right="1.000000"/>
+         <limitY/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter sizes="0.333333;0.333333;0.333333" count="3" orientation="-">
+       <DockArea name="...">
+        <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+         <range bottom="-1123.560731" top="-855.655430" left="0.000000" right="1.000000"/>
+         <limitY/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+         <range bottom="-7.120470" top="-2.364133" left="0.000000" right="1.000000"/>
+         <limitY/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+         <range bottom="-95.640300" top="89.928300" left="0.000000" right="1.000000"/>
+         <limitY/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+     </DockSplitter>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <Tab tab_name="errors" containers="1">
+   <Container>
+    <DockSplitter sizes="0.501085;0.498915" count="2" orientation="-">
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-17.513451" top="12.041954" left="0.000000" right="1.000000"/>
+       <limitY/>
+      </plot>
+     </DockArea>
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-3.578019" top="9.263329" left="0.000000" right="1.000000"/>
+       <limitY/>
+      </plot>
+     </DockArea>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <Tab tab_name="odometry" containers="1">
+   <Container>
+    <DockSplitter sizes="1" count="1" orientation="-">
+     <DockArea name="...">
+      <plot mode="XYPlot" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-0.100000" top="0.100000" left="0.000000" right="1.000000"/>
+       <limitY/>
+      </plot>
+     </DockArea>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <Tab tab_name="vehicle velocities" containers="1">
+   <Container>
+    <DockSplitter sizes="0.501085;0.498915" count="2" orientation="-">
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-0.342571" top="0.315085" left="0.000000" right="1.000000"/>
+       <limitY/>
+      </plot>
+     </DockArea>
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-0.054603" top="0.074908" left="0.000000" right="1.000000"/>
+       <limitY/>
+      </plot>
+     </DockArea>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <Tab tab_name="states/errors" containers="1">
+   <Container>
+    <DockSplitter sizes="0.501085;0.498915" count="2" orientation="-">
+     <DockSplitter sizes="0.5;0.5" count="2" orientation="|">
+      <DockArea name="...">
+       <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+        <range bottom="0.000000" top="0.000000" left="0.000000" right="1.000000"/>
+        <limitY/>
+       </plot>
+      </DockArea>
+      <DockArea name="...">
+       <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+        <range bottom="-0.367750" top="0.017266" left="0.000000" right="1.000000"/>
+        <limitY/>
+       </plot>
+      </DockArea>
+     </DockSplitter>
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-0.100000" top="0.100000" left="0.000000" right="1.000000"/>
+       <limitY/>
+      </plot>
+     </DockArea>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <Tab tab_name="world-tf" containers="1">
+   <Container>
+    <DockSplitter sizes="0.25;0.25;0.25;0.25" count="4" orientation="-">
+     <DockArea name="...">
+      <plot mode="XYPlot" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-0.614822" top="0.591882" left="-6.785048" right="6.508319"/>
+       <limitY/>
+       <curve curve_y="/pose_world_frame/pose/position/y" name="/pose_world_frame/pose/position/[x;y]" color="#d62728" curve_x="/pose_world_frame/pose/position/x"/>
+       <curve curve_y="/mobotic/active_path/path/segments[1]/end/pose/position/y" name="/mobotic/active_path/path/segments[1]/end/pose/position/[x;y]" color="#1f77b4" curve_x="/mobotic/active_path/path/segments[1]/end/pose/position/x"/>
+      </plot>
+     </DockArea>
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-2.950753" top="1.444866" left="0.053506" right="98.717712"/>
+       <limitY/>
+       <curve name="/mobotic/cmd_js/front_traction/velocity" color="#d62728"/>
+       <curve name="/mobotic/cmd_js/rear_traction/velocity" color="#1ac938"/>
+       <curve name="/mobotic/agv_js/front_traction/velocity" color="#ff7f0e"/>
+       <curve name="/mobotic/agv_js/rear_traction/velocity" color="#f14cc1"/>
+      </plot>
+     </DockArea>
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-3.247476" top="-3.052583" left="0.053506" right="98.717712"/>
+       <limitY/>
+       <curve name="/mobotic/agv_js/front_steering/position" color="#9467bd"/>
+       <curve name="/mobotic/agv_js/rear_steering/position" color="#17becf"/>
+      </plot>
+     </DockArea>
+     <DockArea name="...">
+      <plot mode="TimeSeries" flip_y="false" line_width="1.0" flip_x="false">
+       <range bottom="-0.091400" top="0.068460" left="0.053506" right="98.717712"/>
+       <limitY/>
+       <curve name="/mobotic/tracking_error/pose/position/y" color="#bcbd22"/>
+      </plot>
+     </DockArea>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <currentTabIndex index="6"/>
+ </tabbed_widget>
+ <use_relative_time_offset enabled="1"/>
+ <!-- - - - - - - - - - - - - - - -->
+ <!-- - - - - - - - - - - - - - - -->
+ <Plugins>
+  <plugin ID="DataLoad CSV">
+   <parameters time_axis="" delimiter="0"/>
+  </plugin>
+  <plugin ID="DataLoad MCAP"/>
+  <plugin ID="DataLoad ROS2 bags">
+   <use_header_stamp value="false"/>
+   <discard_large_arrays value="true"/>
+   <max_array_size value="100"/>
+   <boolean_strings_to_number value="true"/>
+   <remove_suffix_from_strings value="true"/>
+   <selected_topics value=""/>
+  </plugin>
+  <plugin ID="DataLoad ULog"/>
+  <plugin ID="ROS2 Topic Subscriber">
+   <use_header_stamp value="false"/>
+   <discard_large_arrays value="true"/>
+   <max_array_size value="100"/>
+   <boolean_strings_to_number value="true"/>
+   <remove_suffix_from_strings value="true"/>
+   <selected_topics value="/mobotic/active_path;/mobotic/active_segments;/mobotic/agv_js;/mobotic/agv_vel;/mobotic/cmd_js;/mobotic/cmd_vel;/mobotic/joint_setpoints;/mobotic/joint_states;/mobotic/joy;/mobotic/odometry;/mobotic/tracking_error;/pose;/pose_world_frame;/rosout;/tf;/tf_static"/>
+  </plugin>
+  <plugin ID="UDP Server"/>
+  <plugin ID="WebSocket Server"/>
+  <plugin ID="ZMQ Subscriber"/>
+  <plugin ID="Fast Fourier Transform"/>
+  <plugin ID="Quaternion to RPY"/>
+  <plugin ID="Reactive Script Editor">
+   <library code="--[[ Helper function to create a series from arrays&#xa;&#xa; new_series: a series previously created with ScatterXY.new(name)&#xa; prefix:     prefix of the timeseries, before the index of the array&#xa; suffix_X:   suffix to complete the name of the series containing the X value. If [nil], use the index of the array.&#xa; suffix_Y:   suffix to complete the name of the series containing the Y value&#xa; timestamp:   usually the tracker_time variable&#xa;              &#xa; Example:&#xa; &#xa; Assuming we have multiple series in the form:&#xa; &#xa;   /trajectory/node.{X}/position/x&#xa;   /trajectory/node.{X}/position/y&#xa;   &#xa; where {N} is the index of the array (integer). We can create a reactive series from the array with:&#xa; &#xa;   new_series = ScatterXY.new(&quot;my_trajectory&quot;) &#xa;   CreateSeriesFromArray( new_series, &quot;/trajectory/node&quot;, &quot;position/x&quot;, &quot;position/y&quot;, tracker_time );&#xa;--]]&#xa;&#xa;function CreateSeriesFromArray( new_series, prefix, suffix_X, suffix_Y, timestamp )&#xa;  &#xa;  --- clear previous values&#xa;  new_series:clear()&#xa;  &#xa;  --- Append points to new_series&#xa;  index = 0&#xa;  while(true) do&#xa;&#xa;    x = index;&#xa;    -- if not nil, get the X coordinate from a series&#xa;    if suffix_X ~= nil then &#xa;      series_x = TimeseriesView.find( string.format( &quot;%s.%d/%s&quot;, prefix, index, suffix_X) )&#xa;      if series_x == nil then break end&#xa;      x = series_x:atTime(timestamp)&#x9; &#xa;    end&#xa;    &#xa;    series_y = TimeseriesView.find( string.format( &quot;%s.%d/%s&quot;, prefix, index, suffix_Y) )&#xa;    if series_y == nil then break end &#xa;    y = series_y:atTime(timestamp)&#xa;    &#xa;    new_series:push_back(x,y)&#xa;    index = index+1&#xa;  end&#xa;end&#xa;&#xa;--[[ Similar to the built-in function GetSeriesNames(), but select only the names with a give prefix. --]]&#xa;&#xa;function GetSeriesNamesByPrefix(prefix)&#xa;  -- GetSeriesNames(9 is a built-in function&#xa;  all_names = GetSeriesNames()&#xa;  filtered_names = {}&#xa;  for i, name in ipairs(all_names)  do&#xa;    -- check the prefix&#xa;    if name:find(prefix, 1, #prefix) then&#xa;      table.insert(filtered_names, name);&#xa;    end&#xa;  end&#xa;  return filtered_names&#xa;end&#xa;&#xa;--[[ Modify an existing series, applying offsets to all their X and Y values&#xa;&#xa; series: an existing timeseries, obtained with TimeseriesView.find(name)&#xa; delta_x: offset to apply to each x value&#xa; delta_y: offset to apply to each y value &#xa;  &#xa;--]]&#xa;&#xa;function ApplyOffsetInPlace(series, delta_x, delta_y)&#xa;  -- use C++ indeces, not Lua indeces&#xa;  for index=0, series:size()-1 do&#xa;    x,y = series:at(index)&#xa;    series:set(index, x + delta_x, y + delta_y)&#xa;  end&#xa;end&#xa;"/>
+   <scripts>
+    <script global="local NODES = {&#xa;    [0x03] = &quot;Front_Steering&quot;,&#xa;    [0x07] = &quot;Rear_Steering&quot;,&#xa;    [0x04] = &quot;Front_Traction&quot;,&#xa;    [0x08] = &quot;Rear_Traction&quot;&#xa;}&#xa;&#xa;local PARAM_MAP = {&#xa;    [0x6040] = { sub = 0x00, name = &quot;Controlword&quot; },&#xa;    [0x6060] = { sub = 0x00, name = &quot;Traction_Mode&quot; },&#xa;    [0x3003] = { sub = 0x00, name = &quot;Steering_Mode&quot; },&#xa;    [0x3004] = { sub = 0x00, name = &quot;Steering_State&quot; },&#xa;    [0x3300] = { sub = 0x00, name = &quot;Steering_Profile_Velocity&quot; },&#xa;    [0x60FF] = { sub = 0x00, name = &quot;Traction_Velocity&quot; },&#xa;    [0x3790] = { sub = 0x00, name = &quot;Steering_Position&quot; },&#xa;&#xa;    -- Feedback Indices (from 0x43 Replies)&#xa;    [0x606C] = { sub = 0x01, name = &quot;Traction_Velocity&quot; },&#xa;    [0x3A04] = { sub = 0x01, name = &quot;Steering_Velocity&quot; },&#xa;    [0x6041] = { sub = 0x00, name = &quot;Traction_Statusword&quot; },&#xa;    [0x3762] = { sub = 0x00, name = &quot;Steering_Position&quot; }&#xa;}&#xa;&#xa;-- SDO Command Specifiers&#xa;local CMD_WRITE_4B = 0x23 -- Setpoint (Master to Slave)&#xa;local CMD_REPLY_4B = 0x43 -- Feedback (Slave to Master)&#xa;&#xa;-- Helper function to decode a specific CAN stream&#xa;local function ProcessCANStream(topic_prefix, is_rx, output_series)&#xa;    local id_series = TimeseriesView.find(topic_prefix .. &quot;/id&quot;)&#xa;    local data = {}&#xa;&#xa;    for b = 0, 7 do&#xa;        data[b] = TimeseriesView.find(topic_prefix .. &quot;/data.&quot; .. b)&#xa;    end&#xa;&#xa;    if id_series == nil then return end&#xa;&#xa;    for i = 0, id_series:size() - 1 do&#xa;        local timestamp = id_series:atTime(i)&#xa;        local can_id = id_series:at(i)&#xa;&#xa;        -- =========================================================&#xa;        -- CAN ID DECODING: 0x580 for Feedback, 0x600 for Setpoints&#xa;        -- =========================================================&#xa;        local base_id = is_rx and 0x580 or 0x600&#xa;        local node_id = can_id - base_id&#xa;&#xa;        local motor_name = NODES[node_id]&#xa;&#xa;        -- If the calculated Node ID matches our dictionary, process it&#xa;        if motor_name ~= nil then&#xa;&#xa;            -- Safely extract Bytes 0 to 3&#xa;            local byte0 = (data[0] ~= nil) and data[0]:atTime(timestamp) or 0&#xa;            local byte1 = (data[1] ~= nil) and data[1]:atTime(timestamp) or 0&#xa;            local byte2 = (data[2] ~= nil) and data[2]:atTime(timestamp) or 0&#xa;            local byte3 = (data[3] ~= nil) and data[3]:atTime(timestamp) or 0&#xa;&#xa;            if output_series['byte0'] == nil then&#xa;              output_series['byte0'] = Timeseries.new(target_series_name)&#xa;            end&#xa;&#xa;            output_series['byte0']:push_back(byte0)&#xa;            -- Calculate Parameter Index (Little Endian: Byte 1 + Byte 2 shifted)&#xa;            local index = byte1 + (byte2 * 256)&#xa;            local subindex = byte3&#xa;&#xa;            local is_valid_msg = false&#xa;            local msg_type = &quot;&quot;&#xa;&#xa;            -- Classify as Setpoint or Feedback&#xa;            if not is_rx and byte0 == CMD_WRITE_4B then&#xa;                is_valid_msg = true&#xa;                msg_type = &quot;_Setpoint&quot;&#xa;            elseif is_rx and byte0 == CMD_REPLY_4B then&#xa;                is_valid_msg = true&#xa;                msg_type = &quot;_Feedback&quot;&#xa;            end&#xa;&#xa;            -- Match the Index/Subindex to our dictionary&#xa;            local param_info = PARAM_MAP[index]&#xa;&#xa;            if is_valid_msg and param_info ~= nil and param_info.sub == subindex then&#xa;&#xa;                -- Construct the target plot name (e.g., &quot;Steering_1_Velocity_Feedback&quot;)&#xa;                local target_series_name = motor_name .. &quot;_&quot; .. param_info.name .. msg_type&#xa;&#xa;                -- Ensure series exists in our output table&#xa;                if output_series[target_series_name] == nil then&#xa;                    output_series[target_series_name] = Timeseries.new(target_series_name)&#xa;                end&#xa;&#xa;                -- Extract 32-bit Data Payload (Bytes 4, 5, 6, 7)&#xa;                local b4 = (data[4] ~= nil) and data[4]:atTime(timestamp) or 0&#xa;                local b5 = (data[5] ~= nil) and data[5]:atTime(timestamp) or 0&#xa;                local b6 = (data[6] ~= nil) and data[6]:atTime(timestamp) or 0&#xa;                local b7 = (data[7] ~= nil) and data[7]:atTime(timestamp) or 0&#xa;&#xa;                local extracted_value = b4 + (b5 * 256) + (b6 * 65536) + (b7 * 16777216)&#xa;&#xa;                -- Convert to signed 32-bit integer&#xa;                if extracted_value >= 2147483648 then&#xa;                    extracted_value = extracted_value - 4294967296&#xa;                end&#xa;&#xa;                -- Push the value to the plot&#xa;                output_series[target_series_name]:push_back(timestamp, 1.0)&#xa;            end&#xa;        end&#xa;    end&#xa;end&#xa;&#xa;-- Main Function&#xa;function DecodeAllMotors(can_rx_topic, can_tx_topic)&#xa;    local output_series = {}&#xa;&#xa;    -- Process the Receive (Feedback) stream [is_rx = true]&#xa;    -- This flags the processor to look for 0x580 + Node IDs&#xa;    ProcessCANStream(can_rx_topic, true, output_series)&#xa;&#xa;    -- Process the Transmit (Setpoint) stream [is_rx = false]&#xa;    -- This flags the processor to look for 0x600 + Node IDs&#xa;    ProcessCANStream(can_tx_topic, false, output_series)&#xa;&#xa;    return output_series&#xa;end&#xa;&#xa;-- ==============================================================================&#xa;-- EXECUTE SCRIPT&#xa;-- ==============================================================================&#xa;return DecodeAllMotors(&quot;mobotic/can_tx&quot;, &quot;mobotic/can_rx&quot;)" name="can_analysis" function=""/>
+   </scripts>
+  </plugin>
+  <plugin ID="CSV Exporter"/>
+  <plugin ID="ROS2 Topic Re-Publisher"/>
+ </Plugins>
+ <!-- - - - - - - - - - - - - - - -->
+ <previouslyLoaded_Datafiles/>
+ <!-- - - - - - - - - - - - - - - -->
+ <customMathEquations/>
+ <snippets/>
+ <!-- - - - - - - - - - - - - - - -->
+</root>
+

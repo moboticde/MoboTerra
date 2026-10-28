@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<roadmap version="2.3">
+	<points_of_interest>
+		<poi name="center" type="Waypoint" exportable_to_gui="false">
+			<position x="0" y="0" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="right" type="Waypoint" exportable_to_gui="false">
+			<position x="3" y="0" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="left" type="Waypoint" exportable_to_gui="false">
+			<position x="-3" y="0" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+	</points_of_interest>
+	<curves>
+		<curve speed_limit="1.8" locked="true">
+			<poi_start name="left" orientation="0" />
+			<poi_end name="center" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="-3" y="0" />
+				<cp x="-2" y="0" />
+				<cp x="-1" y="-1.2246467991473532e-16" />
+				<cp x="0" y="0" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+		<curve speed_limit="1.8" locked="true">
+			<poi_start name="right" orientation="-3.1415926535897931" />
+			<poi_end name="center" orientation="0" />
+			<control_points>
+				<cp x="3" y="0" />
+				<cp x="2" y="-1.2246467991473532e-16" />
+				<cp x="1" y="0" />
+				<cp x="0" y="0" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="true" end_to_start_forwards="true" end_to_start_backwards="true" />
+			<properties />
+		</curve>
+	</curves>
+	<maps />
+	<missions>
+		<mission name="Mission">
+			<mission_tasks />
+		</mission>
+	</missions>
+</roadmap>

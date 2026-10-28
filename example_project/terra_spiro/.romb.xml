@@ -1,0 +1,182 @@
+<?xml version="1.0"?>
+<roadmap version="2.3">
+	<points_of_interest>
+		<poi name="center" type="Waypoint" exportable_to_gui="false">
+			<position x="0" y="0" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="cw_loop_entry" type="Waypoint" exportable_to_gui="false">
+			<position x="0.75" y="0.25" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="ccw_loop_entry" type="Waypoint" exportable_to_gui="false">
+			<position x="0.75" y="-0.24499999999999994" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="cw_loop_exit" type="Waypoint" exportable_to_gui="false">
+			<position x="-0.75" y="0.25" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+		<poi name="ccw_loop_exit" type="Waypoint" exportable_to_gui="false">
+			<position x="-0.75" y="-0.25" />
+			<orientations>
+				<orientation>0</orientation>
+				<orientation>-3.1415926535897931</orientation>
+			</orientations>
+			<heights />
+			<properties />
+		</poi>
+	</points_of_interest>
+	<curves>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="center" orientation="-3.1415926535897931" />
+			<poi_end name="cw_loop_exit" orientation="0" />
+			<control_points>
+				<cp x="-1.9911119424326845e-17" y="0" />
+				<cp x="-0.079056941504209541" y="0" />
+				<cp x="-0.18084283407755083" y="0" />
+				<cp x="-0.36488148724383346" y="0" />
+				<cp x="-0.37194384651109597" y="0.25" />
+				<cp x="-0.58714689931813191" y="0.25" />
+				<cp x="-0.6709430584957905" y="0.25" />
+				<cp x="-0.74999999999999989" y="0.25" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="center" orientation="-3.1415926535897931" />
+			<poi_end name="ccw_loop_exit" orientation="0" />
+			<control_points>
+				<cp x="-2.007952067022323e-17" y="0" />
+				<cp x="-0.079056941504209541" y="0" />
+				<cp x="-0.18103243702461774" y="0" />
+				<cp x="-0.36545029608503421" y="0" />
+				<cp x="-0.3866501792937212" y="-0.25" />
+				<cp x="-0.57162270583927632" y="-0.25" />
+				<cp x="-0.6709430584957905" y="-0.25" />
+				<cp x="-0.75" y="-0.25" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="center" orientation="0" />
+			<poi_end name="cw_loop_entry" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="1.1318213070324358e-17" y="0" />
+				<cp x="0.079056941504209541" y="0" />
+				<cp x="0.17116808161407204" y="0" />
+				<cp x="0.33585722985339705" y="0" />
+				<cp x="0.39247056105463746" y="0.25000000000000006" />
+				<cp x="0.57036659420887093" y="0.25000000000000006" />
+				<cp x="0.6709430584957905" y="0.25" />
+				<cp x="0.75" y="0.25" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="center" orientation="0" />
+			<poi_end name="ccw_loop_entry" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="1.9022037449055044e-17" y="0" />
+				<cp x="0.078900253485017433" y="0" />
+				<cp x="0.17944487378246352" y="0" />
+				<cp x="0.36115767041614782" y="0" />
+				<cp x="0.40917699924060985" y="-0.24612212978625125" />
+				<cp x="0.5879897394133321" y="-0.24538719401128434" />
+				<cp x="0.67109974651498261" y="-0.24499999999999997" />
+				<cp x="0.74999999999999989" y="-0.24499999999999994" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="ccw_loop_entry" orientation="0" />
+			<poi_end name="cw_loop_entry" orientation="0" />
+			<control_points>
+				<cp x="0.75" y="-0.24499999999999994" />
+				<cp x="0.80358214178592846" y="-0.24499999999999994" />
+				<cp x="0.91075178196503537" y="-0.24517857142857133" />
+				<cp x="1.0715292756448702" y="-0.24621428571428558" />
+				<cp x="1.0714285714285705" y="0.25000000000000011" />
+				<cp x="0.91071428571428548" y="0.25" />
+				<cp x="0.80357142857142849" y="0.25" />
+				<cp x="0.75" y="0.25" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="cw_loop_exit" orientation="-3.1415926535897931" />
+			<poi_end name="ccw_loop_exit" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="-0.75" y="0.25" />
+				<cp x="-0.8035714285714286" y="0.25" />
+				<cp x="-0.91071428571428581" y="0.25" />
+				<cp x="-1.0714285714285716" y="0.25" />
+				<cp x="-1.0714285714285716" y="-0.25" />
+				<cp x="-0.91071428571428581" y="-0.25" />
+				<cp x="-0.8035714285714286" y="-0.25" />
+				<cp x="-0.75" y="-0.25" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="cw_loop_exit" orientation="0" />
+			<poi_end name="cw_loop_entry" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="-0.75" y="0.25" />
+				<cp x="-0.25" y="0.25" />
+				<cp x="0.25" y="0.25" />
+				<cp x="0.75" y="0.25" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+		<curve speed_limit="0.5" locked="true">
+			<poi_start name="ccw_loop_exit" orientation="0" />
+			<poi_end name="ccw_loop_entry" orientation="-3.1415926535897931" />
+			<control_points>
+				<cp x="-0.75" y="-0.25" />
+				<cp x="-0.59999916666898012" y="-0.25" />
+				<cp x="-0.44713404132770379" y="-0.25" />
+				<cp x="-0.054480887391330141" y="-0.25" />
+				<cp x="-0.19315616565874227" y="-0.24843145140217093" />
+				<cp x="0.44954526713591608" y="-0.24639945577324621" />
+				<cp x="0.59999916666898001" y="-0.245" />
+				<cp x="0.74999999999999967" y="-0.24499999999999994" />
+			</control_points>
+			<directions start_to_end_forwards="true" start_to_end_backwards="false" end_to_start_forwards="true" end_to_start_backwards="false" />
+			<properties />
+		</curve>
+	</curves>
+	<maps />
+	<missions>
+		<mission name="Mission">
+			<mission_tasks />
+		</mission>
+	</missions>
+</roadmap>

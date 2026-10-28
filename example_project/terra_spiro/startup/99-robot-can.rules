@@ -1,0 +1,3 @@
+# Start the service whenever either known CANable is added or reconnected.
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="gs_usb", ENV{ID_SERIAL_SHORT}=="0040001D5847570D20343432", TAG+="systemd", ENV{SYSTEMD_WANTS}+="robot-can.service"
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="gs_usb", ENV{ID_SERIAL_SHORT}=="001B00305346571320373231", TAG+="systemd", ENV{SYSTEMD_WANTS}+="robot-can.service"
