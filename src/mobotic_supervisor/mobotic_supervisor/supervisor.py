@@ -298,6 +298,8 @@ class MoboticSupervisor(Node):
                 JointState, 'operator/steering_setpoints', self._manual_steering_callback, 1)
         self.reset_service = self.create_service(
             Trigger, 'wheel_modules/clear_errors', self._reset_errors_service)
+        self.toggle_drives_service = self.create_service(
+            Trigger, 'wheel_modules/toggle_drives', self._toggle_drives_service)
         self.health_subscription = self.create_subscription(
             ComponentHealthArray, 'internal/component_health', self._health_callback, 1)
         self.timer = self.create_timer(self.control_period, self._control)
@@ -829,6 +831,8 @@ class MoboticSupervisor(Node):
         return True, 'FlexiSoft ready'
 
     def _enable_gate(self, now, recovering=False, allow_drive_faults=False):
+        if getattr(self, 'operator_drives_disabled', False) and not recovering:
+            return False, 'drives disabled by B2; press B2 to clear, initialize and enable'
         if 'host' in getattr(self, 'required_health_sources', []):
             health, received = self.component_health.get('host', (None, None))
             if (not self._message_fresh(health, received, self.health_timeout, now)
@@ -874,7 +878,7 @@ class MoboticSupervisor(Node):
                 return False, 'wheel-module status does not match configured modules'
             if any(getattr(m, 'sto_state_known', False) and m.sto_active for m in self.wheel_status.modules):
                 return False, 'safe torque off active in drive feedback'
-            if any(getattr(m, 'startup_failed', False) for m in self.wheel_status.modules):
+            if not recovering and any(getattr(m, 'startup_failed', False) for m in self.wheel_status.modules):
                 return False, 'driver startup failed; investigate and restart driver'
             # Enable authorizes initialization and acquisition. Motion feedback
             # can become available only after the controllers are enabled.
@@ -1316,10 +1320,12 @@ class MoboticSupervisor(Node):
         # to reacquire feedback before completing the reset transaction.
         resetting = getattr(self, 'reset_started_at', None) is not None
         reset_acknowledged = resetting and self._reset_acknowledged(now)
-        feedback_only_errors = all(code.startswith(('DRIVE_FEEDBACK_LOST:', 'POSITION_CONTINUITY_UNKNOWN:')) or
+        feedback_only_errors = all(code.startswith(('DRIVE_FEEDBACK_LOST:', 'POSITION_CONTINUITY_UNKNOWN:', 'DRIVE_STARTUP_FAILED:')) or
                                    code in ('COMPONENT_HEALTH_LOST:kinematics', 'COMPONENT_HEALTH_LOST:odometry') for code in errors)
         if reset_acknowledged and feedback_only_errors:
             enable_ready, _ = self._reset_external_gate(now)
+        if getattr(self, 'operator_drives_disabled', False):
+            enable_ready = False
         if enable_ready:
             self.drive_startup_requested = True
         module_command = WheelModuleOperationCommand()
@@ -1495,8 +1501,10 @@ class MoboticSupervisor(Node):
         bindings = dict(zip(self.expected_module_names, zip(
             self.expected_steering_joint_names, self.expected_traction_joint_names)))
         for module in modules:
-            if (module.enabled or not module.initialized or not getattr(module, 'startup_complete', False) or
-                    getattr(module, 'startup_pending', False) or getattr(module, 'startup_failed', False)):
+            complete = getattr(module, 'startup_complete', False)
+            failed = getattr(module, 'startup_failed', False)
+            if (module.enabled or getattr(module, 'startup_pending', False) or
+                    complete == failed or (complete and not module.initialized)):
                 return False
             for role, name in zip(('steering', 'traction'), bindings[module.name]):
                 drive = getattr(module, role, None)
@@ -1565,6 +1573,24 @@ class MoboticSupervisor(Node):
         else:
             self.reset_result = 'reset recovery blocked by current system interlocks'
 
+    def _toggle_drives_service(self, request, response):
+        now = self.get_clock().now()
+        modules = self.wheel_status.modules if self.wheel_status is not None else []
+        active = (not getattr(self, 'operator_drives_disabled', False) and
+                  (self.reset_started_at is not None or any(
+                      module.enabled or getattr(module, 'startup_pending', False) for module in modules)))
+        if active:
+            self.operator_drives_disabled = True
+            self.reset_started_at = None
+            self._invalidate_motion_commands(now)
+            self._control()
+            response.success, response.message = True, 'drive disable requested; press B2 again to clear, initialize and enable'
+            return response
+        response = self._reset_errors_service(request, response)
+        if response.success:
+            self.operator_drives_disabled = False
+        return response
+
     def _reset_errors_service(self, request, response):
         del request
         now = self.get_clock().now()
@@ -1576,6 +1602,11 @@ class MoboticSupervisor(Node):
         interlocks_ready, interlock_reason = self._reset_external_gate(now, allow_drive_faults=True)
         if self.reset_started_at is not None or (self.transition_in_progress and not self.transition_timed_out):
             response.success, response.message = False, 'reset/transition already active'
+        elif (self.wheel_status is not None and any(
+                getattr(module, 'startup_pending', False) for module in self.wheel_status.modules)):
+            # Reset publishes disable, which irreversibly cancels an active
+            # physical startup. Let its existing clear/enable retries finish.
+            response.success, response.message = False, 'drive startup in progress; wait for initialization/enable to finish'
         elif not interlocks_ready:
             response.success, response.message = False, interlock_reason
         elif self._reset_observed_motion(now):

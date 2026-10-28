@@ -1,6 +1,7 @@
 """Actual CAN operator methods with the existing ROS-free controller doubles."""
 import ast
 import json
+import inspect
 import math
 from pathlib import Path
 from types import SimpleNamespace
@@ -486,6 +487,36 @@ class RemdeviceControlTest(unittest.TestCase):
         self.assertFalse(self.state().command_active)
         self.pair(); self.pair(speed=255)
         self.assertGreater(self.node.command[0], 0)
+
+    def test_reset_accept_then_reject_use_distinct_rclpy_log_sites(self):
+        sites, failures, logged = {}, [], []
+        def record(level, message):
+            caller = inspect.currentframe().f_back.f_back
+            site = (caller.f_code.co_filename, caller.f_lineno)
+            if site in sites and sites[site] != level:
+                raise ValueError('Logger severity cannot be changed between calls.')
+            sites[site] = level
+            logged.append((level, message))
+        logger = SimpleNamespace(info=lambda msg: record('info', msg),
+            warning=lambda msg: record('warning', msg), error=failures.append)
+        self.node.get_logger = lambda: logger
+        for success, message in ((True, 'accepted'), (False, 'driver startup failed')):
+            future = SimpleNamespace(result=lambda: SimpleNamespace(success=success, message=message))
+            self.node.reset_future = future
+            self.node._reset_done(future)
+        self.assertFalse(failures)
+        self.assertEqual([entry[0] for entry in logged], ['info', 'warning'])
+        self.assertIn('driver startup failed', logged[-1][1])
+
+    def test_b2_disable_does_not_wait_for_neutral_or_receiver_fault_clear(self):
+        self.node.b2_toggle_enabled = True
+        self.node._vehicle_mode_fresh = lambda now: True
+        self.node.vehicle_mode_state = SimpleNamespace(drives_enabled=True, reset_in_progress=False)
+        self.pair(speed=255)
+        self.pair(speed=255, buttons=4)
+        self.assertEqual(len(self.resets), 1)
+        self.assertEqual(self.node.receiver_recovery['stage'], 'supervisor')
+        self.assertEqual(self.node.command, [0.0, 0.0, 0.0])
 
     def test_receiver_recovery_never_sends_nmt_reset_or_sdo_download(self):
         self.begin_receiver_reset(); self.receiver_reply(); self.pair()

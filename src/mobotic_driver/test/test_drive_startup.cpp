@@ -20,6 +20,8 @@ int main()
     require(startup.expired(15, now + std::chrono::seconds(15)), "no-feedback startup times out");
     startup.fail(); startup.finish();
     require(startup.failed() && !startup.complete() && !startup.begin(), "failed startup cannot silently retry");
+    startup.rearmAfterReset();
+    require(startup.begin(now) && startup.active(), "explicit authorized recovery rearms a bounded startup attempt");
     DriveStartup completed;
     completed.begin(now); completed.finish();
     require(completed.complete() && !completed.expired(15, now + std::chrono::seconds(20)), "acquired feedback finishes startup");

@@ -101,6 +101,46 @@ class ResetRecoveryTest(unittest.TestCase):
         for final in self.node.final_command_publisher.messages:
             self.assertTrue(all(m.traction_velocity == 0 and m.steering_profile_velocity == 0 for m in final.modules))
 
+    def test_b2_cannot_cancel_active_physical_startup(self):
+        self.inputs(11, enabled=True, motion=True, fault=0)
+        for module in self.node.wheel_status.modules:
+            module.startup_pending = True
+            module.startup_complete = False
+        response = self.request()
+        self.assertFalse(response.success)
+        self.assertIn('startup in progress', response.message)
+        self.assertIsNone(self.node.reset_started_at)
+
+    def test_toggle_disables_and_requires_new_press_for_recovery(self):
+        self.inputs(11, enabled=True, motion=True, fault=0)
+        response = self.node._toggle_drives_service(None, SimpleNamespace())
+        self.assertTrue(response.success)
+        self.assertTrue(self.node.operator_drives_disabled)
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
+        self.inputs(11.1, enabled=False, motion=False, fault=0)
+        response = self.node._toggle_drives_service(None, SimpleNamespace())
+        self.assertTrue(response.success)
+        self.assertFalse(self.node.operator_drives_disabled)
+        self.assertIsNotNone(self.node.reset_started_at)
+
+    def test_failed_startup_admits_explicit_reset_with_fresh_disabled_states(self):
+        self.inputs(11, enabled=False, motion=False, fault=0)
+        for module in self.node.wheel_status.modules:
+            module.startup_failed = True
+            module.startup_complete = False
+            module.initialized = False
+        self.assertFalse(self.node._enable_gate(self.platform.now)[0])
+        self.assertTrue(self.node._toggle_drives_service(None, SimpleNamespace()).success)
+        self.inputs(11.1, enabled=False, motion=False, fault=0, ack=True)
+        for module in self.node.wheel_status.modules:
+            module.startup_failed = True
+            module.startup_complete = False
+            module.initialized = False
+        self.node._control()
+        operation = self.node.module_command_publisher.messages[-1]
+        self.assertTrue(operation.enable)
+        self.assertEqual(operation.reset_id, self.node.reset_id)
+
     def test_each_native_disabled_state_must_be_known_fresh_and_match_topology(self):
         changes = (
             lambda n: setattr(n.wheel_status.modules[0].steering, 'status_known', False),

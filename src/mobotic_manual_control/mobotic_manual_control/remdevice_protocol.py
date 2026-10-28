@@ -133,9 +133,16 @@ class RemdeviceReceiver:
         if is_extended or is_rtr or cob_id not in relevant:
             return False
         expected = 1 if cob_id == self.heartbeat_id else 8
-        if (type(dlc) is not int or dlc != expected or type(stamp_ns) is not int
-                or stamp_ns <= 0 or not 0 <= now_ns - stamp_ns <= self.timeout_ns):
-            self.invalidate('invalid DLC or acquisition timestamp', now_ns)
+        if type(dlc) is not int or dlc != expected:
+            self.invalidate(f'invalid DLC: expected {expected}, received {dlc}', now_ns)
+            return False
+        if type(stamp_ns) is not int or stamp_ns <= 0:
+            self.invalidate('invalid acquisition timestamp', now_ns)
+            return False
+        if not 0 <= now_ns - stamp_ns <= self.timeout_ns:
+            age_ms = (now_ns - stamp_ns) / 1_000_000
+            self.invalidate(f'CAN acquisition age {age_ms:.1f} ms outside '
+                            f'0..{self.timeout_ns / 1_000_000:.1f} ms', now_ns)
             return False
         try:
             payload = _payload(data, expected)

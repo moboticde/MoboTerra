@@ -59,11 +59,16 @@ class RemdeviceControl(ManualControl):
         self.joy_publisher = self.create_publisher(Joy, 'joy', 10)
         self.selector_publisher = self.create_publisher(Joy, 'operator/scanner_selector', 1)
         self.can_publisher = self.create_publisher(Frame, 'can_tx', 10)
-        self.reset_client = self.create_client(Trigger, 'wheel_modules/clear_errors')
+        self.b2_toggle_enabled = True
+        self.reset_client = self.create_client(Trigger, 'wheel_modules/toggle_drives')
         self.start_service = self.create_service(Trigger, 'operator/start_receiver', self._start_receiver)
         # Best-effort accepts both best-effort and reliable SocketCAN producers.
         self.can_subscription = self.create_subscription(Frame, 'can_rx', self._can_callback,
-            QoSProfile(depth=32, reliability=ReliabilityPolicy.BEST_EFFORT))
+            # TPDO1/2 arrive at 20 Hz each. A 32-frame history can retain
+            # roughly 800 ms of old input after an executor scheduling delay,
+            # exceeding the 250 ms command lifetime. Retain a short history
+            # sufficient for paired PDOs and keep acquisition-age validation.
+            QoSProfile(depth=4, reliability=ReliabilityPolicy.BEST_EFFORT))
         if not self.mapping.verified:
             self.get_logger().warning('PAIL mapping unverified: capture only; motion, mode and reset requests inhibited.')
 
@@ -151,9 +156,22 @@ class RemdeviceControl(ManualControl):
         self.reset_observed_pair = pair
         pressed = self.mapping.button('reset', sample.digital)
         previous, self.last_reset = self.last_reset, pressed
-        if (not pressed or previous is not False or not self._reset_sample_neutral(sample)
+        if (not pressed or previous is not False
                 or self.receiver_recovery is not None
                 or (self.reset_future is not None and not self.reset_future.done())):
+            return
+        if (getattr(self, 'b2_toggle_enabled', False) and self._vehicle_mode_fresh(now)
+                and (getattr(self.vehicle_mode_state, 'drives_enabled', False)
+                     or getattr(self.vehicle_mode_state, 'reset_in_progress', False))):
+            # Disable is always admissible from a fresh physical B2 edge,
+            # including while controls are displaced or a receiver fault is set.
+            if self.reset_client.service_is_ready():
+                self._drop_input(now)
+                self.receiver_recovery = {'stage': 'supervisor'}
+                self.reset_future = self.reset_client.call_async(Trigger.Request())
+                self.reset_future.add_done_callback(self._reset_done)
+            return
+        if not self._reset_sample_neutral(sample):
             return
         self._drop_input(now)
         self.receiver_recovery = {'stage': 'wait_operator', 'started_ns': now.nanoseconds,
@@ -323,8 +341,12 @@ class RemdeviceControl(ManualControl):
             return
         try:
             response = future.result()
-            log = self.get_logger().info if response.success else self.get_logger().warning
-            log('B2 supervisor reset: ' + response.message)
+            # rclpy caches severity per call site. Separate sites are needed
+            # when an accepted request is followed by a rejected request.
+            if response.success:
+                self.get_logger().info('B2 supervisor reset: ' + response.message)
+            else:
+                self.get_logger().warning('B2 supervisor reset: ' + response.message)
         except Exception as error:
             self.get_logger().error('B2 supervisor reset failed: ' + str(error))
         finally:

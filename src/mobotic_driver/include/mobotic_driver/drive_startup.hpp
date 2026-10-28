@@ -1,7 +1,7 @@
 #pragma once
 #include <chrono>
 
-// One supervised startup attempt per driver process. Motion feedback is an
+// One supervised startup attempt per explicit recovery cycle. Motion feedback is an
 // outcome of enable, never a prerequisite for starting this bounded attempt.
 class DriveStartup
 {
@@ -20,6 +20,8 @@ public:
   { return active() && std::chrono::duration<double>(now - started_at_).count() >= timeout; }
   void finish() { if (active()) { complete_ = true; } }
   void fail() { if (started_) { failed_ = true; complete_ = false; } }
+  // Only an explicitly authorized fault-clear transaction may rearm startup.
+  void rearmAfterReset() { if (failed_) { started_ = complete_ = failed_ = false; } }
 private:
   bool started_{false}, complete_{false}, failed_{false};
   Clock::time_point started_at_{};

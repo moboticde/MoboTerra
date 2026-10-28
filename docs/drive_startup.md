@@ -26,8 +26,23 @@ The initial attempt is bounded by `driver.startup_timeout` (15 s, steady clock).
 Missing replies, failed configuration readback, timeout or lost supervisor
 permission cancel pending initialization and request stop/disable, including
 native SDO disable if PDO setup was incomplete. Failure is reported through
-`WheelModuleStatus.startup_failed`; investigate and restart the driver to retry.
-Repeated supervisor requests do not extend the deadline or repeatedly clear errors.
+`WheelModuleStatus.startup_failed`. Native status/fault polling continues after
+failure. An explicit B2 enable press may clear faults using fresh disabled-drive
+status, then authorize a new bounded initialization/enable attempt. Ordinary
+enable requests cannot silently rearm a failed startup.
+Repeated supervisor requests do not extend the deadline. As in the example EC
+driver, reported initialization/enable errors trigger fault-clear retries every
+200 ms while supervisor enable remains granted. Retries stop on permission loss
+or startup failure; explicit B2 recovery remains necessary for latched runtime
+faults. The initial enable clears once on entry before the zero-target sequence.
+
+The commissioned PAIL B2 uses `wheel_modules/toggle_drives` (Trigger): while
+enabled it requests disable, latched until the next press; while disabled it
+requests fault clearing followed by initialization and zero-target enable.
+Enable requires neutral fresh controls and the normal external interlocks.
+Disable does not require neutral when fresh vehicle state confirms enabled
+drives. The public `wheel_modules/clear_errors` service remains a separate reset
+transaction and does not toggle the operator disable latch.
 `startup_pending` never grants motion; `startup_complete` identifies acquisition
 of valid enabled-drive feedback. Kinematics monitoring gets a short initial
 feedback grace after completion; normal stale-feedback checks then apply.

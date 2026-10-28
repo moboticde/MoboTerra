@@ -51,7 +51,8 @@ int main(int argc, char** argv)
       const bool traction = node == 4 || node == 8;
       controllers.emplace(node, VirtualDriveProtocol(node, traction));
     }
-    controllers.at(4).setFault(1, 0x2310); // EC startup clears initial errors once.
+    controllers.at(4).setFault(1, 0x2310);
+    unsigned startup_reset_attempts = 0;
     std::vector<Frame> transmitted;
     bool drop_replies = false, drop_motion = false;
     auto tx = bus->create_subscription<Frame>("can_tx", rclcpp::QoS(rclcpp::KeepAll()), [&](const Frame& frame) {
@@ -66,6 +67,12 @@ int main(int argc, char** argv)
         if (motion_read && (!controller.enabled() || drop_motion)) { continue; }
         for (auto reply : controller.handle(frame))
         {
+          // A transient startup fault persists beyond both entry clears.
+          // Recovery requires the EC-style periodic initialization retry.
+          if (node == 4 && frame.id == 0x604 && frame.data[0] != READ_FROM_DEVICE &&
+              index == EC_CONTROLWORD && shortFromFrame(frame, 4) == 0x0080 &&
+              ++startup_reset_attempts < 4)
+          { controller.setFault(1, 0x2310); }
           if (reply.id < 0x580 && (!controller.enabled() || drop_motion)) { continue; }
           if (sdo && frame.data[0] == READ_FROM_DEVICE && (index == 0x6064 || index == 0x3762))
           { intToFrame(reply, 4, index == 0x6064 ? 123456 : 2048); }
@@ -154,6 +161,7 @@ int main(int argc, char** argv)
       { std::cerr << "  controller " << node << ": enabled=" << controller.enabled() << '\n'; }
     }
     require(startup_ready, "supervised initialization/enable must acquire the first real motion feedback");
+    require(startup_reset_attempts >= 4, "startup retries persistent errors beyond the entry fault clears");
     for (std::size_t i = 0; i < joints.name.size(); ++i)
     {
       const bool traction = joints.name[i].find("traction") != std::string::npos;
@@ -180,6 +188,7 @@ int main(int argc, char** argv)
     enable = true;
     require(spin_until([&] { return all([](const auto& m) { return m.enabled && m.feedback_fresh; }); }, 8), "acknowledged B2 reset permits zero-target re-enable while reset remains active");
     reset_id = 0; resetting = false;
+    enable = false;
     controllers.at(4).setFault(1, 0x2310);
     require(spin_until([&] { return latest.modules.size() == 2 && latest.modules.front().error_code != 0; }, 4), "runtime drive fault must be observed without automatic reset");
     enable = false;
@@ -221,6 +230,11 @@ int main(int argc, char** argv)
     require(std::none_of(transmitted.begin() + failed_transmissions, transmitted.end(), [](const auto& frame) {
       return frame.id == 0x204 || frame.id == 0x208 || frame.id == 0x80;
     }), "failed physical startup must not keep publishing unverified RPDO/SYNC cycles");
+    drop_replies = false;
+    require(spin_until([&] { return all([](const auto& m) {
+      return m.startup_failed && !m.enabled && m.steering.status_known && m.traction.status_known &&
+             m.steering.fault_known && m.traction.fault_known;
+    }); }, 4), "failed startup must continue read-only native status and fault polling");
     executor.remove_node(driver); driver.reset();
     // Successful configuration/enable without motion samples is bounded too.
     drop_replies = false; drop_motion = true;
@@ -238,6 +252,18 @@ int main(int argc, char** argv)
     require(spin_until([&] { return all([](const auto& m) { return m.startup_pending; }); }, 2), "startup begins under supervisor grant");
     enable = false;
     require(spin_until([&] { return all([](const auto& m) { return m.startup_failed; }); }, 2), "readiness loss cancels startup");
+    drop_replies = false; drop_motion = false;
+    require(spin_until([&] { return all([](const auto& m) {
+      return !m.enabled && m.steering.status_known && m.traction.status_known;
+    }); }, 4), "cancelled startup retains fresh disabled-state observations");
+    resetting = true; reset_id = 3;
+    require(spin_until([&] { return all([](const auto& m) {
+      return m.reset_id == 3 && m.reset_acknowledged;
+    }); }, 5), "explicit B2 recovery clears errors after failed startup");
+    enable = true;
+    require(spin_until([&] { return all([](const auto& m) {
+      return m.startup_complete && !m.startup_failed && m.enabled && m.feedback_fresh;
+    }); }, 12), "B2 recovery reinitializes and enables after failed startup");
     executor.remove_node(driver); driver.reset(); executor.remove_node(bus);
     std::cout << "PASS: supervised EC startup, expired-feedback B2 recovery, reset motion veto, lease loss, timeout and cancellation\n";
     rclcpp::shutdown();

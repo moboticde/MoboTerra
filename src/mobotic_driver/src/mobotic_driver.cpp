@@ -689,7 +689,12 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
     const std::array<FeedbackFreshness::Field, 4> fields{FeedbackFreshness::STATUS, FeedbackFreshness::ERROR_REGISTER, FeedbackFreshness::CURRENT, FeedbackFreshness::ERROR_CODE};
     std::array<uint64_t, 4> generations{};
     for (std::size_t i = 0; i < fields.size(); ++i) { generations[i] = drive.feedbackFreshness().generation(fields[i]); }
-    const bool configuring = !configuration_[name].ready();
+    // Failed configuration still permits correlated read-only SDO updates,
+    // including their acquisition stamps used by explicit reset admission.
+    // Unverified PDO layouts must not supply motion feedback.
+    if (!virtual_position_source_ && configuration_[name].failed() && !is_sdo) { continue; }
+    const bool configuring = !configuration_[name].ready() &&
+        (virtual_position_source_ || !configuration_[name].failed());
     configuration_[name].receive(frame);
     // Accept our PDO layout only after every configuration write/readback for
     // this node succeeded. Old PDOs cannot satisfy the motion interlock.
@@ -699,7 +704,8 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
       { drive.update(frame, sample_time); pumpSdo(node_id); }
       continue;
     }
-    drive.preserveControllerConfiguration(!virtual_position_source_ && !startup_.started());
+    drive.preserveControllerConfiguration(!virtual_position_source_ &&
+        (!startup_.started() || configuration_[name].failed()));
     const auto frames_to_send = drive.update(frame, sample_time);
     if (frame.id == 0x700 + node_id && frame.dlc == 1 && frame.data[0] == 0 && configuration_[name].ready())
     {
@@ -908,7 +914,24 @@ void MoboticDriver::feedbackTimerCallback()
   for (auto& [name, drive] : drives_)
   {
     if (!virtual_position_source_ && configuration_[name].failed())
-    { pumpSdo(drive.rawCanNodeID()); continue; }
+    {
+      // Failed initialization stops configuration/motion, not observation.
+      // Keep native disabled-state and fault evidence fresh for diagnostics
+      // and supervised recovery admission.
+      if (shouldPoll(last_status_poll_, name, std::min(0.1, status_feedback_timeout_ / 3.0)))
+      {
+        publishCanFrame(stampFrame(drive.readDeviceStateRequest(), "can", now));
+        publishCanFrame(stampFrame(drive.readDeviceModeRequest(), "can", now));
+      }
+      if (shouldPoll(last_error_poll_, name, diagnostic_sdo_period_))
+      {
+        publishCanFrame(stampFrame(drive.readErrorRegisterRequest(), "can", now));
+        if (drive.isTractionController())
+        { publishCanFrame(stampFrame(drive.readErrorCodeRequest(), "can", now)); }
+      }
+      pumpSdo(drive.rawCanNodeID());
+      continue;
+    }
     if (!configuration_[name].ready())
     {
       if (virtual_position_source_ || (startup_.active() && management_lease_.permitsEnable(supervisor_timeout_)))
@@ -961,9 +984,15 @@ void MoboticDriver::feedbackTimerCallback()
         RCLCPP_INFO_STREAM(this->get_logger(), "[driver] Waiting for drive " << name << " to initialize.");
         if (drive.hasError())
         {
-          RCLCPP_WARN_STREAM(this->get_logger(), "[driver] Waiting for explicit reset of error " << driveErrorText(drive)
+          RCLCPP_WARN_STREAM(this->get_logger(), "[driver] Clearing error " << driveErrorText(drive)
                                                                              << " on drive " << name << ".");
-          // The initial reset was sent once; retries never clear faults.
+          // EC retries are allowed only while the supervisor grants enable.
+          // A disable/reset transaction must never cause background retries.
+          if (management_lease_.permitsEnable(supervisor_timeout_) &&
+              (virtual_position_source_ || startup_.active() || enable_all_drives_requested_))
+          {
+            publishCanFrame(stampFrame(drive.clearErrorRequest(CLEAR), "can", this->now()));
+          }
         }
         publishCanFrame(stampFrame(drive.readErrorRegisterRequest(), "can", this->now()));
         if (drive.isTractionController())
@@ -990,7 +1019,10 @@ void MoboticDriver::feedbackTimerCallback()
         }
         if (drive.hasError())
         {
-          // Enabling is not an error acknowledgement.
+          if (management_lease_.permitsEnable(supervisor_timeout_))
+          {
+            publishCanFrame(stampFrame(drive.clearErrorRequest(CLEAR), "can", this->now()));
+          }
         }
         if (virtual_position_source_ && drive.currentMode() != drive.targetMode())
         {
@@ -1257,8 +1289,8 @@ void MoboticDriver::wheelModuleCommandCallback(const mobotic_interfaces::msg::Wh
   {
     // Missing motion telemetry is not standstill. A separately authorized
     // reset may clear faults with every configured drive freshly disabled.
-    if (!reset_authorized || (!virtual_position_source_ && !startup_.complete()) ||
-        !std::all_of(configuration_.begin(), configuration_.end(), [](const auto& item) { return item.second.ready(); }))
+    if (!reset_authorized || (!virtual_position_source_ && !startup_.complete() && !startup_.failed()) ||
+        (!startup_.failed() && !std::all_of(configuration_.begin(), configuration_.end(), [](const auto& item) { return item.second.ready(); })))
     { sendStopToAllDrives(); disableAllDrives(); return; }
     const auto steady_now = FeedbackFreshness::Clock::now();
     std::vector<ResetDriveObservation> observations;
@@ -1287,6 +1319,7 @@ void MoboticDriver::wheelModuleCommandCallback(const mobotic_interfaces::msg::Wh
     clearErrorsOnAllDrives();
   }
 
+  if (msg.enable && reset_reenable && startup_.failed()) { startup_.rearmAfterReset(); }
   if (msg.enable && !virtual_position_source_ && !startup_.started()) { initializeAllDrives(); }
   if (msg.enable && !startup_.failed() && std::all_of(configuration_.begin(), configuration_.end(), [](const auto& item) { return item.second.ready(); }))
   {
@@ -1513,6 +1546,13 @@ void MoboticDriver::enableAllDrives()
   enable_all_drives_requested_ = true;
   last_initialize_attempt_.clear();
   last_enable_attempt_.clear();
+
+  // Match EC: clear on entry, then retry reported faults at the existing
+  // 200 ms initialization/enable cadence while supervisor enable is granted.
+  if (!virtual_position_source_)
+  {
+    clearErrorsOnAllDrives();
+  }
 
   for (auto& [name, drive] : drives_)
   {
