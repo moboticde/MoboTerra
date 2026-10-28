@@ -230,13 +230,18 @@ def validate_platform(platform):
         if len(set(ids)) != len(ids) or len(set(joints)) != len(joints):
             raise ConfigurationError('CAN IDs and joint names must be unique')
         operator = platform.get('operator', {'source': 'usb'})
-        _record(operator, ('source', 'mapping', 'usb_driver', 'usb_mapping_verified'), 'operator', required=('source',))
+        _record(operator, ('source', 'mapping', 'usb_driver', 'usb_mapping_verified',
+                           'require_enable_interlock', 'require_neutral_rearm'),
+                'operator', required=('source',))
         if operator.get('source') not in ('usb', 'remdevice'):
             raise ConfigurationError('operator.source must be usb or remdevice')
         if operator.get('usb_driver', 'game_controller_node') not in ('joy_node', 'game_controller_node'):
             raise ConfigurationError('operator.usb_driver must be joy_node or game_controller_node')
         if 'usb_mapping_verified' in operator and type(operator['usb_mapping_verified']) is not bool:
             raise ConfigurationError('operator.usb_mapping_verified must be boolean')
+        for key in ('require_enable_interlock', 'require_neutral_rearm'):
+            if key in operator and type(operator[key]) is not bool:
+                raise ConfigurationError(f'operator.{key} must be boolean')
         if operator['source'] == 'remdevice':
             try:
                 RemdeviceMapping(operator.get('mapping', {}))
@@ -417,10 +422,13 @@ class Configuration:
         supervisor['safety_source'] = p['safety'].get('source', 'flexisoft')
         supervisor['wheel_radius'] = float(p['geometry']['wheel_radius'])
         operator = p.get('operator', {'source': 'usb'})
-        supervisor['require_operator_interlock'] = operator['source'] == 'remdevice'
+        supervisor['require_operator_interlock'] = operator.get(
+            'require_enable_interlock', operator['source'] == 'remdevice')
         supervisor['operator_scanner_override_enabled'] = bool(
             operator.get('mapping', {}).get('buttons', {}).get('scanner_override'))
-        manual = {'frame_id': frame, **vehicle_limits}
+        manual = {'frame_id': frame,
+                  'require_neutral_rearm': operator.get('require_neutral_rearm', True),
+                  **vehicle_limits}
         if operator['source'] == 'usb':
             manual['input_mapping_verified'] = operator.get(
                 'usb_mapping_verified', operator.get('usb_driver', 'game_controller_node') == 'game_controller_node')

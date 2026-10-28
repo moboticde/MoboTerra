@@ -72,6 +72,11 @@ modules:
 usb_joystick: {device_id: 0, autorepeat_rate: 20.0, deadzone: 0.08, sticky_buttons: false}
 operator:
   source: remdevice
+  # Permit zero-target drive initialization while the PAIL is unavailable.
+  # STOP/E-stop, STO, scanner, battery and drive gates remain mandatory.
+  require_enable_interlock: false
+  # Do not require a centred stick after reconnect or authority changes.
+  require_neutral_rearm: false
   # Use source: usb for the PAIL's generic USB HID connection.
   usb_driver: joy_node
   usb_mapping_verified: false
@@ -89,6 +94,8 @@ operator:
       boost: {signal: SP3, active_high: true}  # B1
       reset: {signal: SP4, active_high: true}  # B2
       deadman: null  # No physical hold-to-drive button on this PAIL; neutral rearm only.
+      # RP2: high = Safety Disabled (manual, scanner exception at 0.3 m/s).
+      scanner_override: {signal: D5, active_high: true}
 scanners:
   host_ip: '10.60.20.186'
   units:

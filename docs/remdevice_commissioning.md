@@ -115,6 +115,13 @@ connection. Set `operator.source: remdevice` for CAN or `operator.source: usb`
 for USB in the platform profile, then restart the launch. Exactly one provider
 publishes the operator command/state; there is no automatic live failover.
 
+The strict defaults require a fresh physical REMdevice interlock before drive
+initialization and a neutral-rearm sequence before manual motion. A physical
+profile may explicitly set `require_enable_interlock: false` and
+`require_neutral_rearm: false` when its operating procedure permits those
+relaxations. Neither setting bypasses a reported PAIL STOP/E-stop, hardware
+STO, scanner, battery, or drive-fault gate.
+
 The profile retains both transport settings:
 
 ```yaml
@@ -379,14 +386,16 @@ The operator publishes this selector as button index 10 on
 `operator/scanner_selector` (`sensor_msgs/Joy`, 11 buttons, no motion axes),
 independently of motion-pair validity and rearming. It also remains visible in the
 ordinary normalized `joy` message. The dedicated sample preserves the physical
-digital PDO acquisition timestamp; timer republication cannot refresh it. Fresh
-REMdevice `operator/state` with known, released STOP is also required. Receiver
-EMCYs inhibit motion commands without fabricating radio loss or an RP2 switch
-change. STOP, stale/missing physical status, battery readiness, drive feedback
-and independent hardwired STO remain in force. Safety Disabled exempts scanner fields only in MANUAL; translation and
-each wheel's surface speed are capped at 0.3 m/s. Either selector edge clears
-buffered motion. Missing selector/operator state inhibits motion. Safety Enabled
-restores the ordinary red/unknown scanner stop and yellow speed policy. This
+digital PDO acquisition timestamp; timer republication cannot refresh it. A
+fresh, released STOP and healthy REMdevice state are required to select Safety
+Disabled. Receiver EMCYs inhibit motion commands without fabricating radio loss
+or an RP2 switch change. STOP, battery readiness, drive feedback and independent
+hardwired STO remain in force. Safety Disabled exempts scanner fields only in
+MANUAL; translation and each wheel's surface speed are capped at 0.3 m/s. Either
+selector edge clears buffered motion. Safety Enabled restores the ordinary
+red/unknown scanner stop and yellow speed policy. Missing or malformed selector
+state is treated as Safety Enabled, so the scanner gate remains mandatory rather
+than granting the scanner exception. This
 software selector does not establish or change the physical Siemens safety wiring.
 
 ## Receiver EEPROM and CAN-ID fault recovery

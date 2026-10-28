@@ -43,14 +43,20 @@ class OperatorScannerOverrideTest(unittest.TestCase):
         self.n.scanner_states['front_left'] = (None, None)
         self.assertFalse(self.n._safety_gate(self.f.now)[0])
 
-    def test_stop_link_loss_unknown_estop_and_stale_selector_never_exempt_scanners(self):
+    def test_unavailable_selector_requires_scanners_instead_of_exempting_them(self):
         for field, value in (('connected', False), ('estop_pressed', True), ('estop_state_known', False)):
             original = getattr(self.n.manual_state, field)
             setattr(self.n.manual_state, field, value)
+            self.assertTrue(self.n._safety_gate(self.f.now)[0])
+            self.n.scanner_states['front_left'] = (None, None)
             self.assertFalse(self.n._safety_gate(self.f.now)[0])
+            self.n.scanner_states['front_left'] = (SimpleNamespace(
+                header=SimpleNamespace(stamp=self.f.now.to_msg()), scanner_id='front_left',
+                communication_ok=True, protective_state_known=True, warning_state_known=True,
+                protective_field_clear=True, warning_field_clear=True), self.f.now)
             setattr(self.n.manual_state, field, original)
         self.n.operator_selector.header.stamp = h.Time(9).to_msg()
-        self.assertFalse(self.n._safety_gate(self.f.now)[0])
+        self.assertTrue(self.n._safety_gate(self.f.now)[0])
 
     def test_autonomy_cannot_use_scanner_exemption(self):
         for mode in (h.MODES.AUTO_VELOCITY, h.MODES.AUTO_DIRECT):
@@ -99,7 +105,13 @@ class OperatorScannerOverrideTest(unittest.TestCase):
     def test_malformed_selector_does_not_exempt_scanners(self):
         for buttons in ([0]*10, [0]*10+[2], []):
             self.n.operator_selector.buttons = buttons
+            self.assertTrue(self.n._safety_gate(self.f.now)[0])
+            self.n.scanner_states['front_left'] = (None, None)
             self.assertFalse(self.n._safety_gate(self.f.now)[0])
+            self.n.scanner_states['front_left'] = (SimpleNamespace(
+                header=SimpleNamespace(stamp=self.f.now.to_msg()), scanner_id='front_left',
+                communication_ok=True, protective_state_known=True, warning_state_known=True,
+                protective_field_clear=True, warning_field_clear=True), self.f.now)
 
 
 if __name__ == '__main__':

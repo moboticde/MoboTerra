@@ -28,6 +28,7 @@ class ConfigurationTest(unittest.TestCase):
             {'verified': False, 'node_id': 9, 'axes': {}, 'buttons': {}}, sort_keys=True)
         baseline['supervisor']['require_operator_interlock'] = True
         baseline['supervisor']['operator_scanner_override_enabled'] = False
+        baseline['manual']['require_neutral_rearm'] = True
         baseline['supervisor']['safety_source'] = 'flexisoft'
         baseline['supervisor'].pop('warning_speed_scale')
         baseline['supervisor']['warning_speed_limit'] = 0.3
@@ -122,7 +123,8 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual([mapping['axes'][role]['channel'] for role in ('speed', 'steer', 'crab')], [3, 2, 4])
         self.assertEqual(mapping['buttons']['boost']['signal'], 'SP3')
         self.assertEqual(mapping['buttons']['reset']['signal'], 'SP4')
-        self.assertTrue(cfg.parameters('supervisor')['require_operator_interlock'])
+        self.assertFalse(cfg.parameters('supervisor')['require_operator_interlock'])
+        self.assertFalse(cfg.parameters('manual')['require_neutral_rearm'])
 
     def test_invalid_runtime_timing_and_speed_scale_fail_before_launch(self):
         for component, override in (
@@ -395,7 +397,8 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(joystick.kwargs['executable'], 'joy_node')
 
     def test_usb_driver_and_verification_types_are_validated(self):
-        for change in (dict(usb_driver='unknown'), dict(usb_mapping_verified='true')):
+        for change in (dict(usb_driver='unknown'), dict(usb_mapping_verified='true'),
+                       dict(require_enable_interlock='false'), dict(require_neutral_rearm=1)):
             p = copy.deepcopy(self.cfg.platform)
             p['operator'].update(change)
             with self.assertRaises(ConfigurationError):

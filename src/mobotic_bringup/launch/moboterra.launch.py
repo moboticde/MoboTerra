@@ -149,7 +149,15 @@ def _launch_setup(context):
         executable='mobotic_driver',
         name='mobotic_driver',
         namespace=robot_name,
-        parameters=[driver_config, {'virtual_position_source': True}],
+        # All virtual CAN participants share one process scheduler during the
+        # installation smoke check.  Its management messages remain subject
+        # to the supervisor lease, but may wait up to that lease period in a
+        # busy build container.  Keep the tighter physical watchdog in
+        # driver_config unchanged for hardware deployments.
+        parameters=[driver_config, {
+            'virtual_position_source': True,
+            'watchdog_timeout': driver_config['supervisor_timeout'],
+        }],
         output='screen',
         respawn=True,
     )

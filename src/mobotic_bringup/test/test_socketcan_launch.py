@@ -292,12 +292,15 @@ class SocketCanLaunchTest(unittest.TestCase):
             self.assertFalse(condition.perform({'stack_type': 'hardware'}))
             self.assertTrue(condition.perform({'stack_type': 'virtual'}))
 
-    def test_virtual_driver_keeps_the_production_pdo_configuration(self):
+    def test_virtual_driver_keeps_the_production_pdo_configuration_and_lease_timeout(self):
         nodes = [action for action in namespace['generate_launch_description']().args[0]
                  if action.kind == 'Node' and action.kwargs.get('executable') == 'mobotic_driver']
         self.assertEqual(len(nodes), 2)
         self.assertEqual(nodes[0].kwargs['parameters'][0], nodes[1].kwargs['parameters'][0])
-        self.assertEqual(nodes[1].kwargs['parameters'][1], {'virtual_position_source': True})
+        self.assertEqual(nodes[1].kwargs['parameters'][1], {
+            'virtual_position_source': True,
+            'watchdog_timeout': 0.3,
+        })
 
     def test_standalone_virtual_launch_has_explicit_roles_and_reversed_can_topics(self):
         source = SOURCE.parents[2] / 'mobotic_driver' / 'launch' / 'mobotic_drive_virtual.launch.py'

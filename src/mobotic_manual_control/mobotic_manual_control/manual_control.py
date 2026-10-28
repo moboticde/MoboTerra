@@ -38,6 +38,7 @@ class ManualControl(Node):
         self.declare_parameter('joystick_timeout', 0.25)
         self.declare_parameter('publish_period', 0.02)
         self.declare_parameter('frame_id', 'base_link')
+        self.declare_parameter('require_neutral_rearm', True)
 
         self.axis_speed = int(self.get_parameter('axis_speed').value)
         self.axis_steer = int(self.get_parameter('axis_steer').value)
@@ -63,6 +64,7 @@ class ManualControl(Node):
         self.joystick_timeout = float(self.get_parameter('joystick_timeout').value)
         self.publish_period = float(self.get_parameter('publish_period').value)
         self.frame_id = str(self.get_parameter('frame_id').value)
+        self.require_neutral_rearm = bool(self.get_parameter('require_neutral_rearm').value)
 
         self._validate_parameters()
 
@@ -148,7 +150,8 @@ class ManualControl(Node):
 
     def _manual_enabled(self):
         return (getattr(self, 'input_mapping_verified', True)
-                and getattr(self, 'rearm_phase', 'armed') == 'armed'
+                and (not getattr(self, 'require_neutral_rearm', True)
+                     or getattr(self, 'rearm_phase', 'armed') == 'armed')
                 and (self.button_deadman < 0 or self.deadman_pressed))
 
     def _joystick_connected(self, now):
@@ -290,13 +293,16 @@ class ManualControl(Node):
         self.deadman_pressed = self.button_deadman >= 0 and bool(msg.buttons[self.button_deadman])
         self.turbo_active = any(msg.buttons[index] for index in self.buttons_boost)
         self.controls_neutral = all(abs(msg.axes[i]) <= 0.08 for i in (self.axis_speed, self.axis_steer, self.axis_crab))
-        phase = getattr(self, 'rearm_phase', 'neutral')
-        if phase == 'neutral' and self.controls_neutral:
-            self.rearm_phase = 'armed' if self.button_deadman < 0 else 'release'
-        elif phase == 'release' and self.controls_neutral and not self.deadman_pressed:
-            self.rearm_phase = 'press'
-        elif phase == 'press' and self.controls_neutral and self.deadman_pressed:
+        if not getattr(self, 'require_neutral_rearm', True):
             self.rearm_phase = 'armed'
+        else:
+            phase = getattr(self, 'rearm_phase', 'neutral')
+            if phase == 'neutral' and self.controls_neutral:
+                self.rearm_phase = 'armed' if self.button_deadman < 0 else 'release'
+            elif phase == 'release' and self.controls_neutral and not self.deadman_pressed:
+                self.rearm_phase = 'press'
+            elif phase == 'press' and self.controls_neutral and self.deadman_pressed:
+                self.rearm_phase = 'armed'
 
         if not self._manual_enabled():
             self.command = [0.0, 0.0, 0.0]

@@ -550,12 +550,13 @@ class MoboticSupervisor(Node):
     def _scanner_gate(self, now):
         if getattr(self, 'operator_scanner_override_enabled', False):
             selector = self._operator_selector_value(now)
-            if selector is None:
-                return False, 'RP2 selector or physical operator state unavailable'
-            if selector:
+            if selector is True:
                 if self.selected_mode != VehicleModeState.MANUAL:
                     return False, 'RP2 Safety Disabled permits reduced-speed MANUAL only'
                 return True, 'RP2 Safety Disabled; manual wheel speed limited to 0.3 m/s'
+            # Safety Enabled, and an unavailable selector, both retain the
+            # scanner gate. An unknown selector must never be treated as the
+            # scanner-bypassing Safety Disabled position.
         for name, (state, received) in self.scanner_states.items():
             if (not self._message_fresh(state, received, self.safety_timeout, now)
                     or not state.communication_ok or not state.protective_state_known

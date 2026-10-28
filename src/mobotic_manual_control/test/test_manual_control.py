@@ -109,6 +109,7 @@ class ManualControlTest(unittest.TestCase):
         node.joystick_timeout = 0.25
         node.publish_period = 0.02
         node.frame_id = 'base_link'
+        node.require_neutral_rearm = True
         node.last_joy_time = None
         node.last_update_time = self.now
         node.deadman_pressed = False
@@ -200,6 +201,15 @@ class ManualControlTest(unittest.TestCase):
             self.node._publish()
             self.assertAlmostEqual(self.output()[0], expected)
             self.assertTrue(self.node.state_publisher.messages[-1].command_active)
+
+    def test_relaxed_rearm_accepts_motion_without_a_neutral_sample(self):
+        self.node.require_neutral_rearm = False
+        self.node._joy_callback(self.joy(moving=True))
+        self.now = Time(10.02)
+        self.node._joy_callback(self.joy(moving=True))
+        self.node._publish()
+        self.assertGreater(self.output()[0], 0.0)
+        self.assertTrue(self.node.state_publisher.messages[-1].command_active)
 
     def test_invalid_layout_clears_flags_and_acceleration_state(self):
         self.seed_motion()
