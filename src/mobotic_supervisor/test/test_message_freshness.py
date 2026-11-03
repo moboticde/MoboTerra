@@ -19,7 +19,7 @@ class MessageFreshnessTest(unittest.TestCase):
     def delayed_command(self, mode):
         self.node.selected_mode = mode
         stamp = harness.Time(9.76).to_msg()  # 240 ms old at receipt.
-        if mode == harness.MODES.AUTO_DIRECT:
+        if mode == harness.MODES.KINEMATICOFF:
             msg = self.platform.joints(stamp)
             self.node._autonomy_joint_callback(msg)
             self.assertIs(self.node.autonomy_joint_command, msg)
@@ -36,9 +36,9 @@ class MessageFreshnessTest(unittest.TestCase):
     def test_original_command_stamp_expires_before_receipt_timeout(self):
         for mode, traction_mode in (
             (harness.MODES.MANUAL, 'velocity'),
-            (harness.MODES.AUTO_VELOCITY, 'velocity'),
-            (harness.MODES.AUTO_DIRECT, 'velocity'),
-            (harness.MODES.AUTO_DIRECT, 'current'),
+            (harness.MODES.AUTONOMOUS, 'velocity'),
+            (harness.MODES.KINEMATICOFF, 'velocity'),
+            (harness.MODES.KINEMATICOFF, 'current'),
         ):
             with self.subTest(mode=mode, traction_mode=traction_mode):
                 self.setUp()
@@ -48,7 +48,7 @@ class MessageFreshnessTest(unittest.TestCase):
                 self.platform.advance(0.02)
                 self.node._control()
                 self.assertFalse(self.node._source_gate(self.platform.platform.now)[0])
-                if mode == harness.MODES.AUTO_DIRECT:
+                if mode == harness.MODES.KINEMATICOFF:
                     stop = self.node.direct_command_publisher.messages[-1]
                     self.assertEqual(stop.velocity, [0.0] * 4)
                     self.assertEqual(stop.effort, [])
@@ -105,7 +105,7 @@ class MessageFreshnessTest(unittest.TestCase):
         self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
 
     def test_direct_joint_feedback_stamp_expiry_clears_motion(self):
-        self.node.selected_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.KINEMATICOFF
         delayed = copy.deepcopy(self.node.joint_state)
         delayed.header.stamp = harness.Time(9.71).to_msg()
         self.node._joint_state_callback(delayed)
@@ -138,7 +138,7 @@ class MessageFreshnessTest(unittest.TestCase):
         self.assertFalse(self.node._message_fresh(message, None, 0.25, now))
 
     def test_refreshing_receipt_cannot_keep_replayed_command_alive(self):
-        old = self.delayed_command(harness.MODES.AUTO_VELOCITY)
+        old = self.delayed_command(harness.MODES.AUTONOMOUS)
         self.platform.advance(0.02)
         self.node.autonomy_command_received = self.platform.platform.now
         self.node._autonomy_command_callback(old)  # Expired original is rejected.

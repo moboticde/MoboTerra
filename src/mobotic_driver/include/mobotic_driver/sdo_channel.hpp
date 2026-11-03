@@ -99,6 +99,18 @@ public:
   }
   void clear() { queue_.clear(); pending_.reset(); last_was_stop_ = false; }
 
+  bool faultResetPending() const
+  {
+    const auto reset = [](const Entry& entry) {
+      const auto& frame = entry.frame;
+      if (frame.data[0] == READ_FROM_DEVICE || frame.data[3] != 0) { return false; }
+      const unsigned index = frame.data[1] | (unsigned(frame.data[2]) << 8);
+      return (index == EC_CONTROLWORD && (static_cast<unsigned short>(shortFromFrame(frame, 4)) & 0x0080)) ||
+          (index == MICONTROL_CLEAR_ERROR_STATUS && shortFromFrame(frame, 4) == 1);
+    };
+    return (pending_ && reset(*pending_)) || std::any_of(queue_.begin(), queue_.end(), reset);
+  }
+
 private:
   static bool disableCommand(const can_msgs::msg::Frame& frame)
   {

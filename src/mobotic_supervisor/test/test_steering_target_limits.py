@@ -94,7 +94,7 @@ class SteeringTargetLimitsTest(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.setUp()
                 node = self.node
-                node.selected_mode = harness.MODES.AUTO_DIRECT
+                node.selected_mode = harness.MODES.KINEMATICOFF
                 node.direct_traction_control_mode = mode
                 del node._source_gate  # Use the real selected-source gate.
                 good = self.command()

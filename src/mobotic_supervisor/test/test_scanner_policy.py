@@ -15,7 +15,7 @@ class ScannerPolicyTest(unittest.TestCase):
         self.platform = self.fixture.fixture
         self.node = self.fixture.node
         self.node.safety_source = 'hardwired_sto'
-        self.node.selected_mode = harness.MODES.AUTO_VELOCITY
+        self.node.selected_mode = harness.MODES.AUTONOMOUS
         self.node.motion_inputs_ready = True
         del self.node._source_gate
         self.node.direct_traction_control_mode = 'velocity'
@@ -42,11 +42,11 @@ class ScannerPolicyTest(unittest.TestCase):
         self.node._publish_velocity(source, self.platform.now)
         return self.node.cmd_vel_publisher.messages[-1].twist
 
-    def test_yellow_ramps_to_absolute_point_three_instead_of_percentage(self):
+    def test_yellow_caps_previous_fast_command_at_absolute_point_three(self):
         self.node.last_output = [1.0, 0.0, 0.0]
         self.field(yellow=True)
         source = self.command()
-        self.assertAlmostEqual(self.publish(source).linear.x, .9495)
+        self.assertAlmostEqual(self.publish(source).linear.x, .3)
         for _ in range(20):
             out = self.publish(source)
         self.assertAlmostEqual(out.linear.x, .3)
@@ -113,6 +113,8 @@ class ScannerPolicyTest(unittest.TestCase):
         self.assertTrue(self.node._safety_gate(self.platform.now)[0])
         self.assertTrue(self.node._warning_active())
         self.field()
+        self.assertTrue(self.node._warning_active())  # FlexiSoft override still caps speed.
+        self.node.safety_state.safety_override_active = False
         self.assertFalse(self.node._warning_active())
 
     def test_missing_invalid_or_stale_either_scanner_inhibits_motion(self):
@@ -173,9 +175,9 @@ class ScannerPolicyTest(unittest.TestCase):
         self.assertIn('red', reason)
         self.assertTrue(all(m.traction_velocity == 0 for m in self.node.final_command_publisher.messages[-1].modules))
 
-    def test_direct_mode_yellow_ramps_wheel_peripheral_speed_then_clear_restores(self):
+    def test_direct_mode_yellow_caps_previous_fast_wheels_then_clear_restores(self):
         node = self.node
-        node.selected_mode = harness.MODES.AUTO_DIRECT
+        node.selected_mode = harness.MODES.KINEMATICOFF
         self.field('rear_right', yellow=True)
         node.last_final = {'front': 3.0, 'rear': -3.0}
         source = self.fixture.joints()
@@ -186,9 +188,7 @@ class ScannerPolicyTest(unittest.TestCase):
             node._publish_direct(source, self.platform.now)
             if step == 0:
                 speed = node.final_command_publisher.messages[-1].modules[0].traction_velocity * node.wheel_radius
-                self.assertGreater(speed, .3)
-                self.assertLess(speed, 3 * node.wheel_radius)
-                self.assertAlmostEqual(3 * node.wheel_radius - speed, .0505)
+                self.assertAlmostEqual(speed, .3)
         final = node.final_command_publisher.messages[-1]
         self.assertTrue(all(abs(m.traction_velocity * node.wheel_radius) <= .3 + 1e-12 for m in final.modules))
         self.assertAlmostEqual(final.modules[0].traction_velocity * node.wheel_radius, .3)
@@ -198,7 +198,7 @@ class ScannerPolicyTest(unittest.TestCase):
         self.assertEqual([m.traction_velocity for m in node.final_command_publisher.messages[-1].modules], [3, -3])
 
     def test_direct_mode_red_stops_without_waiting_for_a_control_tick(self):
-        self.node.selected_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.KINEMATICOFF
         self.field(red=True)
         self.assertTrue(all(m.traction_velocity == 0 for m in self.node.final_command_publisher.messages[-1].modules))
 

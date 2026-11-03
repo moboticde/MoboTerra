@@ -35,9 +35,21 @@ class ConfigurationTest(unittest.TestCase):
         baseline['supervisor']['wheel_radius'] = 0.325
         baseline['driver']['physical_sample_skew_budget'] = 0.05
         baseline['driver']['startup_timeout'] = 15.0
+        baseline['supervisor']['reset_timeout'] = 20.0
+        baseline['supervisor']['health_input_timeout'] = 0.5
         baseline['manual'].update(axis_speed_sign=1, axis_crab_sign=1, axis_steer_sign=1)
         for component, values in baseline.items():
             self.assertEqual(self.cfg.parameters(component), values, component)
+
+    def test_component_input_deadline_tracks_health_producer_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            overlay = Path(directory) / 'diagnostics.yaml'
+            overlay.write_text(yaml.safe_dump({'/**': {'ros__parameters': {'odometry_timeout': .65}}}))
+            cfg = Configuration(overrides={'diagnostics': str(overlay)})
+            self.assertEqual(cfg.parameters('supervisor')['health_input_timeout'], .65)
+            self.assertEqual(cfg.parameters('diagnostics')['odometry_timeout'], .65)
+            self.assertEqual(cfg.parameters('supervisor')['health_timeout'], .3)
+            self.assertEqual(cfg.parameters('supervisor')['velocity_feedback_timeout'], .3)
 
     def test_virtual_driver_scaling_comes_from_same_records(self):
         p = self.cfg.parameters('driver')
@@ -54,7 +66,7 @@ class ConfigurationTest(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 validate_platform(p)
 
-    def test_scanner_selector_is_restricted_to_commissioned_two_module_hardware(self):
+    def test_scanner_selector_supports_both_layouts_with_verified_controls(self):
         p = copy.deepcopy(self.cfg.platform)
         p['operator']['mapping'] = {
             'verified': True, 'node_id': 10,
@@ -65,8 +77,11 @@ class ConfigurationTest(unittest.TestCase):
                         'reset': {'signal': 'SP4', 'active_high': True}, 'deadman': None,
                         'scanner_override': {'signal': 'D5', 'active_high': True}}}
         p['can']['master_node_id'] = '0x0B'
+        validate_platform(p)  # Four modules retain FlexiSoft.
+        p['operator']['mapping']['verified'] = False
         with self.assertRaises(ConfigurationError):
             validate_platform(p)
+        p['operator']['mapping']['verified'] = True
         p['modules'] = [m for m in p['modules'] if m['name'] in ('front_right', 'rear_left')]
         p['safety'] = {'source': 'hardwired_sto'}
         validate_platform(p)
@@ -158,6 +173,9 @@ class ConfigurationTest(unittest.TestCase):
         original['modules'] = [m for m in original['modules'] if m['name'] in names]
         original['can']['drives']['bitrate'] = 250000
         original['can']['master_node_id'] = '0x0B'
+        original['scanners']['host_ip'] = '10.60.20.186'
+        original['scanners']['units'][0]['sensor_ip'] = '10.60.20.52'
+        original['scanners']['units'][1]['sensor_ip'] = '10.60.20.53'
         original['operator'] = copy.deepcopy(cfg.platform['operator'])
         original['safety'] = {'source': 'hardwired_sto'}
         original['battery']['participants'] = original['battery']['participants'][:1]
@@ -187,6 +205,20 @@ class ConfigurationTest(unittest.TestCase):
         self.assertIn('front_left_scan', links)
         self.assertIn('rear_right_scan', links)
 
+    def test_hardware_scanner_flag_omits_adapter_but_virtual_keeps_its_adapter(self):
+        path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
+        for stack, enabled, expected in (('hardware', 'false', False), ('hardware', 'true', True),
+                                         ('virtual', 'false', True), ('virtual', 'true', True)):
+            with self.subTest(stack=stack, enabled=enabled):
+                actions, context = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                    {'platform_config': str(path), 'stack_type': stack, 'start_scanners': enabled})
+                adapter = next(a for a in actions if a.kind == 'Node' and
+                               a.kwargs['executable'] == 'scanner_safety_adapter')
+                self.assertEqual(adapter.kwargs['condition'].perform(context), expected)
+                supervisor = next(a for a in actions if a.kind == 'Node' and
+                                  a.kwargs['executable'] == 'mobotic_supervisor')
+                self.assertTrue(supervisor.kwargs['parameters'][0]['operator_scanner_override_enabled'])
+
     def test_hardwired_sto_source_has_no_gateway_settings_and_keeps_monitor(self):
         path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
         cfg = Configuration(path)
@@ -211,6 +243,32 @@ class ConfigurationTest(unittest.TestCase):
         profile['safety'] = {'source': 'hardwired_sto'}
         with self.assertRaisesRegex(ConfigurationError, 'exactly two'):
             validate_platform(profile)
+
+    def test_four_module_rp2_without_scanners_keeps_plc_and_verified_mapping(self):
+        profile = copy.deepcopy(self.cfg.platform)
+        reference = read_yaml(self.cfg.path.with_name('platform-front-right-rear-left.yaml'))
+        profile['operator'] = copy.deepcopy(reference['operator'])
+        profile['can']['master_node_id'] = '0x0B'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'four-rp2.yaml'
+            path.write_text(yaml.safe_dump(profile))
+            cfg = Configuration(path)
+            self.assertTrue(cfg.parameters('supervisor')['operator_scanner_override_enabled'])
+            self.assertEqual(len(cfg.parameters('supervisor')['expected_module_names']), 4)
+            self.assertEqual(cfg.parameters('battery')['batteries.ids'], ['battery1', 'battery2'])
+            actions, context = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                {'platform_config': str(path), 'stack_type': 'hardware', 'start_scanners': 'false'})
+            nodes = [a for a in actions if a.kind == 'Node']
+            bridge = next(a for a in nodes if a.kwargs['executable'] == 'flexisoft_tcp_bridge')
+            self.assertTrue(bridge.kwargs['condition'].perform(context))
+            scanner = next(a for a in nodes if a.kwargs['executable'] == 'scanner_safety_adapter')
+            self.assertFalse(scanner.kwargs['condition'].perform(context))
+            supervisor = next(a for a in nodes if a.kwargs['executable'] == 'mobotic_supervisor')
+            self.assertEqual(supervisor.kwargs['parameters'][0]['safety_source'], 'flexisoft')
+            self.assertTrue(supervisor.kwargs['parameters'][0]['operator_scanner_override_enabled'])
+            operator = next(a for a in nodes if a.kwargs['executable'] == 'remdevice_control')
+            mapping = json.loads(operator.kwargs['parameters'][0]['remdevice_mapping'])
+            self.assertEqual(mapping['buttons']['scanner_override'], {'signal': 'D5', 'active_high': True})
 
     def test_four_module_launch_retains_flexisoft(self):
         self.assertEqual(self.cfg.parameters('supervisor')['safety_source'], 'flexisoft')
@@ -294,6 +352,29 @@ class ConfigurationTest(unittest.TestCase):
                 mutation(p)
                 with self.assertRaises(ConfigurationError):
                     validate_platform(p)
+
+    def test_shared_can_profile_resolves_both_receivers_and_rejects_conflicting_link_settings(self):
+        profile = copy.deepcopy(self.cfg.platform)
+        profile['can']['battery'].update(interface=profile['can']['drives']['interface'],
+                                         bitrate=profile['can']['drives']['bitrate'], listen_only=False)
+        validate_platform(profile)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'shared-can.yaml'
+            path.write_text(yaml.safe_dump(profile))
+            _, context = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                                 {'platform_config': str(path)})
+            self.assertEqual((context['can_interface'], context['battery_can_interface']), ('can0', 'can0'))
+            standalone, _ = resolve(environment()['standalone_launch']('battery'),
+                                    {'platform_config': str(path)})
+            transport = next(a for a in standalone if a.kind == 'GroupAction')
+            include = next(a for a in transport.kwargs['actions'] if a.kind == 'IncludeLaunchDescription')
+            self.assertEqual(dict(include.kwargs['launch_arguments'])['interface'], 'can0')
+        for change, message in (({'bitrate': 250000}, 'matching bitrates'),
+                                ({'listen_only': True}, 'cannot be listen-only')):
+            conflicting = copy.deepcopy(profile)
+            conflicting['can']['battery'].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(ConfigurationError, message):
+                validate_platform(conflicting)
 
     def test_battery_ack_mode_requires_an_explicit_boolean(self):
         for value in (True, False):

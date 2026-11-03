@@ -359,6 +359,9 @@ def _launch_setup(context):
         output='screen', respawn=True, respawn_delay=1.0)
     scanner_adapter = Node(package='mobotic_safety', executable='scanner_safety_adapter',
         name='scanner_safety_adapter', namespace=robot_name, output='screen',
+        condition=IfCondition(PythonExpression([
+            "'", stack_type, "' == 'virtual' or '", start_scanners, "' == 'true'"
+        ])),
         parameters=[{'status_timeout': supervisor_config['safety_timeout'],
                      'scanner_source': 'safety_io' if stack_type.perform(context) == 'virtual' else 'scanner',
                      'scanner_input_suffix': 'evaluation_data' if stack_type.perform(context) == 'hardware' else 'raw_data'}],
@@ -418,7 +421,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'battery_can_interface',
             default_value='auto',
-            description='Receive-only battery SocketCAN interface; separate from drives',
+            description='Receive-only battery SocketCAN receiver; may share the drive interface',
         ),
         DeclareLaunchArgument(
             'start_socketcan',

@@ -47,15 +47,16 @@ use a bridge that preserves acquisition timestamps for delayed/replay detection.
 Output headers remain report times; readiness and NaN/stale fields reflect the
 underlying acquisition age, not just output publication time.
 `percentage` and `minimum_percentage` are fractions; the supervisor enables only
-when all required participants are fresh/ready and minimum SOC is at least `0.2` (20%).
+when all required participants are fresh/ready with valid SOC. SOC below `0.2`
+(20%) is advisory only and does not block startup, motion or B2 recovery.
 
 The supervisor does not subscribe to public `battery/state`; its gate uses the
 aggregate `battery/system_state`. External monitoring can consume either.
 
 Every configured pack must provide fresh status, SOC and electrical telegrams,
 with valid values, operational status and HV connected. Any required pack's
-loss/fault/HV loss blocks readiness; any SOC below 20% blocks supervisor
-enable/motion. The two-module profile does not wait for pack 2 or publish its
+loss/fault/HV loss blocks readiness; valid SOC below 20% produces a warning
+without blocking supervisor enable/motion or B2 recovery. The two-module profile does not wait for pack 2 or publish its
 topic. The aggregate reports the minimum configured SOC, never an average that
 could hide a depleted pack. Per-pack current/voltage remain separate; no system
 current is synthesized.
@@ -105,7 +106,7 @@ with indistinguishable CAN identities cannot be separated by this monitor;
 resolve addressing using the vendor procedure. The monitor does not transmit
 address-assignment, contactor or charging commands. Verify that losing any
 required pack or telegram blocks readiness, and that any pack below 20%
-inhibits motion. Local software tests do not establish physical acceptance.
+produces an advisory warning without blocking startup, motion or B2 recovery. Local software tests do not establish physical acceptance.
 
 ## Commissioned noncharging readiness policy
 
@@ -123,7 +124,8 @@ This is the operator-requested telemetry policy. The previously decoded high
 nibble of status byte 5 cycles 0..15 on the installed idle pack; it is not a
 verified operational-state enum and is excluded from this profile's readiness
 decision. Status/SOC/electrical freshness, valid
-measurements, connected HV, and the supervisor's 20% minimum SOC remain required.
+measurements and connected HV remain required. The 20% SOC threshold is
+warning-only; actual BMS faults and physical battery protection remain active.
 A fresh BMS charge request above 0.1 A inhibits readiness. Regenerative current
 alone does not indicate an attached charger. The Vanguard charger
 status frame `0x0CFFBC49` also inhibits while its mains/state indicates charging

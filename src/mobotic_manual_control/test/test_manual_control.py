@@ -41,8 +41,8 @@ class Publisher:
 
 class VehicleModeRequest:
     MANUAL = 0
-    AUTO_VELOCITY = 1
-    AUTO_DIRECT = 2
+    AUTONOMOUS = 1
+    KINEMATICOFF = 2
 
     def __init__(self):
         self.header = SimpleNamespace(stamp=None, frame_id='')
@@ -93,7 +93,7 @@ class ManualControlTest(unittest.TestCase):
         # Position-input fixtures exercise future RP1 semantics, not its CAN mapping.
         node.mode_switch_type = 'position'
         node.mode_switch_manual_value = 0
-        node.mode_switch_auto_velocity_value = 1
+        node.mode_switch_autonomous_value = 1
         node.mode_state_timeout = 0.5
         node.vehicle_mode_state = None
         node.vehicle_mode_received = None
@@ -302,7 +302,7 @@ class ManualControlTest(unittest.TestCase):
         msg.buttons[self.node.button_mode_switch] = value
         self.node._joy_callback(msg)
 
-    def test_switch_changes_request_only_manual_and_auto_velocity(self):
+    def test_switch_changes_request_only_manual_and_autonomous(self):
         self.switch(0)
         for value in (1, 1, 0, 0, 1):
             self.switch(value)
@@ -360,14 +360,14 @@ class ManualControlTest(unittest.TestCase):
 
     def test_switch_polarity_is_configurable_and_requires_binary_distinct_values(self):
         self.node.mode_switch_manual_value = 1
-        self.node.mode_switch_auto_velocity_value = 0
+        self.node.mode_switch_autonomous_value = 0
         self.node._validate_parameters()
         self.switch(1)
         self.switch(0)
         self.switch(1)
         self.assertEqual([msg.requested_mode for msg in self.node.mode_publisher.messages], [1, 0])
         for manual, auto in ((0, 0), (1, 1), (-1, 1), (0, 2)):
-            self.node.mode_switch_manual_value, self.node.mode_switch_auto_velocity_value = manual, auto
+            self.node.mode_switch_manual_value, self.node.mode_switch_autonomous_value = manual, auto
             with self.assertRaises(ValueError):
                 self.node._validate_parameters()
 

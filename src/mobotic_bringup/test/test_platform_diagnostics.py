@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 import tempfile
 import json
+import math
 from test_diagnostic_health import health
 from test_host_health import module as host_health
 
@@ -27,7 +28,7 @@ namespace = dict(DiagnosticArray=Message, DiagnosticStatus=Message,
                  time=SimpleNamespace(monotonic=lambda: 10.0, time=lambda: 100.0), OK=health.OK, WARN=health.WARN,
                  ComponentHealth=Message, ComponentHealthArray=Message,
                  read_host_health=host_health.read_host_health,
-                 ERROR=health.ERROR, freshness=health.freshness,
+                 ERROR=health.ERROR, freshness=health.freshness, math=math,
                  battery_health=health.battery_health, safety_health=health.safety_health)
 exec(compile(ast.Module(body=[cls], type_ignores=[]), str(source), 'exec'), namespace)
 
@@ -103,6 +104,22 @@ class PlatformDiagnosticsTest(unittest.TestCase):
             p.write_text(json.dumps({'state': 'RUNNING', 'updated_at': 100}))
             self.node._publish_health()
             self.assertFalse(samples[-1].components[0].fault_active)
+
+    def test_health_report_preserves_acquisition_stamp_and_producer_input_deadline(self):
+        output = []
+        self.node.channels = {'vehicle/measured_velocity': (None, .5)}
+        self.node.health_publisher = SimpleNamespace(publish=output.append)
+        message = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=9, nanosec=650000000)),
+            twist=SimpleNamespace(linear=SimpleNamespace(x=0., y=0.), angular=SimpleNamespace(z=0.)))
+        self.node._receive('vehicle/measured_velocity', message)
+        self.node._publish_health()
+        component, = output[-1].components
+        self.assertTrue(component.monitoring_valid)
+        self.assertFalse(component.fault_active)
+        self.assertIs(component.header, message.header)
+        message.header.stamp.nanosec = 490000000
+        self.node._publish_health()
+        self.assertFalse(output[-1].components[0].monitoring_valid)
 
 
 if __name__ == '__main__':

@@ -5,7 +5,7 @@ bus **can0 at 500000 bit/s**. The master remains node 10 and drives remain 1..8.
 These are intended settings, not a claim that the receiver has been programmed.
 The operator has no hold-to-drive button: after neutral rearm in MANUAL, moving
 the sticks commands motion. B1 is boost, RP1 is Manual/Autonomous, B2 requests a
-supervisor reset. RP2 and STOP retain their independent hardware safety roles.
+supervisor drive toggle. RP2 and STOP retain their independent hardware safety roles.
 
 The physical PAIL assignments are currently unknown. The checked-in profile has
 `mapping.verified: false` and empty axis/button maps. It receives CAN for
@@ -48,7 +48,7 @@ python3 deploy/checks/map_pail.py --interface can0 --node-id 10
 
 This requires no ROS installation, Docker or CAN transmission. It prompts for
 neutral, both directions of the cross joystick and paddle, RP1 Manual/Auto,
-RP2 Safety Enabled/Disabled, B1 boost and B2 reset. Before each step, return
+RP2 Safety Enabled/Disabled, B1 boost and B2 drive toggle. Before each step, return
 other controls to neutral; press Enter, then hold the requested control until
 COMPLETE. The default recording is six seconds per step. Leave the transmitter's
 normal radio link established.
@@ -71,7 +71,7 @@ assignments for the node-10/250-kbit/s **virtual test profile**:
 | Left-paddle left/right (steering) | A2, U2/D2 | Neutral 0, full scale 255; U2 is left |
 | RP1 Manual/Auto | U5 | High = Manual; low = Auto |
 | B1 boost | SP3 | High while pressed |
-| B2 reset | SP4 | High while pressed |
+| B2 drive toggle | SP4 | High while pressed |
 | RP2 Safety Enable/Disable | D5 | Low = Safety Enabled; high = Safety Disabled |
 | Hold-to-drive | Unassigned | `deadman: null` |
 
@@ -194,7 +194,7 @@ All names are relative to the robot namespace, normally `/moboterra`.
 | `can_rx` / `can_tx` | `can_msgs/msg/Frame`, existing SocketCAN bridge |
 
 The node subscribes to `vehicle/mode`. B2 calls the supervisor-owned
-`wheel_modules/clear_errors`; it never resets individual drives directly.
+`wheel_modules/toggle_drives`; it never resets individual drives directly.
 The supervisor remains the final motion authority.
 
 ## Receiver configuration
@@ -328,12 +328,10 @@ Commands preserve the oldest acquisition timestamp of the PDO pair. A new
 command requires both PDOs to advance within 75 ms of one another. A 250 ms
 timeout, bad relevant DLC/time, receiver restart/non-operational NMT, CAN error
 or EMCY invalidates the input. EMCY stays inhibited until its explicit zero-code
-reset with a zero error register, or B2 verifies a fresh zero error-register reply
-as described below. Error and zero-code reset EMCYs are processed in CAN acquisition
+reset with a zero error register. B2 never acknowledges or clears receiver faults. Error and zero-code reset EMCYs are processed in CAN acquisition
 order, including when both are queued before the first ROS callback. The command
 freshness cutoff must not discard a newer reset event or hide a newer fault.
-Recovery requires new neutral inputs acquired after the recovery callback. A
-historical EMCY alone does not establish that the current error register is nonzero.
+Recovery requires new neutral inputs acquired after the recovery callback.
 Heartbeat is observed
 when present; it need not be enabled to receive PDOs.
 The bridge must preserve CAN acquisition time (`use_bus_time: true`).
@@ -348,15 +346,16 @@ After startup, link loss, stale input, STOP or a supervisor authority change,
 motion requires new neutral controls. A deflected stick cannot resume an old
 command. RP1 is primed at startup/reconnect and only a subsequent position change
 requests mode 0/1; it never requests mode 2. B2 similarly requires a fresh rising
-edge with neutral sticks, sends one supervisor request and reports its result.
-A held/reconnected B2 does not reset faults automatically.
+edge, sends one supervisor drive-toggle request and reports its result. Enabling
+requires neutral sticks and healthy input; disabling does not require neutral.
+A held/reconnected B2 does not retry automatically.
 
 Once verified, the provider sends rate-limited targeted NMT start when no PDOs
 are available; it never broadcasts NMT or changes receiver configuration.
 Automatic startup is disabled in unverified capture mode.
 
 Before motion acceptance, run a Jazzy build and virtual smoke check, then check
-physical directions, normal/boost speed, RP1 standstill transitions, B2 reset
+physical directions, normal/boost speed, RP1 standstill transitions, B2 drive toggle
 completion, neutral reconnect, loss of either PDO, radio loss, receiver power
 cycle and independent STOP/RP2 operation on the secured platform. The restored
 driver's physical position/reference commissioning gate remains in force.
@@ -375,12 +374,12 @@ an inconsistent `0x180` addition; its resulting `0x28A`, the EDS and main manual
 agree on **0x280 + node ID**. The customized delivery notes identify a PAIL and
 Ecobox-CAN but supply no physical signal assignment.
 
-## Two-module RP2 reduced-speed option
+## RP2 reduced-speed scanner bypass (two or four modules)
 
 On the commissioned node-10 receiver, passive captures with the user's two RP2
 positions confirmed **D5 high = Safety Disabled**, **D5 low = Safety Enabled**.
 The receiver's `SFTY` bit stayed low in both positions and must not select this
-mode. Opt in only on the two-module `hardwired_sto` profile by adding
+mode. Opt in on either supported layout with verified REMdevice controls by adding
 `scanner_override: {signal: D5, active_high: true}` to the verified mapping's
 buttons. This assignment must be measured again for a different receiver.
 
@@ -398,33 +397,36 @@ selector edge clears buffered motion. Safety Enabled restores the ordinary
 red/unknown scanner stop and yellow speed policy. Missing or malformed selector
 state is treated as Safety Enabled, so the scanner gate remains mandatory rather
 than granting the scanner exception. This
-software selector does not establish or change the physical Siemens safety wiring.
+software selector does not change the physical safety wiring. Four-module
+FlexiSoft communication, E-stop, STO and safety-enable remain required; only
+scanner protective-field/OSSD stops are bypassed. PLC motion denial without a
+known scanner protective-stop cause remains inhibited.
 
 ## Receiver EEPROM and CAN-ID fault recovery
 
-### B2 acknowledgement of a recovered receiver emergency
+### B2 drive enable/disable
 
-Receiver EMCY errors inhibit motion while leaving the ROS stack running. A fresh
-release and press of B2 with neutral controls now acknowledges a recovered
-receiver fault before requesting the ordinary supervisor-owned drive reset.
-The provider continues observing fresh digital and analog PDOs for this reset
-admission while the motion decoder remains inhibited.
+B2 calls the supervisor-owned `wheel_modules/toggle_drives` service once per
+fresh release/press edge. Fresh paired PDOs and a current `vehicle/mode` report
+are required. Disabling enabled drives, or cancelling pending initialization,
+does not require neutral controls or a cleared receiver EMCY. Enabling requires
+healthy receiver input, neutral controls and all supervisor interlocks, including
+fresh sustained standstill or confirmed native disabled-drive states. The
+supervisor clears drive faults and initializes/enables at zero targets; acceptance
+is not completion. Observe `vehicle/mode` for verified recovery.
 
-B2 sends only an SDO upload of the receiver's error register `0x1001:0`. The
-reply must be fresh, match the target node/object and report zero; a newer
-emergency, STOP/link loss, deflected controls, malformed reply or timeout blocks
-recovery. The provider then discards pre-verification inputs, waits for fresh
-neutral PDOs and requests `wheel_modules/clear_errors`. Drive reset still
-requires the supervisor's existing interlocks and standstill/disabled-drive
-proof. The response does not establish that drive recovery completed; observe
-`vehicle/mode`. Inputs must rearm from neutral after the reset response.
+B2 never sends receiver SDO requests, clears the receiver error latch, or sends
+NMT reset-communication. An active receiver error blocks enabling until the
+receiver itself reports a valid zero-code/zero-register EMCY reset and new
+neutral input arrives. A held B2 never retries. Release and press after correcting
+a rejected condition. Pending service calls inhibit manual motion, and the
+response requires new neutral input before motion can resume.
 
-A held B2 never retries. Release and press again after correcting a rejected
-condition. The operation does not reset receiver communication, save EEPROM,
-change PDO mapping or mask an active receiver fault. Persistent errors and
-failed/unverified drive startup remain inhibited and require diagnosis.
-`operator/raw` includes the latched receiver error code/register and B2 reset
-status for diagnosis.
+With RP2 Safety Disabled, both AUTO modes are rejected at selection. If an AUTO
+fault is already latched, MANUAL can be selected only with fresh confirmed disabled
+drives and no observed movement. Faults remain latched and motion remains blocked
+until an explicit B2 recovery completes. Enabling safety alone does not make
+missing scanners available.
 
 The supplied REMdevice service manual v2.0, C-24, defines `0x8150` as transmit
 COB-ID collision and `0x6000` as EEPROM not programmed or EEPROM error. A healthy
@@ -452,3 +454,13 @@ acknowledgement, zero error register, and fresh neutral radio inputs before
 resuming. Do not repeat EEPROM saves or clear errors blindly; a recurring write
 or EEPROM error needs supplier diagnosis. Recovery records for this machine are
 under `~/robot_repair/receiver-can-repair/`.
+
+### RP2/FlexiSoft safety-selector disagreement
+
+With verified D5 mapping and FlexiSoft telemetry enabled, RP2 Safety Enabled
+(D5 low) plus PLC override active blocks all motion and enable/reset admission.
+The supervisor reports `SAFETY_SELECTOR_MISMATCH` and SAFETY, immediately clears
+buffered commands and publishes zero targets. Once consistent, motion requires
+fresh commands and normal manual rearming. This does not write to FlexiSoft or
+change the hardware safety chain. Do not interpret unavailable/stale RP2 data as
+agreement while the PLC still reports override.

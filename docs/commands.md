@@ -360,8 +360,8 @@ ros2 interface show mobotic_interfaces/msg/WheelModuleCommandArray
 ```
 
 `VehicleModeState` must include AUTONOMOUS=1, KINEMATICOFF=2, SAFETY=3,
-ERROR=4 and `selected_mode`. If `OperatorState` is missing or the state contains
-only AUTO_VELOCITY/AUTO_DIRECT, stop here: this is the older built image.
+ERROR=4 and `selected_mode`. If these definitions or `OperatorState` are missing,
+stop here: this is an older built image.
 Topic discovery alone is insufficient when a provider has not been launched.
 For an updated image, use:
 
@@ -411,7 +411,6 @@ selected. A mode request does not bypass readiness gates or command motion.
 | 4 | ERROR | Automatic required-system fault, latched until verified reset |
 | 255 | UNKNOWN | Initial readiness/monitoring not established |
 
-AUTO_VELOCITY=1 and AUTO_DIRECT=2 remain numeric aliases, not additional modes.
 ERROR has display precedence over SAFETY; `safety_stop_active` still exposes a
 simultaneous stop. `selected_mode` retains the intended 0/1/2 control mode.
 `current_mode` is the effective state. Read `motion_permitted`,

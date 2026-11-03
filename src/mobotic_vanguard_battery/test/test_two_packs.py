@@ -166,7 +166,7 @@ class TwoPackTest(unittest.TestCase):
                     else:
                         self.assertEqual(state.faulted_batteries, [identifier])
 
-    def test_lowest_soc_is_exposed_for_supervisor_twenty_percent_gate(self):
+    def test_lowest_soc_is_exposed_for_supervisor_warning(self):
         for identifier in ('battery1', 'battery2'):
             with self.subTest(identifier=identifier):
                 self.setUp()

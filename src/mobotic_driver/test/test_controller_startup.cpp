@@ -52,6 +52,8 @@ int main(int argc, char** argv)
       controllers.emplace(node, VirtualDriveProtocol(node, traction));
     }
     controllers.at(4).setFault(1, 0x2310);
+    controllers.at(8).setFault(0x81, 0xff10);
+    bool fault_until_zero_enable = true;
     unsigned startup_reset_attempts = 0;
     std::vector<Frame> transmitted;
     bool drop_replies = false, drop_motion = false;
@@ -65,6 +67,14 @@ int main(int argc, char** argv)
       for (auto& [node, controller] : controllers)
       {
         if (motion_read && (!controller.enabled() || drop_motion)) { continue; }
+        // Some startup indications clear only when the zero-target enable
+        // sequence is attempted. Fault-clear polling alone cannot bootstrap it.
+        if (node == 8 && fault_until_zero_enable && frame.id == 0x208 &&
+            frame.dlc == 6 && shortFromFrame(frame, 0) == 0x0006 && intFromFrame(frame, 2) == 0)
+        {
+          fault_until_zero_enable = false;
+          controller.setFault(0, 0);
+        }
         for (auto reply : controller.handle(frame))
         {
           // A transient startup fault persists beyond both entry clears.
@@ -73,6 +83,13 @@ int main(int argc, char** argv)
               index == EC_CONTROLWORD && shortFromFrame(frame, 4) == 0x0080 &&
               ++startup_reset_attempts < 4)
           { controller.setFault(1, 0x2310); }
+          if (node == 8 && fault_until_zero_enable && frame.id == 0x608 &&
+              frame.data[0] != READ_FROM_DEVICE && index == EC_CONTROLWORD && shortFromFrame(frame, 4) == 0x0080)
+          { controller.setFault(0x81, 0xff10); }
+          // Real Elmo drives can retain the last fault in 0x603F after the
+          // current error register and native fault state have cleared.
+          if (node == 8 && sdo && frame.data[0] == READ_FROM_DEVICE && index == EC_ERROR_CODE)
+          { shortToFrame(reply, 4, static_cast<short>(0xff10)); }
           if (reply.id < 0x580 && (!controller.enabled() || drop_motion)) { continue; }
           if (sdo && frame.data[0] == READ_FROM_DEVICE && (index == 0x6064 || index == 0x3762))
           { intToFrame(reply, 4, index == 0x6064 ? 123456 : 2048); }
@@ -112,7 +129,7 @@ int main(int argc, char** argv)
     require(joints.name.empty(), "disabled controllers deliberately provide no motion feedback");
     for (const auto& frame : transmitted)
     { require(frame.id >= 0x700 || (frame.id >= 0x600 && frame.data[0] == READ_FROM_DEVICE), "startup must be read-only apart from master heartbeat"); }
-    bool lease = true, enable = true, resetting = false, adversarial_motion = false;
+    bool lease = true, enable = true, resetting = false, adversarial_motion = false, publish_hold = false;
     uint64_t reset_id = 0;
     auto heartbeat = bus->create_wall_timer(std::chrono::milliseconds(20), [&] {
       if (!lease) { return; }
@@ -126,17 +143,18 @@ int main(int argc, char** argv)
       operation.supervisor_instance = state.supervisor_instance; operation.authority_generation = 1;
       operation.enable = enable; operation.reset_id = reset_id;
       operations->publish(operation);
-      if (adversarial_motion)
+      if (adversarial_motion || publish_hold)
       {
         mobotic_interfaces::msg::WheelModuleCommandArray command;
         command.header.stamp = bus->now(); command.source_stamp = command.header.stamp;
         command.supervisor_instance = state.supervisor_instance; command.authority_generation = 1;
-        command.selected_mode = State::MANUAL; command.purpose = command.MOTION;
+        command.selected_mode = State::MANUAL; command.purpose = adversarial_motion ? command.MOTION : command.HOLD;
         for (const auto& name : {"front_right", "rear_left"})
         {
           mobotic_interfaces::msg::WheelModuleCommand module;
           module.name = name; module.steering_position = 0.5;
-          module.steering_profile_velocity = 1.0; module.traction_velocity = 1.0;
+          module.steering_profile_velocity = adversarial_motion ? 1.0 : 0.0;
+          module.traction_velocity = adversarial_motion ? 1.0 : 0.0;
           command.modules.push_back(module);
         }
         commands->publish(command);
@@ -161,7 +179,15 @@ int main(int argc, char** argv)
       { std::cerr << "  controller " << node << ": enabled=" << controller.enabled() << '\n'; }
     }
     require(startup_ready, "supervised initialization/enable must acquire the first real motion feedback");
+    require(!fault_until_zero_enable, "pre-existing errors cannot suppress the EC zero-target enable sequence");
+    require(latest.modules.back().traction.error_code == 0xff10 && latest.modules.back().error_code == 0,
+            "last-fault diagnostics remain visible without fabricating an active module fault");
     require(startup_reset_attempts >= 4, "startup retries persistent errors beyond the entry fault clears");
+    const auto idle_begin = transmitted.size();
+    spin_until([] { return false; }, 0.3);
+    const auto idle_syncs = std::count_if(transmitted.begin() + idle_begin, transmitted.end(),
+        [](const Frame& frame) { return frame.id == 0x80; });
+    require(idle_syncs <= 17, "repeated inhibited-authority callbacks must not multiply the configured 50 Hz physical SYNC rate");
     for (std::size_t i = 0; i < joints.name.size(); ++i)
     {
       const bool traction = joints.name[i].find("traction") != std::string::npos;
@@ -180,14 +206,19 @@ int main(int argc, char** argv)
       require(std::find(words.begin(), words.end(), 6) != words.end() && std::find(words.begin(), words.end(), 7) != words.end() &&
               std::find(words.begin(), words.end(), 15) != words.end(), "each Elmo receives shutdown, switch-on and enable-operation");
     }
-    // B2 can reset/re-enable from freshly measured standstill even without an
-    // existing fault. Disabled motion feedback is withheld during the reset.
+    // Recovery also needs a zero-target enable attempt before fault clearance
+    // is acknowledged. ERROR remains asserted and motion feedback is withheld
+    // while disabled; waiting for error-register zero first would deadlock.
+    fault_until_zero_enable = true;
+    controllers.at(8).setFault(0x81, 0xff10);
     enable = false; resetting = true; reset_id = 1;
-    require(spin_until([&] { return all([](const auto& m) { return m.reset_id == 1 && m.reset_acknowledged && !m.enabled && m.error_code == 0; }); }, 5),
-            "B2 management transaction must acknowledge fresh fault clearance while disabled");
+    require(spin_until([&] { return all([](const auto& m) { return m.reset_id == 1 && !m.enabled; }) &&
+            std::any_of(latest.modules.begin(), latest.modules.end(), [](const auto& m) { return !m.reset_acknowledged && m.error_code != 0; }); }, 5),
+            "B2 transaction acceptance is distinct from completed fault clearance");
     enable = true;
-    require(spin_until([&] { return all([](const auto& m) { return m.enabled && m.feedback_fresh; }); }, 8), "acknowledged B2 reset permits zero-target re-enable while reset remains active");
-    reset_id = 0; resetting = false;
+    require(spin_until([&] { return all([](const auto& m) { return m.reset_acknowledged && m.error_code == 0 && m.enabled && m.feedback_fresh; }); }, 8),
+            "accepted B2 recovery permits zero-target re-enable before fault clearance completes");
+    reset_id = 0; resetting = false; publish_hold = true;
     enable = false;
     controllers.at(4).setFault(1, 0x2310);
     require(spin_until([&] { return latest.modules.size() == 2 && latest.modules.front().error_code != 0; }, 4), "runtime drive fault must be observed without automatic reset");
@@ -198,7 +229,11 @@ int main(int argc, char** argv)
     resetting = true; reset_id = 2;
     require(spin_until([&] { return all([](const auto& m) { return m.reset_id == 2 && m.reset_acknowledged && !m.enabled && m.error_code == 0; }); }, 5),
             "fresh disabled native states admit reset after motion telemetry expires");
-    enable = true;
+    drop_motion = true; enable = true;
+    spin_until([] { return false; }, 0.7);
+    require(all([](const auto& m) { return m.enabled && !m.feedback_fresh; }),
+            "inhibited HOLD must not cancel authorized zero-target recovery while motion feedback is unavailable");
+    drop_motion = false;
     require(spin_until([&] { return all([](const auto& m) { return m.enabled && m.feedback_fresh && m.position_valid; }); }, 5),
             "faulted disabled controllers reacquire real motion feedback under zero-target recovery");
     adversarial_motion = true;
@@ -260,6 +295,19 @@ int main(int argc, char** argv)
     require(spin_until([&] { return all([](const auto& m) {
       return m.reset_id == 3 && m.reset_acknowledged;
     }); }, 5), "explicit B2 recovery clears errors after failed startup");
+    enable = true;
+    require(spin_until([&] { return all([](const auto& m) { return m.startup_pending; }); }, 2),
+            "accepted reset starts a single bounded initialization attempt");
+    enable = false;
+    require(spin_until([&] { return all([](const auto& m) { return m.startup_failed; }); }, 2),
+            "interlock loss cancels the recovery attempt");
+    enable = true;
+    spin_until([] { return false; }, 0.3);
+    require(all([](const auto& m) { return m.startup_failed && !m.startup_pending; }),
+            "repeated enable from the same reset ID cannot silently rearm cancelled startup");
+    enable = false; reset_id = 4;
+    require(spin_until([&] { return all([](const auto& m) { return m.reset_id == 4 && m.reset_acknowledged; }); }, 5),
+            "a new explicit recovery transaction is required after cancellation");
     enable = true;
     require(spin_until([&] { return all([](const auto& m) {
       return m.startup_complete && !m.startup_failed && m.enabled && m.feedback_fresh;

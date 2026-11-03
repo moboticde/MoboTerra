@@ -24,6 +24,12 @@ fields may override the role defaults in the profile. No generated legacy YAML
 copies or independently maintained virtual geometry are installed. The description
 Xacro reads the same profile; mesh and collision-envelope metadata remain CAD evidence.
 
+`diagnostics.odometry_timeout` also generates the supervisor's
+`health_input_timeout` for measured kinematics/odometry inputs. Configure that
+deadline in the diagnostics policy so producer and consumer agree. The separate
+supervisor `health_timeout` bounds health-report delivery and producer liveness;
+it does not replace acquisition-age validation or motion watchdogs.
+
 The defaults preserve the four-module layout (1.69 m / 0.99 m, 0.325 m radius),
 CAN0 drives/CAN1 receive-only battery, reference drive IDs, scanner addresses and
 current manual controls. Raw traction profile values are preserved commissioning
@@ -43,6 +49,12 @@ two/four mode, node implementation or manually maintained joint-count setting.
 Both layouts use the same application and image. The managed host also reads
 each CAN bus bitrate from this selected profile; adapter serial assignments and
 host lifecycle settings remain in `moboterra.env`.
+
+Native hardware launch also supports drives and battery on one SocketCAN interface.
+Both bitrate values must match and `can.battery.listen_only` must be `false`, since
+the shared controller must transmit drive commands. The battery ROS socket remains
+receive-only. The managed Docker host supervisor still requires separate `can0`
+and `can1` adapters; use native launch for a shared adapter.
 
 ## Use
 
@@ -133,3 +145,24 @@ The checker prints effective parameters, virtual bindings, diagnostic policy and
 CAN/NIC settings, enable motion or prove physical safety. Independent hardware STO
 remains independent; unmapped signals remain marked unknown. ROS Jazzy build,
 launch/RViz smoke tests and secured hardware commissioning are still required.
+
+Yellow warning fields or Safety Disabled/override impose a project-wide absolute
+0.3 m/s maximum on planar commands and every final wheel peripheral command,
+for either module layout. Lower configured limits still apply; raising
+`warning_speed_limit` cannot raise this ceiling. `override_speed_scale` remains
+accepted for legacy overlays but no longer sets a percentage-based speed limit.
+This speed policy does not bypass scanner, FlexiSoft or other readiness checks.
+
+Verified REMdevice profiles for two or four modules may configure
+`operator.mapping.buttons.scanner_override: {signal: D5, active_high: true}`.
+This selects the RP2 reduced-speed MANUAL scanner bypass. Four-module profiles
+must retain `safety.source: flexisoft`: the bypass does not remove PLC telemetry,
+E-stop, STO, safety-enable, battery or drive readiness requirements.
+
+Mode naming is canonical throughout the project: MANUAL=0, AUTONOMOUS=1 and
+KINEMATICOFF=2. `initial_mode` accepts `manual`, `autonomous` or `kinematicoff`.
+Joystick position settings are `mode_switch_manual_value` and
+`mode_switch_autonomous_value`. Generated ROS interfaces expose only the
+canonical constants; the numeric IDs and command-source behavior are unchanged.
+Rebuild dependent nodes and restart the complete stack together after interface
+changes.

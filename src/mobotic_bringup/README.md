@@ -3,15 +3,15 @@
 Integrated launch for the current MoboTerra stack, with two supervised motion paths:
 
 - Velocity: operator/external autonomy -> supervisor -> kinematics -> supervisor -> driver.
-- External joint commands: autonomy -> supervisor -> driver (`AUTO_DIRECT`, mode 2).
+- External joint commands: autonomy -> supervisor -> driver (`KINEMATICOFF`, mode 2).
 
 Both paths converge into final wheel_modules/command arrays. Internal operation
 commands separately manage global enable/disable and explicit reset transactions.
 The temporary F310/F710 USB profile uses Back (standardized button 4) to toggle
-MANUAL/AUTO_VELOCITY; face buttons are unused. Terminal requests use
-`vehicle/set_mode`, the only API accepting AUTO_DIRECT. Both first stop and verify standstill, then
+MANUAL/AUTONOMOUS; face buttons are unused. Terminal requests use
+`vehicle/set_mode`, the only API accepting KINEMATICOFF. Both first stop and verify standstill, then
 switch the sole selected mode. The driver enforces exclusive setpoint routing
-using fresh `vehicle/mode`; AUTO_DIRECT needs no extra opt-in setting.
+using fresh `vehicle/mode`; KINEMATICOFF needs no extra opt-in setting.
 The default `operator` node is `remdevice_control`: PAIL/Ecobox node 9, 500 kbit/s,
 on the drive CAN bus. Its unverified mapping permits capture only. Follow the
 [REMdevice commissioning guide](../../docs/remdevice_commissioning.md).
@@ -89,7 +89,7 @@ have not changed. `check_config` is read-only and does not configure OS interfac
 | `platform_config` | installed `mobotic_config/config/platform.yaml` | Shared hardware profile |
 | `robot_name` | `ROBOT_NAME` or `auto` | Explicit name (including empty root) wins; `auto` uses the profile name |
 | `can_interface` | `auto` → can0 | Drive SocketCAN interface |
-| `battery_can_interface` | `auto` → can1 | Separate battery telemetry SocketCAN interface |
+| `battery_can_interface` | `auto` → can1 | Receive-only battery receiver; may share the drive interface with matching bitrates and listen-only disabled in the profile |
 | `start_socketcan` | `true` | Start drive CAN bridge only |
 | `start_battery_socketcan` | `true` | Start receive-only battery CAN receiver when `start_battery=true` |
 | `start_manual_interface` | `true` | Start joystick and teleop/manual-control node |
@@ -99,9 +99,9 @@ have not changed. `check_config` is read-only and does not configure OS interfac
 | `operator_can_interface` | empty | Optional receive-only PAIL CAN input in virtual mode, isolated from simulated drive traffic |
 | `start_odometry` | `true` | Start measured wheel odometry in either profile |
 | `publish_odom_tf` | `auto` → true | Publish odom-to-base TF; disable if an external estimator owns it |
-| `front_scanner_ip` | `auto` → 10.60.20.52 | Front scanner address |
-| `rear_scanner_ip` | `auto` → 10.60.20.53 | Rear scanner address |
-| `scanner_host_ip` | `auto` → 10.60.20.186 | PC NIC address; verify on the actual host |
+| `front_scanner_ip` | `auto` → 192.168.1.5 | Front scanner address |
+| `rear_scanner_ip` | `auto` → 192.168.1.6 | Rear scanner address |
+| `scanner_host_ip` | `auto` → 192.168.1.250 | PC NIC address; verify on the actual host |
 
 Overlay node policies using `driver_parameters_file`,
 `kinematics_parameters_file`, `manual_parameters_file`,
@@ -161,8 +161,9 @@ ros2 topic info /moboterra/vehicle/odom -v
 ## Enable policy and commissioning
 
 The supervisor continuously requests enable when safety and aggregate battery
-state are fresh and ready with minimum SOC at least 20%. Otherwise it requests
-stop + disable. Enable releases hardware brakes according to the machine wiring;
+state are fresh and ready with valid SOC. SOC below 20% is a warning only and
+does not block startup, motion or B2 recovery. Missing/invalid telemetry, HV loss
+and battery faults still request stop + disable. Enable releases hardware brakes according to the machine wiring;
 independent brake feedback is unknown. Enable does not require a joystick deadman.
 
 Motion additionally requires enabled, fresh, fault-free wheel feedback and a

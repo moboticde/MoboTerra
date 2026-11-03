@@ -62,14 +62,15 @@ class RemdeviceControlTest(unittest.TestCase):
         node.last_reset = None
         node.reset_future = None
         node.reset_observed_pair = None
-        node.receiver_recovery = None
-        node.receiver_reset_status = ''
+        node.drive_toggle_status = ''
         node.last_start_ns = None
         node.input_error = ''
         node.raw_publisher = base.Publisher()
         node.joy_publisher = base.Publisher()
         node.selector_publisher = base.Publisher()
         node.can_publisher = base.Publisher()
+        self.auto_supervisor_status = True
+        self.supervisor_status()
         self.resets = []
         future = SimpleNamespace(done=lambda: False, add_done_callback=lambda cb: None)
         node.reset_client = SimpleNamespace(service_is_ready=lambda: True,
@@ -81,7 +82,16 @@ class RemdeviceControlTest(unittest.TestCase):
                                 header=SimpleNamespace(stamp=self.now.to_msg()),
                                 is_extended=False, is_rtr=False, is_error=False))
 
+    def supervisor_status(self, *, enabled=None, resetting=None):
+        previous = self.node.vehicle_mode_state
+        self.node._vehicle_mode_callback(SimpleNamespace(
+            header=SimpleNamespace(stamp=self.now.to_msg()), current_mode=0,
+            drives_enabled=(getattr(previous, 'drives_enabled', False) if enabled is None else enabled),
+            reset_in_progress=(getattr(previous, 'reset_in_progress', False) if resetting is None else resetting)))
+
     def pair(self, *, speed=0, buttons=0, status=0x28, up=None):
+        if self.auto_supervisor_status:
+            self.supervisor_status()
         self.send(0x189, [int(speed > 0) if up is None else up, 0, buttons, 0, 0, 0, 0, status], dt=0.049)
         self.send(0x289, [speed, 0, 0, 0, 0, 0, 0, 0])
 
@@ -388,105 +398,183 @@ class RemdeviceControlTest(unittest.TestCase):
         self.assertTrue(self.state().connected)
         self.assertFalse(self.state().command_active)
 
-    def begin_receiver_reset(self):
+    def test_b2_never_reads_or_clears_receiver_faults_or_restarts_communication(self):
         self.receiver_fault()
-        self.pair(buttons=4)
-        request = self.node.can_publisher.messages[-1]
-        self.assertEqual((request.id, request.dlc, request.data),
-                         (0x609, 8, [0x40, 1, 0x10, 0, 0, 0, 0, 0]))
-        self.assertFalse(self.resets)
-        self.assertEqual(self.node.command, [0, 0, 0])
-
-    def receiver_reply(self, error=0):
-        self.send(0x589, [0x4f, 1, 0x10, 0, error, 0, 0, 0])
-
-    def test_b2_recovers_verified_receiver_then_requests_supervisor_with_new_input(self):
-        self.begin_receiver_reset()
-        self.receiver_reply()
-        self.assertEqual(self.node.decoder.emergency_register, 0)
-        self.assertFalse(self.resets)
+        for _ in range(3):
+            self.pair(); self.pair(buttons=4); self.state()
+        # Unsolicited SDO replies cannot clear an EMCY either.
+        self.send(0x589, [0x4f, 1, 0x10, 0, 0, 0, 0, 0])
+        self.assertEqual(self.node.decoder.emergency_register, 0x11)
+        self.assertFalse(self.resets or self.node.can_publisher.messages)
         self.assertFalse(self.state().command_active)
-        self.pair(buttons=4)
+
+    def test_b2_disable_accepts_deflected_controls_even_during_receiver_fault(self):
+        for fault in (False, True):
+            with self.subTest(fault=fault):
+                self.setUp()
+                if fault:
+                    self.receiver_fault()
+                self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
+                self.supervisor_status(enabled=True)
+                self.pair(speed=255); self.pair(speed=255, buttons=4)
+                self.assertEqual(len(self.resets), 1)
+                self.assertEqual(self.node.command, [0, 0, 0])
+                self.assertFalse(self.node.can_publisher.messages)
+
+    def test_b2_can_cancel_pending_initialization(self):
+        self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
+        self.supervisor_status(resetting=True)
+        self.pair(speed=255); self.pair(speed=255, buttons=4)
+        self.assertEqual(len(self.resets), 1)
+
+    def test_pending_request_ignores_repeated_edges_and_all_motion(self):
+        self.pair(); self.pair(buttons=4)
+        for _ in range(3):
+            self.pair(); self.pair(speed=255, buttons=4)
+            self.assertFalse(self.state().command_active)
         self.assertEqual(len(self.resets), 1)
         self.assertEqual(self.node.command, [0, 0, 0])
-        self.pair(speed=255, buttons=4)
-        self.assertFalse(self.state().command_active)
-        self.assertEqual(self.node.command, [0, 0, 0])
 
-    def test_receiver_active_error_aborted_or_wrong_width_reply_never_clears_latch(self):
-        for response in ([0x4f, 1, 0x10, 0, 0x11, 0, 0, 0],
-                         [0x80, 1, 0x10, 0, 0, 0, 2, 6],
-                         [0x4b, 1, 0x10, 0, 0, 0, 0, 0]):
-            with self.subTest(response=response):
-                self.setUp(); self.begin_receiver_reset()
-                self.send(0x589, response)
-                self.assertEqual(self.node.decoder.emergency_register, 0x11)
-                self.assertFalse(self.resets or self.state().command_active)
-                self.assertIsNone(self.node.receiver_recovery)
-
-    def test_unrelated_stale_future_extended_and_rtr_replies_cannot_acknowledge(self):
-        cases = ((0x588, None, False, False), (0x589, -1, False, False),
-                 (0x589, 1_000_000, False, False), (0x589, None, True, False),
-                 (0x589, None, False, True))
-        for cob, offset, extended, rtr in cases:
-            with self.subTest(case=(cob, offset, extended, rtr)):
-                self.setUp(); self.begin_receiver_reset()
-                request_ns = self.node.receiver_recovery['started_ns']
-                self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
-                stamp = self.now.nanoseconds if offset is None else request_ns + offset
-                self.node._can_callback(SimpleNamespace(id=cob, dlc=8,
-                    data=[0x4f, 1, 0x10, 0, 0, 0, 0, 0],
-                    header=SimpleNamespace(stamp=stamp), is_error=False,
-                    is_extended=extended, is_rtr=rtr))
-                self.assertEqual(self.node.decoder.emergency_register, 0x11)
-                self.assertFalse(self.resets)
-
-    def test_new_emergency_during_b2_verification_is_not_cleared(self):
-        self.begin_receiver_reset()
-        self.send(0x89, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0])
-        self.receiver_reply()
-        self.assertEqual(self.node.decoder.emergency_code, 0x8150)
-        self.assertFalse(self.resets)
-        self.assertIsNone(self.node.receiver_recovery)
-
-    def test_stop_link_loss_and_movement_during_verification_block_recovery(self):
-        for status, speed in ((0xa8, 0), (0, 0), (0x28, 255)):
-            with self.subTest(status=status, speed=speed):
-                self.setUp(); self.begin_receiver_reset()
-                self.pair(status=status, speed=speed, buttons=4)
-                self.receiver_reply()
-                self.assertEqual(self.node.decoder.emergency_register, 0x11)
-                self.assertFalse(self.resets or self.state().command_active)
-
-    def test_timeout_does_not_acknowledge_and_held_b2_does_not_retry(self):
-        self.begin_receiver_reset()
-        self.now = Time(nanoseconds=self.now.nanoseconds + 1_100_000_000)
-        self.state()
-        self.assertIsNone(self.node.receiver_recovery)
-        self.receiver_reply()
-        self.pair(buttons=4); self.pair(buttons=4)
-        reads = [f for f in self.node.can_publisher.messages if f.id == 0x609]
-        self.assertEqual(len(reads), 1)
-        self.assertFalse(self.resets)
-        self.assertEqual(self.node.decoder.emergency_register, 0x11)
-
-    def test_b2_held_when_fault_arrives_requires_release_and_new_press(self):
-        self.pair()
-        self.send(0x89, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
-        self.pair(buttons=4); self.pair(buttons=4)
-        self.assertFalse([f for f in self.node.can_publisher.messages if f.id == 0x609])
-        self.pair(); self.pair(buttons=4)
-        self.assertEqual(len([f for f in self.node.can_publisher.messages if f.id == 0x609]), 1)
-
-    def test_supervisor_reset_result_requires_another_neutral_rearm(self):
-        self.begin_receiver_reset(); self.receiver_reply(); self.pair(buttons=4)
-        future = SimpleNamespace(result=lambda: SimpleNamespace(success=True, message='accepted'))
+    def complete_toggle(self, *, success=True):
+        future = SimpleNamespace(result=lambda: SimpleNamespace(success=success, message='result'))
         self.node.reset_future = future
         self.node._reset_done(future)
-        self.pair(speed=255)
-        self.assertFalse(self.state().command_active)
+
+    def test_toggle_result_requires_new_neutral_rearm_on_success_rejection_or_exception(self):
+        for outcome in ('success', 'rejection', 'exception'):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.pair(); self.pair(buttons=4)
+                if outcome == 'exception':
+                    def fail():
+                        raise RuntimeError('service failed')
+                    future = SimpleNamespace(result=fail)
+                    self.node.reset_future = future
+                    self.node._reset_done(future)
+                else:
+                    self.complete_toggle(success=outcome == 'success')
+                self.assertIsNone(self.node.reset_future)
+                self.pair(speed=255, buttons=4)
+                self.assertFalse(self.state().command_active)
+                self.assertEqual(len(self.resets), 1)
+                self.pair(); self.pair(speed=255)
+                self.assertGreater(self.node.command[0], 0)
+
+    def test_disable_then_enable_requires_release_and_new_neutral_press(self):
+        self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
+        self.supervisor_status(enabled=True)
+        self.pair(); self.pair(speed=255, buttons=4)
+        self.assertEqual(len(self.resets), 1)
+        self.complete_toggle()
+        self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
+        self.supervisor_status(enabled=False)
+        self.pair(buttons=4); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+        self.pair(); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 2)
+
+    def test_enable_rejects_deflection_stop_radio_loss_and_incoherent_axes(self):
+        for status, speed, up in ((0x28, 255, None), (0xa8, 0, None),
+                                  (0, 0, None)):
+            with self.subTest(status=status, speed=speed, up=up):
+                self.setUp()
+                self.pair(); self.pair(status=status, speed=speed, up=up, buttons=4)
+                self.assertFalse(self.resets)
+
+    def test_contradictory_axis_directions_block_enable(self):
+        self.pair()
+        self.send(0x189, [1, 1, 4, 0, 0, 0, 0, 0x28], dt=.049)
+        self.send(0x289, [255, 0, 0, 0, 0, 0, 0, 0])
+        self.state()
+        self.assertFalse(self.resets)
+        self.assertEqual(self.node.command, [0, 0, 0])
+
+    def test_missing_or_stale_supervisor_status_blocks_toggle_without_retries(self):
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                self.setUp()
+                self.auto_supervisor_status = False
+                if missing:
+                    self.node.vehicle_mode_state = None
+                else:
+                    self.now = Time(nanoseconds=self.now.nanoseconds + 600_000_000)
+                self.pair(); self.pair(buttons=4)
+                self.assertFalse(self.resets)
+                self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
+                self.supervisor_status()
+                self.pair(buttons=4)
+                self.assertFalse(self.resets)
+                self.pair(); self.pair(buttons=4)
+                self.assertEqual(len(self.resets), 1)
+
+    def test_service_submission_failure_drops_motion_and_requires_new_press(self):
+        call = self.node.reset_client.call_async
+        def fail(request):
+            raise RuntimeError('service unavailable')
+        self.node.reset_client.call_async = fail
+        self.pair(); self.pair(buttons=4)
+        self.assertIsNone(self.node.reset_future)
+        self.assertEqual(self.node.command, [0, 0, 0])
+        self.node.reset_client.call_async = call
+        self.pair(buttons=4)
+        self.assertFalse(self.resets)
+        self.pair(); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+
+    def test_missing_supervisor_service_requires_new_press_after_recovery(self):
+        self.node.reset_client.service_is_ready = lambda: False
+        self.pair(); self.pair(buttons=4)
+        self.assertFalse(self.resets)
+        self.node.reset_client.service_is_ready = lambda: True
+        self.pair(buttons=4)
+        self.assertFalse(self.resets)
+        self.pair(); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+
+    def test_receiver_clear_requires_new_input_and_release_before_b2_enable(self):
+        self.receiver_fault()
+        self.pair(buttons=4)
+        self.assertFalse(self.resets)
+        self.send(0x89, [0] * 8)
+        self.pair(buttons=4); self.pair(buttons=4)
+        self.assertFalse(self.resets)
+        self.pair(); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+        self.assertFalse(self.node.can_publisher.messages)
+
+    def test_single_pdo_cannot_generate_toggle_or_refresh_button_edge(self):
+        self.pair()
+        self.send(0x189, [0, 0, 4, 0, 0, 0, 0, 0x28])
+        self.state()
+        self.assertFalse(self.resets)
+        self.send(0x289, [0] * 8)
+        self.assertEqual(len(self.resets), 1)
+
+    def test_toggle_with_advancing_clock_does_not_invalidate_input(self):
+        def advancing_now():
+            self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
+            return self.now
+        self.node.get_clock = lambda: SimpleNamespace(now=advancing_now)
+        self.pair(); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+        self.assertNotEqual(self.node.decoder.reason, 'clock moved backwards')
+
+    def test_b2_held_across_timer_detected_disconnect_must_be_released(self):
+        self.pair()
+        self.now = Time(nanoseconds=self.now.nanoseconds + 1_000_000_000)
+        self.state()
+        self.pair(buttons=4); self.pair(buttons=4)
+        self.assertFalse(self.resets)
+        self.pair(); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+
+    def test_pending_supervisor_request_still_blocks_motion_after_new_can_error(self):
+        self.pair(); self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+        self.node._can_callback(SimpleNamespace(is_error=True))
         self.pair(); self.pair(speed=255)
-        self.assertGreater(self.node.command[0], 0)
+        self.assertFalse(self.state().command_active)
+        self.assertEqual(self.node.command, [0, 0, 0])
 
     def test_reset_accept_then_reject_use_distinct_rclpy_log_sites(self):
         sites, failures, logged = {}, [], []
@@ -507,59 +595,6 @@ class RemdeviceControlTest(unittest.TestCase):
         self.assertFalse(failures)
         self.assertEqual([entry[0] for entry in logged], ['info', 'warning'])
         self.assertIn('driver startup failed', logged[-1][1])
-
-    def test_b2_disable_does_not_wait_for_neutral_or_receiver_fault_clear(self):
-        self.node.b2_toggle_enabled = True
-        self.node._vehicle_mode_fresh = lambda now: True
-        self.node.vehicle_mode_state = SimpleNamespace(drives_enabled=True, reset_in_progress=False)
-        self.pair(speed=255)
-        self.pair(speed=255, buttons=4)
-        self.assertEqual(len(self.resets), 1)
-        self.assertEqual(self.node.receiver_recovery['stage'], 'supervisor')
-        self.assertEqual(self.node.command, [0.0, 0.0, 0.0])
-
-    def test_receiver_recovery_never_sends_nmt_reset_or_sdo_download(self):
-        self.begin_receiver_reset(); self.receiver_reply(); self.pair()
-        requests = self.node.can_publisher.messages
-        self.assertTrue(requests)
-        self.assertTrue(all(f.id == 0x609 and f.data == [0x40, 1, 0x10, 0, 0, 0, 0, 0]
-                            for f in requests))
-
-    def test_recovery_with_advancing_callback_clock_does_not_invalidate_input(self):
-        def advancing_now():
-            self.now = Time(nanoseconds=self.now.nanoseconds + 1000)
-            return self.now
-        self.node.get_clock = lambda: SimpleNamespace(now=advancing_now)
-        self.begin_receiver_reset(); self.receiver_reply(); self.pair(buttons=4)
-        self.assertEqual(len(self.resets), 1)
-        self.assertNotEqual(self.node.decoder.reason, 'clock moved backwards')
-
-    def test_missing_supervisor_service_times_out_without_enabling_motion(self):
-        self.begin_receiver_reset(); self.receiver_reply()
-        self.node.reset_client.service_is_ready = lambda: False
-        self.pair(buttons=4)
-        self.assertFalse(self.resets or self.state().command_active)
-        self.now = Time(nanoseconds=self.now.nanoseconds + 1_100_000_000)
-        self.state()
-        self.assertIsNone(self.node.receiver_recovery)
-        self.assertFalse(self.state().command_active)
-
-    def test_b2_held_across_timer_detected_disconnect_must_be_released(self):
-        self.pair()
-        self.now = Time(nanoseconds=self.now.nanoseconds + 1_000_000_000)
-        self.state()
-        self.pair(buttons=4); self.pair(buttons=4)
-        self.assertFalse(self.resets)
-        self.pair(); self.pair(buttons=4)
-        self.assertEqual(len(self.resets), 1)
-
-    def test_pending_supervisor_request_still_blocks_motion_after_new_can_error(self):
-        self.pair(); self.pair(buttons=4)
-        self.assertEqual(len(self.resets), 1)
-        self.node._can_callback(SimpleNamespace(is_error=True))
-        self.pair(); self.pair(speed=255)
-        self.assertFalse(self.state().command_active)
-        self.assertEqual(self.node.command, [0, 0, 0])
 
     def test_rp1_position_requests_only_modes_zero_one(self):
         self.pair(); self.pair(buttons=1); self.pair(buttons=1); self.pair()

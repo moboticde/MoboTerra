@@ -27,7 +27,7 @@ class ManualControl(Node):
         self.declare_parameter('button_mode_switch', 4)
         self.declare_parameter('mode_switch_type', 'toggle')
         self.declare_parameter('mode_switch_manual_value', 0)
-        self.declare_parameter('mode_switch_auto_velocity_value', 1)
+        self.declare_parameter('mode_switch_autonomous_value', 1)
         self.declare_parameter('mode_state_timeout', 0.5)
         self.declare_parameter('max_velocity_linear', 1.25)
         self.declare_parameter('max_velocity_angular', 1.51)
@@ -52,8 +52,8 @@ class ManualControl(Node):
         self.button_mode_switch = int(self.get_parameter('button_mode_switch').value)
         self.mode_switch_type = str(self.get_parameter('mode_switch_type').value)
         self.mode_switch_manual_value = int(self.get_parameter('mode_switch_manual_value').value)
-        self.mode_switch_auto_velocity_value = int(
-            self.get_parameter('mode_switch_auto_velocity_value').value)
+        self.mode_switch_autonomous_value = int(
+            self.get_parameter('mode_switch_autonomous_value').value)
         self.mode_state_timeout = float(self.get_parameter('mode_state_timeout').value)
         self.max_velocity_linear = float(self.get_parameter('max_velocity_linear').value)
         self.max_velocity_angular = float(self.get_parameter('max_velocity_angular').value)
@@ -124,7 +124,7 @@ class ManualControl(Node):
             raise ValueError('RP1 button index must be -1 (unbound) or non-negative')
         if self.button_mode_switch >= 0 and self.button_mode_switch in (self.button_deadman, *self.buttons_boost):
             raise ValueError('RP1 cannot share a driving-control button')
-        if {self.mode_switch_manual_value, self.mode_switch_auto_velocity_value} != {0, 1}:
+        if {self.mode_switch_manual_value, self.mode_switch_autonomous_value} != {0, 1}:
             raise ValueError('RP1 Manual/Auto values must be distinct digital values 0 and 1')
         if self.mode_switch_type not in ('toggle', 'position'):
             raise ValueError('mode_switch_type must be toggle or position')
@@ -176,7 +176,7 @@ class ManualControl(Node):
 
     def _request_joystick_mode(self, mode, now):
         # RP1 can request only modes 0/1; direct control is service-only.
-        if mode not in (VehicleModeRequest.MANUAL, VehicleModeRequest.AUTO_VELOCITY):
+        if mode not in (VehicleModeRequest.MANUAL, VehicleModeRequest.AUTONOMOUS):
             return False
         request = VehicleModeRequest()
         request.header.stamp = now.to_msg()
@@ -199,23 +199,23 @@ class ManualControl(Node):
             return
         self.last_mode_joy_stamp = stamp.nanoseconds
         value = msg.buttons[self.button_mode_switch]
-        if value not in (self.mode_switch_manual_value, self.mode_switch_auto_velocity_value):
+        if value not in (self.mode_switch_manual_value, self.mode_switch_autonomous_value):
             self.mode_switch_state = None
             return
         previous = self.mode_switch_state
         self.mode_switch_state = value
         # Prime startup/reconnect. Only a real position change requests a
-        # mode; autorepeat must not override a terminal-selected AUTO_DIRECT.
+        # mode; autorepeat must not override a terminal-selected KINEMATICOFF.
         if self.mode_switch_type == 'toggle':
             if previous == 0 and value == 1 and self._vehicle_mode_fresh(now):
                 state = self.vehicle_mode_state
                 if not state.transition_in_progress:
-                    mode = (VehicleModeRequest.AUTO_VELOCITY if getattr(state, 'selected_mode', state.current_mode) == VehicleModeRequest.MANUAL
+                    mode = (VehicleModeRequest.AUTONOMOUS if getattr(state, 'selected_mode', state.current_mode) == VehicleModeRequest.MANUAL
                             else VehicleModeRequest.MANUAL)
                     self._request_joystick_mode(mode, now)
         elif previous is not None and value != previous:
             mode = (VehicleModeRequest.MANUAL if value == self.mode_switch_manual_value
-                    else VehicleModeRequest.AUTO_VELOCITY)
+                    else VehicleModeRequest.AUTONOMOUS)
             self._request_joystick_mode(mode, now)
 
     def _vehicle_mode_callback(self, msg):

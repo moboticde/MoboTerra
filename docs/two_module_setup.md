@@ -20,7 +20,7 @@ The supervisor does not require Siemens Ethernet messages, `safety/state`, or
 latching, speed scaling, or direct-mode selection. Both scanners instead supply
 their evaluated field status directly over Ethernet. Fresh, known status from
 both scanners is required for motion: red commands zero immediately; yellow
-ramps to a 0.3 m/s cap; clear removes that scanner cap. Missing field data blocks
+caps commands at 0.3 m/s; clear removes that scanner cap. Missing field data blocks
 motion. Missing physical E-stop and safety-enable telemetry remains unknown;
 ROS does not fabricate healthy signals.
 The physical Siemens/scanner/STO chain controls torque independently. A known
@@ -30,7 +30,8 @@ and current controller position-feedback checks remain in force.
 This two-module option requires **one battery**, `battery1`; the four-module
 option requires `battery1` and `battery2`. The selected profile determines the
 required battery list. Both options keep the listen-only 500-kbit/s battery bus
-and require every configured pack healthy, HV-connected and at least 20% SOC.
+and require every configured pack healthy, HV-connected and reporting valid SOC.
+SOC below 20% is advisory only and does not block startup, motion or B2 recovery.
 
 | Module | Steering node | Traction node | Steering-axis XY (m) |
 | --- | --- | --- | --- |
@@ -98,7 +99,17 @@ The captured assignment is:
 | Left paddle steering | A2 (`steer`), no inversion |
 | Right stick crab left/right | A4 (`crab`), no inversion |
 | RP1 Manual/Auto | U5, active low for the Auto request |
-| B1 boost / B2 reset | SP3 / SP4, active high |
+| B1 boost / B2 drive toggle | SP3 / SP4, active high |
+
+For a raised MANUAL joystick test with the commissioned RP2 **Safety Disabled**
+position, `start_scanners:=false` omits the physical scanner ROS drivers,
+projection and status adapter. It does not itself grant a scanner exemption:
+the supervisor still requires a fresh, healthy PAIL selector sample with D5 high
+and applies the existing 0.3 m/s cap. Safety Enabled or unavailable selector
+state requires scanner data and inhibits motion when these nodes are omitted.
+STOP, hardwired STO, battery and drive feedback gates remain active. Normal
+hardware operation retains `start_scanners:=true`; virtual mode retains its
+simulated scanner adapter independently of this hardware flag.
 
 All three axes use zero 0 and full scale 255. The capture's receiver is node 10;
 the prepared local candidate reserves master node 11 to avoid a node-ID collision.
@@ -135,7 +146,11 @@ timeout, scanner, warning/override, and stop checks. On this machine the candida
 `~/.config/moboterra/platform-four-modules.yaml`. Select one as
 `/etc/moboterra/platform.yaml`, validate it and restart the managed service only
 after the outstanding hardware commissioning work. The existing four-module
-profile remains available; the application is identical for both layouts.
+profile remains available; the application is identical for both layouts. The
+verified RP2/D5 scanner bypass is supported on both layouts in MANUAL at 0.3 m/s.
+Four-module bypass still requires live FlexiSoft communication and all independent
+E-stop, STO, safety-enable, battery and drive checks; neither AUTO mode is allowed
+with Safety Disabled.
 
 ## Software verification
 
@@ -157,8 +172,10 @@ profile continues to require eight joints and four modules.
 
 Physical startup initializes controller modes/PDOs/ramps and enables with zero
 targets after external supervisor readiness. It acquires motion feedback after
-enable and requires it before driving. B2 requests fault reset and re-enable;
-it requires neutral controls and measured standstill. Physical mode does not set
+enable and requires it before driving. B2 toggles drive enable/disable through
+the supervisor. Enabling/recovery requires healthy neutral input and fresh
+sustained standstill or confirmed native disabled-drive states; disabling does
+not require neutral controls. B2 never clears or restarts the receiver. Physical mode does not set
 `virtual_position_source`, zero encoder reference or save controller settings. See
 [drive startup](drive_startup.md). The bundled two-module profile includes the
 captured PAIL assignment confirmed by the user: receiver 10, master 11, B1/SP3 and
@@ -186,3 +203,9 @@ Its explicit verified selector is the exception to the ordinary scanner gate:
 Safety Disabled permits MANUAL at at most 0.3 m/s without scanner-field readiness;
 Safety Enabled restores the normal scanner gate. It does not bypass STOP,
 receiver faults, battery/drive readiness, or the independent hardware STO chain.
+
+For a four-module RP2 scanner-disabled test, use the verified four-module profile
+with `start_scanners:=false`, MANUAL selected and RP2 Safety Disabled. Keep
+`start_safety:=true` (the default): FlexiSoft communication and independent stops
+remain required. Returning RP2 to Safety Enabled requires valid scanner data,
+so motion is inhibited if scanner nodes were omitted.

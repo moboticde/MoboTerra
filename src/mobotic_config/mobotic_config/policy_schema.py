@@ -39,7 +39,7 @@ POLICY_TYPES = {
         "button_mode_switch": "integer",
         "mode_switch_type": "string",
         "mode_switch_manual_value": "integer",
-        "mode_switch_auto_velocity_value": "integer",
+        "mode_switch_autonomous_value": "integer",
         "mode_state_timeout": "number",
         "scale_linear": "number",
         "scale_angular": "number",

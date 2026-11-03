@@ -1,5 +1,6 @@
 #pragma once
 #include <chrono>
+#include <cstdint>
 
 // One supervised startup attempt per explicit recovery cycle. Motion feedback is an
 // outcome of enable, never a prerequisite for starting this bounded attempt.
@@ -21,8 +22,16 @@ public:
   void finish() { if (active()) { complete_ = true; } }
   void fail() { if (started_) { failed_ = true; complete_ = false; } }
   // Only an explicitly authorized fault-clear transaction may rearm startup.
-  void rearmAfterReset() { if (failed_) { started_ = complete_ = failed_ = false; } }
+  bool rearmAfterReset(uint64_t reset_id)
+  {
+    if (!failed_ || reset_id == 0 || reset_id <= last_recovery_id_) { return false; }
+    last_recovery_id_ = reset_id;
+    started_ = complete_ = failed_ = false;
+    return true;
+  }
+  void newSupervisor() { last_recovery_id_ = 0; }
 private:
   bool started_{false}, complete_{false}, failed_{false};
+  uint64_t last_recovery_id_{0};
   Clock::time_point started_at_{};
 };

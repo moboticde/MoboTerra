@@ -36,6 +36,17 @@ int main()
     for (const auto& request : {drive.readDeviceStateRequest(), drive.readErrorRegisterRequest(), drive.readErrorCodeRequest()})
     { for (const auto& reply : controller.handle(request)) { drive.update(reply); } }
     require(!drive.hasError() && drive.getErrorCode() == 0 && !drive.enableFromObservedState().empty(), "B2 reset allows a new enable sequence");
+    auto history = controller.handle(drive.readErrorCodeRequest()).front();
+    shortToFrame(history, 4, static_cast<short>(0xff10));
+    drive.update(history);
+    require(drive.getErrorCode() == 0xff10 && !drive.hasError() && drive.activeErrorCode() == 0 &&
+            !drive.enableFromObservedState().empty(), "retained 0x603F history does not block an otherwise healthy drive");
+    auto active_fault = controller.handle(drive.readDeviceStateRequest()).front();
+    shortToFrame(active_fault, 4, 0x0008);
+    drive.update(active_fault);
+    require(drive.hasError() && drive.activeErrorCode() != 0 && drive.enableFromObservedState().empty(),
+            "native DS402 fault state blocks enable even before the error-register poll updates");
+    for (const auto& response : controller.handle(drive.readDeviceStateRequest())) { drive.update(response); }
     controller.handle(drive.setDeviceModeRequest(CURRENT));
     for (const auto& reply : controller.handle(drive.readDeviceModeRequest())) { drive.update(reply); }
     require(!drive.initialized() && drive.enableFromObservedState().empty(), "incompatible installed mode blocks enable without rewriting it");
@@ -65,6 +76,12 @@ int main()
     channel.cancelWrites(true);
     sent = channel.next(.1, now);
     require(sent && shortFromFrame(*sent, 4) == 0x80, "repeated disable must preserve an explicit pending B2 reset");
+    require(channel.faultResetPending(), "reset pulse remains pending until its SDO exchange completes");
+    auto reset_reply = controller.handle(*sent).front();
+    require(channel.receive(reset_reply), "fault reset write is acknowledged independently of fault polling");
+    require(!channel.faultResetPending(), "reset pulse may be released before error registers become zero");
+    channel.push(drive.clearErrorRequest(NO_OPERATION), now);
+    require(!channel.faultResetPending(), "reset release is not a new asserted reset pulse");
     channel.clear();
     channel.push(drive.setTargetRequest(EC_TRACTION_VELOCITY_INPUT, 100), now);
     channel.push(drive.setTargetRequest(EC_TRACTION_VELOCITY_INPUT, 200), now);

@@ -47,7 +47,7 @@ Docker or C++ compiler, so the complete build and virtual smoke run remain open.
 | --- | --- |
 | `manual/cmd_vel`, `manual/state` | `operator/cmd_vel`, `operator/state` |
 | `vehicle/mode_request`, `vehicle/mode_state` | `operator/mode_request`, `vehicle/mode` |
-| MANUAL, AUTO_VELOCITY, AUTO_DIRECT | MANUAL, AUTONOMOUS, KINEMATICOFF, automatic SAFETY/ERROR, initial UNKNOWN |
+| Three selectable control modes | MANUAL, AUTONOMOUS, KINEMATICOFF, automatic SAFETY/ERROR, initial UNKNOWN |
 | `cmd_vel`, `agv_vel`, `odometry`, `odometry/reset` | `vehicle/cmd_vel`, `vehicle/measured_velocity`, `vehicle/odom`, `vehicle/reset_odometry` |
 | Two driver joint-command subscriptions | Supervisor owns one final `wheel_modules/command` motion array |
 | Management on `wheel_modules/command` | Management on internal `wheel_modules/operation_command` |
@@ -57,8 +57,7 @@ Docker or C++ compiler, so the complete build and virtual smoke run remain open.
 | ARM64 and baked YAML in pulled deployment | Saved update adds AMD64 and mounted configuration/state; merge remains necessary |
 
 These names are relative to the robot namespace, normally `/moboterra`.
-Numeric aliases AUTO_VELOCITY=1 and AUTO_DIRECT=2 remain in the updated message
-definitions, but the public mode names are AUTONOMOUS and KINEMATICOFF.
+The mode constants are MANUAL=0, AUTONOMOUS=1 and KINEMATICOFF=2.
 
 ## Release constraints that must remain visible
 

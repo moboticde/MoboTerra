@@ -14,8 +14,8 @@ class ModeRoutingTest(unittest.TestCase):
     def test_direct_selection_has_no_extra_permission_gate(self):
         source = (PACKAGES / 'mobotic_supervisor/mobotic_supervisor/supervisor.py').read_text()
         config = (PACKAGES / 'mobotic_config/config/supervisor.yaml').read_text()
-        self.assertNotIn('allow_auto_direct', source)
-        self.assertNotIn('allow_auto_direct', config)
+        self.assertNotIn('allow_kinematicoff', source)
+        self.assertNotIn('allow_kinematicoff', config)
 
     def test_usb_logitech_defaults_match_standardized_layout_and_no_face_buttons(self):
         source = (PACKAGES / 'mobotic_manual_control/mobotic_manual_control/manual_control.py').read_text()
@@ -24,7 +24,7 @@ class ModeRoutingTest(unittest.TestCase):
         defaults = {call.args[0].value: ast.literal_eval(call.args[1]) for call in ast.walk(tree)
                     if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
                     and call.func.attr == 'declare_parameter' and len(call.args) == 2}
-        keys = ('button_mode_switch', 'mode_switch_manual_value', 'mode_switch_auto_velocity_value')
+        keys = ('button_mode_switch', 'mode_switch_manual_value', 'mode_switch_autonomous_value')
         self.assertEqual([defaults[key] for key in keys], [4, 0, 1])
         for key in keys:
             self.assertRegex(config, rf'(?m)^\s*{key}: {defaults[key]}(?:\s+#.*)?$')
@@ -41,7 +41,7 @@ class ModeRoutingTest(unittest.TestCase):
             self.assertIn("get('usb_driver', 'game_controller_node')", wiring)
             self.assertIn("cfg.platform['usb_joystick']", wiring)
         self.assertFalse(Configuration().platform['usb_joystick']['sticky_buttons'])
-        for removed in ('button_mode_manual', 'button_mode_auto_velocity', 'button_mode_auto_direct'):
+        for removed in ('button_mode_manual', 'button_mode_autonomous', 'button_mode_kinematicoff'):
             self.assertNotIn(removed, defaults)
         self.assertIn("VehicleModeRequest, 'operator/mode_request'", source)
 

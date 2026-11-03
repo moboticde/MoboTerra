@@ -75,7 +75,7 @@ class Publisher:
         self.messages.append(message)
 
 
-MODES = SimpleNamespace(MANUAL=0, AUTONOMOUS=1, KINEMATICOFF=2, AUTO_VELOCITY=1, AUTO_DIRECT=2, SAFETY=3, ERROR=4, UNKNOWN=255)
+MODES = SimpleNamespace(MANUAL=0, AUTONOMOUS=1, KINEMATICOFF=2, SAFETY=3, ERROR=4, UNKNOWN=255)
 SOURCE = Path(__file__).resolve().parents[1] / 'mobotic_supervisor' / 'supervisor.py'
 tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
 supervisor_class = next(
@@ -189,7 +189,7 @@ class EnableGateTest(unittest.TestCase):
 
     def test_soc_boundary_and_invalid_values(self):
         for soc, expected in [
-            (0.199, False), (0.2, True), (0.201, True), (1.0, True),
+            (0.0, True), (0.199, True), (0.2, True), (0.201, True), (1.0, True),
             (math.nan, False), (math.inf, False), (-0.1, False), (1.1, False),
         ]:
             with self.subTest(soc=soc):
@@ -277,7 +277,7 @@ class EnableGateTest(unittest.TestCase):
         self.node._control()
         self.assertEqual(
             [msg.enable for msg in self.node.module_command_publisher.messages],
-            [False, True, False],
+            [False, True, True],
         )
 
     def test_control_disables_during_mode_transition(self):
@@ -285,7 +285,7 @@ class EnableGateTest(unittest.TestCase):
         self.node.transition_started_at = self.now
         self.node.transition_duration = 0.25
         self.node.transition_from_direct = False
-        self.node.requested_mode = MODES.AUTO_VELOCITY
+        self.node.requested_mode = MODES.AUTONOMOUS
         self.node.safety_state.motion_permitted = False
         self.node._control()
         self.assertFalse(self.node.module_command_publisher.messages[-1].enable)

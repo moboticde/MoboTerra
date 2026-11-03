@@ -89,7 +89,7 @@ class VelocityFrameTest(unittest.TestCase):
     def test_source_gate_rechecks_cached_velocity_frame(self):
         for mode, callback_name in (
             (harness.MODES.MANUAL, '_manual_command_callback'),
-            (harness.MODES.AUTO_VELOCITY, '_autonomy_command_callback'),
+            (harness.MODES.AUTONOMOUS, '_autonomy_command_callback'),
         ):
             with self.subTest(mode=mode):
                 self.setUp()

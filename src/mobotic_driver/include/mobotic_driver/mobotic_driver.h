@@ -112,6 +112,9 @@ private:
   std::set<std::string> retired_authorities_;
   std::map<std::string, double> accepted_traction_targets_;
   int64_t sync_stamp_ns_{0}, published_cycle_ns_{0};
+  double traction_pdo_period_{0.02};
+  ManagementLease::Clock::time_point last_physical_pdo_cycle_{};
+  std::vector<can_msgs::msg::Frame> last_physical_pdo_commands_;
   int64_t last_final_stamp_ns_{0};
   bool virtual_position_source_{false};
   bool controller_control_started_{false};

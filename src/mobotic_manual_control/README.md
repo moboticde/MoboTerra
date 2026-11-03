@@ -79,7 +79,7 @@ default outside the virtual CAN launch.
 | Right stick horizontal | axis 2 | Left/right crab translation, no yaw |
 | L1 / left shoulder | button 9 | Boost, temporary B1 role |
 | R1 / right shoulder | button 10 | Same boost; either shoulder works |
-| Back | button 4 | Toggle MANUAL (0) / AUTO_VELOCITY (1), temporary RP1 role |
+| Back | button 4 | Toggle MANUAL (0) / AUTONOMOUS (1), temporary RP1 role |
 | Left stick vertical, face buttons, Start, stick clicks, D-pad and triggers | unused | No assigned function |
 
 The two right-stick translation axes are independent. Left-stick yaw is proportional to
@@ -105,8 +105,8 @@ axes on the target Linux machine. Do not use this YAML with raw `joy_node` order
 
 Back's rising edge publishes `VehicleModeRequest` on `operator/mode_request`,
 independently of boost. It reads fresh `vehicle/mode`: MANUAL requests
-AUTO_VELOCITY, while AUTO_VELOCITY or AUTO_DIRECT requests MANUAL. It never requests
-AUTO_DIRECT. No local toggle state is assumed after terminal requests.
+AUTONOMOUS, while AUTONOMOUS or KINEMATICOFF requests MANUAL. It never requests
+KINEMATICOFF. No local toggle state is assumed after terminal requests.
 During a reported transition, or without fresh supervisor mode feedback, presses
 are ignored; release and press again after readiness. Holding does not repeat.
 Startup, timeout, invalid layout or reconnect primes the input, so an already-held
@@ -124,7 +124,7 @@ The supervisor stops the platform through the outgoing command path, verifies
 0.25 s measured standstill, then selects exactly one mode and waits for a new
 command. Requests use the same logic as terminal `vehicle/set_mode`; a request
 is not confirmation that the transition completed. Observe `vehicle/mode`.
-AUTO_DIRECT (2) is accepted only by `vehicle/set_mode`, not the mode-request topic:
+KINEMATICOFF (2) is accepted only by `vehicle/set_mode`, not the mode-request topic:
 
 ```bash
 ros2 service call /moboterra/vehicle/set_mode mobotic_interfaces/srv/SetVehicleMode "{requested_mode: 2}"
@@ -135,10 +135,13 @@ The physical USB mapping and stop behavior still require hardware validation.
 
 The CAN provider decodes the documented unsigned-magnitude/direction format and
 supports mapped B2 rising-edge requests to the supervisor's
-`wheel_modules/clear_errors`. If a receiver emergency is latched, B2 first
-verifies its error register is zero, then requires fresh neutral PDOs before
-requesting the supervisor reset. Active receiver faults remain inhibited;
-the stack stays running. See [receiver B2 recovery](../../docs/remdevice_commissioning.md#b2-acknowledgement-of-a-recovered-receiver-emergency).
+`wheel_modules/toggle_drives`. B2 disables enabled drives or cancels pending
+initialization without requiring neutral controls. Enabling requires fresh
+neutral controls, healthy receiver input and supervisor approval. It never
+reads or clears receiver error registers or restarts receiver communication.
+Held/reconnected B2 does not retry: release and press again. After a response,
+motion requires new neutral input. Active receiver faults remain inhibited;
+the stack stays running. See [B2 drive toggle](../../docs/remdevice_commissioning.md#b2-drive-enabledisable).
 RP2/STOP retain their independent safety functions.
 The provider never rewrites PDO mappings, node ID or bitrate. Its explicit
 commissioning service can send targeted NMT start; after mapping verification,

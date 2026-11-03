@@ -21,7 +21,7 @@ def configuration_report(cfg):
         'drive_can': platform['can']['drives'], 'battery_can': platform['can']['battery'],
         'modules': [module['name'] for module in platform['modules']],
         'safety_source': platform['safety'].get('source', 'flexisoft'),
-        'blockers': blockers, 'live_checked': False, 'software_ready': None,
+        'blockers': blockers, 'warnings': [], 'live_checked': False, 'software_ready': None,
         'hardware_verified': False,
         'commissioning_pending': platform.get('commissioning_pending', []),
     }
@@ -73,8 +73,14 @@ def live_report(cfg, samples, now_ns):
     if battery is not None and (not battery.communication_ok or not battery.system_ready or
             not battery.high_voltage_connected or battery.faulted_batteries or
             not math.isfinite(battery.minimum_percentage) or
-            not policy['minimum_battery_percentage'] <= battery.minimum_percentage <= 1):
+            not 0 <= battery.minimum_percentage <= 1):
         blockers.append('battery: ' + (battery.status_message or 'telemetry/HV/SOC/fault not ready'))
+
+    if (battery is not None and battery.communication_ok and battery.system_ready
+            and battery.high_voltage_connected and not battery.faulted_batteries
+            and math.isfinite(battery.minimum_percentage)
+            and 0 <= battery.minimum_percentage < policy['minimum_battery_percentage']):
+        result['warnings'].append('Battery SOC below warning threshold; advisory only')
 
     operator_required = result['operator_source'] == 'remdevice' or mode is None or mode.selected_mode == 0
     operator = fresh('operator/state', policy['manual_timeout']) if operator_required else None

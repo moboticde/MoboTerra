@@ -11,7 +11,7 @@ class DriveStartupTest(unittest.TestCase):
         node.safety_source = 'hardwired_sto'
         node.started_at = harness.Time(1)
         node.startup_grace = 0.0
-        node.selected_mode = harness.MODES.AUTO_VELOCITY
+        node.selected_mode = harness.MODES.AUTONOMOUS
         node.required_health_sources = ['kinematics']
         node.health_timeout = 0.3
         node.component_health = {}
@@ -166,12 +166,12 @@ class DriveStartupTest(unittest.TestCase):
         self.assertTrue(node.fault_codes)  # Recovery is not yet complete.
         self.assertFalse(node.motion_inputs_ready)
 
-    def test_reset_reenable_needs_every_ack_and_external_readiness(self):
+    def test_reset_reenable_needs_every_transaction_id_and_external_readiness(self):
         node = self.prepare_reset_without_motion_feedback()
-        node.wheel_status.modules[0].reset_acknowledged = False
+        node.wheel_status.modules[0].reset_id = 0
         node._control()
         self.assertFalse(node.module_command_publisher.messages[-1].enable)
-        node.wheel_status.modules[0].reset_acknowledged = True
+        node.wheel_status.modules[0].reset_id = node.reset_id
         node.battery_state.high_voltage_connected = False
         node._control()
         self.assertFalse(node.module_command_publisher.messages[-1].enable)

@@ -213,26 +213,13 @@ class FreshnessTest(unittest.TestCase):
         self.assertIsNone(self.rx.snapshot(self.now, consume=True))
         self.assertEqual(self.rx.reason, 'receiver EMCY is uncleared')
 
-    def test_acknowledgement_discards_pre_verification_inputs(self):
+    def test_fault_observation_never_clears_receiver_emergency(self):
         self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
-        emergency_stamp = self.now
-        self.pair()
-        self.assertTrue(self.rx.acknowledge_recovery(emergency_stamp, self.now + 1))
-        self.assertIsNone(self.rx.snapshot(self.now + 1))
-        self.now += 2
-        self.assertIsNotNone(self.pair())
-
-    def test_new_emergency_and_clock_rollback_reject_old_acknowledgement(self):
-        for rollback in (False, True):
-            self.setUp()
-            self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
-            stamp = self.now
-            if rollback:
-                self.now -= 1
-            else:
-                self.send(self.rx.emergency_id, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0], dt=1)
-            self.assertFalse(self.rx.acknowledge_recovery(stamp, self.now))
-            self.assertNotEqual(self.rx.emergency_register, 0)
+        for _ in range(3):
+            self.pair()
+            self.rx.recovery_snapshot(self.now)
+            self.assertEqual(self.rx.emergency_register, 0x11)
+            self.assertIsNone(self.rx.snapshot(self.now))
 
     def test_recovery_inputs_keep_normal_freshness_and_skew_limits(self):
         self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])

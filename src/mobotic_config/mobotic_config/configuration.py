@@ -176,10 +176,13 @@ def validate_platform(platform):
             if not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}', can[bus]['interface']):
                 raise ConfigurationError('CAN interface must be a valid Linux device name (1..15 characters)')
             _number(can[bus]['bitrate'], 'CAN bitrate', positive=True, integer=True)
-        if can['drives']['interface'] == can['battery']['interface']:
-            raise ConfigurationError('drive and battery CAN interfaces must be separate')
         if type(can['battery']['listen_only']) is not bool:
             raise ConfigurationError('can.battery.listen_only must be boolean')
+        if can['drives']['interface'] == can['battery']['interface']:
+            if can['drives']['bitrate'] != can['battery']['bitrate']:
+                raise ConfigurationError('shared drive and battery CAN interface requires matching bitrates')
+            if can['battery']['listen_only']:
+                raise ConfigurationError('shared drive and battery CAN interface cannot be listen-only')
         modules = platform['modules']
         if not isinstance(modules, list) or not 2 <= len(modules) <= len(MODULE_NAMES):
             raise ConfigurationError('modules must contain two to four powered steering/traction modules')
@@ -287,9 +290,8 @@ def validate_platform(platform):
         safety = platform['safety']
         safety_source = safety.get('source', 'flexisoft')
         override = operator.get('mapping', {}).get('buttons', {}).get('scanner_override')
-        if override and (safety_source != 'hardwired_sto' or len(modules) != 2
-                         or operator['source'] != 'remdevice' or not operator['mapping']['verified']):
-            raise ConfigurationError('scanner override requires verified REMdevice controls on the two-module hardwired STO platform')
+        if override and (operator['source'] != 'remdevice' or not operator['mapping']['verified']):
+            raise ConfigurationError('scanner override requires verified REMdevice controls')
         if safety_source not in ('flexisoft', 'hardwired_sto'):
             raise ConfigurationError('safety.source must be flexisoft or hardwired_sto')
         mask_names = ('front_protective_ossd_mask', 'rear_protective_ossd_mask',
@@ -449,7 +451,12 @@ class Configuration:
                 'odometry': {'base_frame_id': frame, 'odom_frame_id': p['frames']['odom']}}
 
     def parameters(self, component):
-        return copy.deepcopy(self._parameters[component])
+        parameters = copy.deepcopy(self._parameters[component])
+        if component == 'supervisor':
+            # The health producer owns the measured-input deadline. Its
+            # consumer uses the same value, separately from report freshness.
+            parameters['health_input_timeout'] = self._parameters['diagnostics']['odometry_timeout']
+        return parameters
 
     def apply_overrides(self, component, values, *, legacy=False):
         if component not in self._parameters:
@@ -540,7 +547,7 @@ class Configuration:
             raise ConfigurationError('axis signs must be -1 or 1')
         if manual['mode_switch_type'] not in ('toggle', 'position'):
             raise ConfigurationError('mode_switch_type must be toggle or position')
-        if {manual['mode_switch_manual_value'], manual['mode_switch_auto_velocity_value']} != {0, 1}:
+        if {manual['mode_switch_manual_value'], manual['mode_switch_autonomous_value']} != {0, 1}:
             raise ConfigurationError('mode switch values must be distinct digital values 0 and 1')
         if manual['button_deadman'] < -1 or manual['button_mode_switch'] < -1:
             raise ConfigurationError('disabled button indices must be -1')
@@ -557,7 +564,7 @@ class Configuration:
             if not 0 <= manual[key] <= 1:
                 raise ConfigurationError(f'{key} must be in [0, 1]')
         supervisor = self._parameters['supervisor']
-        if supervisor['initial_mode'] not in ('manual', 'autonomous', 'kinematicoff', 'auto_velocity', 'auto_direct'):
+        if supervisor['initial_mode'] not in ('manual', 'autonomous', 'kinematicoff'):
             raise ConfigurationError('invalid initial_mode')
         if supervisor['warning_speed_limit'] <= 0:
             raise ConfigurationError('warning_speed_limit must be positive (m/s)')

@@ -82,7 +82,7 @@ class ManualSteeringTest(unittest.TestCase):
                 if case == 'moving_body': self.node.measured_velocity.twist.linear.x = 0.1
                 if case == 'stale_request':
                     self.node.manual_steering_requests[self.request.header.stamp] = (self.request, harness.Time(9.0))
-                if case == 'autonomy': self.node.selected_mode = harness.MODES.AUTO_VELOCITY
+                if case == 'autonomy': self.node.selected_mode = harness.MODES.AUTONOMOUS
                 if case == 'missing_feedback': self.node.measured_velocity = None
                 output = self.candidate(zero=case != 'moving_command',
                     source_stamp=self.request.header.stamp - 1 if case == 'different_sample' else None)

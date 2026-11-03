@@ -44,6 +44,22 @@ class InterfaceUpdateTest(unittest.TestCase):
         msg.velocity = [1.0, 1.0, 2.0, -3.0]
         return msg
 
+    def test_low_soc_warning_preserves_startup_and_motion_and_clears_on_recovery(self):
+        for soc in (0.0, .1, .199, .2, .8):
+            with self.subTest(soc=soc):
+                self.node.battery_state.minimum_percentage = soc
+                state = self.publish_state()
+                self.assertTrue(state.ready_to_drive)
+                self.assertTrue(state.motion_permitted)
+                self.assertFalse(state.error_active)
+                self.assertFalse(self.node.fault_codes)
+                self.assertEqual('LOW_BATTERY_SOC' in state.reason_codes, soc < .2)
+                self.assertEqual('advisory only' in state.status_message, soc < .2)
+        self.node.battery_received = harness.Time(9)
+        self.assertFalse(self.node._enable_gate(self.fixture.now)[0])
+        self.assertFalse(self.publish_state().ready_to_drive)
+        self.assertNotIn('LOW_BATTERY_SOC', self.publish_state().reason_codes)
+
     def test_safety_and_error_are_automatic_and_overlap_is_visible(self):
         self.node.safety_state.protective_stop_active = True
         self.node.safety_io_state.scanner_state_known = True

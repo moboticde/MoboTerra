@@ -177,7 +177,7 @@ class RemdeviceReceiver:
             return False
         self.samples[cob_id] = (stamp_ns, payload)
         if self.emergency_code or self.emergency_register:
-            # Keep fresh physical inputs observable for explicit B2 recovery.
+            # Keep fresh physical inputs observable for B2 drive disable.
             # snapshot() still denies every motion sample while the fault is latched.
             self.reason = 'receiver EMCY is uncleared'
             return False
@@ -206,18 +206,8 @@ class RemdeviceReceiver:
         return self._snapshot(now_ns, consume=consume)
 
     def recovery_snapshot(self, now_ns):
-        """Physical inputs for reset admission only; never authorize motion."""
+        """Physical inputs for observing B2 only; never authorize motion."""
         return self._snapshot(now_ns, consume=False)
-
-    def acknowledge_recovery(self, emergency_stamp_ns, now_ns):
-        """Caller must first verify a fresh, targeted 0x1001:0 zero reply."""
-        self._tick(now_ns)
-        if (type(emergency_stamp_ns) is not int or
-                self.last_stamps.get(self.emergency_id) != emergency_stamp_ns):
-            return False
-        self.emergency_code = self.emergency_register = 0
-        self.invalidate('receiver fault acknowledged; waiting for fresh PDOs', now_ns)
-        return True
 
     def _snapshot(self, now_ns, *, consume=False):
         self._tick(now_ns)

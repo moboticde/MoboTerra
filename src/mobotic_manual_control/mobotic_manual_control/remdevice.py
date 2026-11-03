@@ -46,20 +46,18 @@ class RemdeviceControl(ManualControl):
         self.buttons_boost = [9]
         self.button_mode_switch = 4
         self.mode_switch_type = 'position'
-        self.mode_switch_manual_value, self.mode_switch_auto_velocity_value = 0, 1
+        self.mode_switch_manual_value, self.mode_switch_autonomous_value = 0, 1
         self.button_deadman = 8 if self.mapping.verified and self.mapping.buttons['deadman'] else -1
         self.last_reset = None
         self.reset_future = None
         self.reset_observed_pair = None
-        self.receiver_recovery = None
-        self.receiver_reset_status = ''
+        self.drive_toggle_status = ''
         self.input_error = ''
         self.last_start_ns = None
         self.raw_publisher = self.create_publisher(String, 'operator/raw', 10)
         self.joy_publisher = self.create_publisher(Joy, 'joy', 10)
         self.selector_publisher = self.create_publisher(Joy, 'operator/scanner_selector', 1)
         self.can_publisher = self.create_publisher(Frame, 'can_tx', 10)
-        self.b2_toggle_enabled = True
         self.reset_client = self.create_client(Trigger, 'wheel_modules/toggle_drives')
         self.start_service = self.create_service(Trigger, 'operator/start_receiver', self._start_receiver)
         # Best-effort accepts both best-effort and reliable SocketCAN producers.
@@ -111,8 +109,7 @@ class RemdeviceControl(ManualControl):
         return self._healthy(now) and super()._joystick_connected(now)
 
     def _manual_enabled(self):
-        return (self.receiver_recovery is None
-                and (self.reset_future is None or self.reset_future.done())
+        return ((self.reset_future is None or self.reset_future.done())
                 and self._healthy(self.get_clock().now())
                 and super()._manual_enabled())
 
@@ -136,13 +133,9 @@ class RemdeviceControl(ManualControl):
         except ValueError:
             return False
 
-    def _fail_receiver_recovery(self, reason, now):
-        self.receiver_recovery = None
-        self.receiver_reset_status = 'B2 reset blocked: ' + reason
-        self._drop_input(now)
-        self.get_logger().warning(self.receiver_reset_status)
-
     def _observe_reset_button(self, now):
+        # B2 only requests a supervisor-owned drive toggle. Never read/clear
+        # receiver error registers or restart receiver communication here.
         sample = self._reset_sample(now)
         if sample is None:
             self.last_reset = None
@@ -157,100 +150,46 @@ class RemdeviceControl(ManualControl):
         pressed = self.mapping.button('reset', sample.digital)
         previous, self.last_reset = self.last_reset, pressed
         if (not pressed or previous is not False
-                or self.receiver_recovery is not None
                 or (self.reset_future is not None and not self.reset_future.done())):
             return
-        if (getattr(self, 'b2_toggle_enabled', False) and self._vehicle_mode_fresh(now)
-                and (getattr(self.vehicle_mode_state, 'drives_enabled', False)
-                     or getattr(self.vehicle_mode_state, 'reset_in_progress', False))):
-            # Disable is always admissible from a fresh physical B2 edge,
-            # including while controls are displaced or a receiver fault is set.
-            if self.reset_client.service_is_ready():
-                self._drop_input(now)
-                self.receiver_recovery = {'stage': 'supervisor'}
-                self.reset_future = self.reset_client.call_async(Trigger.Request())
-                self.reset_future.add_done_callback(self._reset_done)
+        if not self._vehicle_mode_fresh(now):
+            self.get_logger().warning('B2 drive toggle blocked: vehicle mode unavailable')
             return
-        if not self._reset_sample_neutral(sample):
-            return
-        self._drop_input(now)
-        self.receiver_recovery = {'stage': 'wait_operator', 'started_ns': now.nanoseconds,
-                                  'deadline_ns': now.nanoseconds + 1_000_000_000}
-        if self.decoder.emergency_code or self.decoder.emergency_register:
-            self.receiver_recovery.update(stage='verify_receiver',
-                emergency_stamp_ns=self.decoder.last_stamps.get(self.decoder.emergency_id))
-            request = Frame()
-            request.header.stamp = now.to_msg()
-            request.id, request.dlc = 0x600 + self.mapping.node_id, 8
-            request.data = [0x40, 0x01, 0x10, 0, 0, 0, 0, 0]
-            self.can_publisher.publish(request)
-            self.receiver_reset_status = 'B2: verifying receiver error register'
-
-    def _receiver_recovery_reply(self, frame, data, stamp_ns, now):
-        recovery = self.receiver_recovery
-        if (recovery is None or recovery['stage'] != 'verify_receiver'
-                or frame.id != 0x580 + self.mapping.node_id or frame.is_extended or frame.is_rtr
-                or frame.dlc != 8 or len(data) != 8 or data[1:4] != [0x01, 0x10, 0]
-                or any(type(value) is not int or not 0 <= value <= 255 for value in data)
-                or not recovery['started_ns'] <= stamp_ns <= now.nanoseconds
-                or now.nanoseconds - stamp_ns > int(self.joystick_timeout * 1e9)
-                or not recovery['started_ns'] <= now.nanoseconds <= recovery['deadline_ns']):
-            return
-        sample = self._reset_sample(now)
-        if sample is None or not self._reset_sample_neutral(sample):
-            self._fail_receiver_recovery('fresh neutral controls and released STOP required', now)
-        elif data[0] != 0x4f:
-            self._fail_receiver_recovery('receiver error-register read failed or malformed', now)
-        elif data[4] != 0:
-            self._fail_receiver_recovery(f'receiver error register is still 0x{data[4]:02x}', now)
-        elif not self.decoder.acknowledge_recovery(recovery['emergency_stamp_ns'], now.nanoseconds):
-            self._fail_receiver_recovery('receiver emergency changed during verification', now)
-        else:
-            self._drop_input(now)
-            self.reset_observed_pair = None
-            recovery.update(stage='wait_operator', started_ns=now.nanoseconds,
-                            deadline_ns=now.nanoseconds + 1_000_000_000)
-            self.receiver_reset_status = 'B2: receiver clear; waiting for fresh neutral input'
-
-    def _advance_receiver_recovery(self, now):
-        recovery = self.receiver_recovery
-        if recovery is None or recovery['stage'] == 'supervisor':
-            return
-        sample = self._reset_sample(now)
-        if (not recovery['started_ns'] <= now.nanoseconds <= recovery['deadline_ns']
-                or (sample is not None and not self._reset_sample_neutral(sample))):
-            self._fail_receiver_recovery('verification timed out or controls moved', now)
-            return
-        digital = self.decoder.digital(now.nanoseconds)
-        if digital is not None and not (digital['LINK'] and digital['EMGY'] and not digital['STOP']):
-            self._fail_receiver_recovery('receiver link or STOP interlock unavailable', now)
-            return
-        if recovery['stage'] != 'wait_operator' or sample is None:
-            return
-        if not self._healthy(now) or not self.controls_neutral:
-            return
+        active = (self.vehicle_mode_state.drives_enabled
+                  or self.vehicle_mode_state.reset_in_progress)
+        if not active:
+            if not self._healthy(now):
+                self.get_logger().warning('B2 enable blocked: receiver fault or input unavailable')
+                return
+            if not self._reset_sample_neutral(sample) or not self.controls_neutral:
+                self.get_logger().warning('B2 enable blocked: neutral controls required')
+                return
+            # Report the fresh neutral state before requesting zero-target
+            # initialization/enable. The supervisor validates every interlock.
+            super()._publish()
         if not self.reset_client.service_is_ready():
+            self.get_logger().warning('B2 drive toggle blocked: supervisor service unavailable')
             return
-        # Publish the verified neutral operator state before requesting the
-        # existing supervisor-owned standstill/disabled-drive reset transaction.
-        super()._publish()
-        recovery['stage'] = 'supervisor'
-        self.receiver_reset_status = 'B2: supervisor reset requested'
-        self.reset_future = self.reset_client.call_async(Trigger.Request())
-        self.reset_future.add_done_callback(self._reset_done)
+        self._drop_input(self.get_clock().now())
+        try:
+            self.drive_toggle_status = 'B2 drive toggle requested; completion not yet verified'
+            self.reset_future = self.reset_client.call_async(Trigger.Request())
+            self.reset_future.add_done_callback(self._reset_done)
+        except Exception as error:
+            self.reset_future = None
+            self.drive_toggle_status = ''
+            self.get_logger().error('B2 drive toggle request failed: ' + str(error))
 
     def _can_callback(self, frame):
         if not frame.is_error and (frame.is_extended or frame.is_rtr or frame.id not in {
                 self.decoder.digital_id, self.decoder.analog_id, self.decoder.heartbeat_id,
-                self.decoder.emergency_id, 0x580 + self.mapping.node_id}):
+                self.decoder.emergency_id}):
             return
         now = self.get_clock().now()
         if frame.is_error:
             self.decoder.invalidate('CAN error frame', now.nanoseconds)
             self._drop_input(now)
             self.last_reset = self.reset_observed_pair = None
-            if self.receiver_recovery is not None:
-                self._fail_receiver_recovery('CAN error during verification', now)
             return
         try:
             stamp = Time.from_msg(frame.header.stamp).nanoseconds
@@ -264,21 +203,18 @@ class RemdeviceControl(ManualControl):
         # ROS fixed-size uint8 arrays use NumPy scalars. Normalize at this
         # boundary; the protocol decoder deliberately validates Python bytes.
         data = frame.data.tolist() if hasattr(frame.data, 'tolist') else frame.data
-        self._receiver_recovery_reply(frame, data, stamp, now)
         before_epoch = self.decoder.epoch_ns
         accepted = self.decoder.update(frame.id, frame.dlc, data, stamp, now.nanoseconds,
                                        is_extended=frame.is_extended, is_rtr=frame.is_rtr, is_error=frame.is_error)
         if self.decoder.epoch_ns != before_epoch:
             self._drop_input(now)
             self.last_reset = self.reset_observed_pair = None
-            if self.receiver_recovery is not None:
-                self._fail_receiver_recovery('receiver input invalidated during verification', now)
         if (accepted and frame.id == self.decoder.digital_id):
             self.input_error = ''
         if not self._healthy(now):
             self._drop_input(now)
-        self._observe_reset_button(now)
         if not accepted or not self.mapping.verified:
+            self._observe_reset_button(self.get_clock().now())
             return
         sample = self.decoder.snapshot(now.nanoseconds, consume=True)
         if sample is None or not self._healthy(now):
@@ -313,7 +249,7 @@ class RemdeviceControl(ManualControl):
         self.joy_publisher.publish(joy)
         self._joy_callback(joy)
         self._publish_stationary_steering(joy, axes)
-        self._advance_receiver_recovery(self.get_clock().now())
+        self._observe_reset_button(self.get_clock().now())
 
     def _publish_stationary_steering(self, joy, axes):
         # A source request, never a direct motor command. The supervisor checks
@@ -344,15 +280,14 @@ class RemdeviceControl(ManualControl):
             # rclpy caches severity per call site. Separate sites are needed
             # when an accepted request is followed by a rejected request.
             if response.success:
-                self.get_logger().info('B2 supervisor reset: ' + response.message)
+                self.get_logger().info('B2 drive toggle: ' + response.message)
             else:
-                self.get_logger().warning('B2 supervisor reset: ' + response.message)
+                self.get_logger().warning('B2 drive toggle: ' + response.message)
         except Exception as error:
-            self.get_logger().error('B2 supervisor reset failed: ' + str(error))
+            self.get_logger().error('B2 drive toggle failed: ' + str(error))
         finally:
-            self.receiver_recovery = None
             self.reset_future = None
-            self.receiver_reset_status = ''
+            self.drive_toggle_status = ''
             self._drop_input(self.get_clock().now())
 
     def _operator_identity(self, state):
@@ -383,8 +318,8 @@ class RemdeviceControl(ManualControl):
                 state.status_message = 'receiver link/EMGY unavailable'
             else:
                 state.status_message = self.input_error or self.decoder.reason
-        if self.receiver_reset_status:
-            state.status_message = self.receiver_reset_status
+        if self.drive_toggle_status:
+            state.status_message = self.drive_toggle_status
 
     def _publish_selector(self, now):
         if not self.mapping.verified or not self.mapping.buttons.get('scanner_override'):
@@ -409,10 +344,9 @@ class RemdeviceControl(ManualControl):
             self._send_start()
         if not self._healthy(now):
             self._drop_input(now)
-        self._observe_reset_button(self.get_clock().now())
         super()._publish()
         self._publish_selector(self.get_clock().now())
-        self._advance_receiver_recovery(self.get_clock().now())
+        self._observe_reset_button(self.get_clock().now())
         raw = String()
         # The base publisher also checks decoder freshness with later clock
         # reads. Reusing the earlier timestamp would look like a clock rollback.
@@ -426,7 +360,7 @@ class RemdeviceControl(ManualControl):
             'status': self.input_error or self.decoder.reason,
             'receiver_error_code': self.decoder.emergency_code,
             'receiver_error_register': self.decoder.emergency_register,
-            'reset_status': self.receiver_reset_status,
+            'reset_status': self.drive_toggle_status,
         }, sort_keys=True)
         self.raw_publisher.publish(raw)
 

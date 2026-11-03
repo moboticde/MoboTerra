@@ -75,7 +75,8 @@ the same telegram binding to multiple packs. See the
 [battery commissioning procedure](../src/mobotic_vanguard_battery/README.md#battery-commissioning).
 SOC reference units are percent; `sensor_msgs/BatteryState.percentage` and
 `minimum_percentage` are fractions. Invalid/reserved values produce NaN and block
-readiness, not a clamped 100% SOC. The supervisor threshold remains 0.2 (20%).
+readiness, not a clamped 100% SOC. The 0.2 (20%) supervisor threshold is advisory only; valid low SOC does not
+block startup, motion or B2 recovery.
 
 Battery status, SOC and electrical freshness use nonzero `battery_can/can_rx.header.stamp`
 as acquisition time. Frames already older than `telemetry_timeout` (0.5 s) are
@@ -228,7 +229,7 @@ It does not directly subscribe to `joint_states`, `wheel_modules/status`,
 LaserScan loss raises stream diagnostics. Independently, the scanner adapter
 reads each scanner's evaluated application output paths from `raw_data`; both
 fresh `safety_zone_status` streams are supervisor motion prerequisites on every
-hardware profile. Red commands zero immediately, yellow ramps to a 0.3 m/s cap,
+hardware profile. Red commands zero immediately, yellow caps commands at 0.3 m/s,
 and clear fields remove that cap. Missing/unknown field telemetry inhibits
 motion. The physical safety chain remains independent. See
 [scanner telemetry and validity](../src/mobotic_safety/README.md).
@@ -430,7 +431,7 @@ use the configured acquisition-stamping bridge for hardware commissioning.
 On an isolated ROS/CAN test setup, submit an otherwise valid complete command
 with an unrepresentable steering angle on the last joint. No part of that batch
 may produce a CAN target write or renew the driver's motion watchdog. Repeat on
-both driver motion inputs. In selected `AUTO_DIRECT`, an invalid replacement on
+both driver motion inputs. In selected `KINEMATICOFF`, an invalid replacement on
 `autonomy/joint_setpoints` must clear the prior candidate and request zero
 velocity/current on the next supervisor cycle. Keep
 `direct_steering_encoder_resolutions` aligned with the driver's steering
@@ -481,12 +482,12 @@ Still pending: secured hardware validation of configuration/scaling and loss
 behavior, virtual-stack ROS runtime validation, an explicit fault-reset/retry policy,
 joystick fault-reset controls, the final REMdevice CANopen receiver/TPDO mapping,
 and ROS/hardware odometry/TF validation. The temporary F310/F710 USB profile uses
-Back to toggle MANUAL/AUTO_VELOCITY and no face buttons. Left stick horizontal
+Back to toggle MANUAL/AUTONOMOUS and no face buttons. Left stick horizontal
 steers; right stick translates/crabs. No held shoulder is required to drive;
 L1 or R1 boosts, with no stacking when both are pressed. Left-stick vertical is
 unused. Set the gamepad to XInput and verify axes/buttons on a secured platform.
 Joystick mode requests use the same verified stop/switch transitions as the terminal.
-AUTO_DIRECT is selectable only through `vehicle/set_mode`,
+KINEMATICOFF is selectable only through `vehicle/set_mode`,
 without an extra opt-in, and the driver rejects inactive-source setpoints using
 fresh mode authority. Test all mode pairs and mode-state loss on secured hardware.
 The updated

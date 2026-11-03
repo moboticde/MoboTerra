@@ -20,3 +20,13 @@ Legacy mode aliases and ManualControlState remain generated for source compatibi
 See the [supervisor contract](../../docs/supervisor_interfaces.md) and [implementation plan](../../docs/implementation_plan.md). Hardware safety remains independent.
 
 This package declares Apache-2.0. Retain package license/copyright notices and replace the placeholder maintainer address before release.
+
+`VehicleModeState.reason_codes` may include advisory `LOW_BATTERY_SOC` while
+`error_active` is false. Valid SOC below 20% warns without inhibiting startup,
+motion or B2 recovery; applications must use the explicit state flags rather
+than treating every reason code as a latched fault.
+
+`SAFETY_SELECTOR_MISMATCH` identifies fresh RP2 Safety Enabled conflicting with
+FlexiSoft override. It asserts `safety_stop_active`, clears `motion_permitted`
+and reports SAFETY, without latching ERROR by itself. The selected control mode
+is retained. Fresh command/manual-rearm requirements apply after it clears.

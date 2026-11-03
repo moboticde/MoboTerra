@@ -12,7 +12,7 @@ class SafetyVariantsTest(unittest.TestCase):
         self.node.safety_source = 'hardwired_sto'
         self.node.started_at = harness.Time(1.0)
         self.node.startup_grace = 0.0
-        self.node.selected_mode = harness.MODES.AUTO_VELOCITY
+        self.node.selected_mode = harness.MODES.AUTONOMOUS
 
     def no_plc(self):
         self.node.safety_state = self.node.safety_io_state = None
@@ -90,7 +90,7 @@ class SafetyVariantsTest(unittest.TestCase):
 
     def test_direct_mode_needs_real_joint_feedback_but_no_plc(self):
         self.no_plc()
-        self.node.selected_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.KINEMATICOFF
         for module in self.node.wheel_status.modules:
             module.enabled = True
         ready, reason = self.node._motion_hardware_gate(self.now)

@@ -123,6 +123,69 @@ class ResetRecoveryTest(unittest.TestCase):
         self.assertFalse(self.node.operator_drives_disabled)
         self.assertIsNotNone(self.node.reset_started_at)
 
+    def test_faulted_auto_can_return_to_manual_then_recover_with_rp2_disabled(self):
+        for mode in (harness.MODES.AUTONOMOUS, harness.MODES.KINEMATICOFF):
+            with self.subTest(mode=mode):
+                self.setUp()
+                node = self.node
+                node.operator_scanner_override_enabled = True
+                node.operator_selector = SimpleNamespace(
+                    header=SimpleNamespace(stamp=self.platform.now.to_msg(), frame_id=node.output_frame_id),
+                    buttons=[0] * 10 + [1])
+                node.operator_selector_received = self.platform.now
+                node.manual_state.source_id = 'remdevice'
+                node.selected_mode = node.requested_mode = mode
+                node.scanner_states = {}
+                node.fault_codes = {'SCANNER_MONITOR_LOST:front_left', 'SCANNER_MONITOR_LOST:rear_right'}
+                self.assertFalse(self.request().success)
+                accepted, started, _ = node._request_mode(harness.MODES.MANUAL)
+                self.assertTrue(accepted)
+                self.assertFalse(started)
+                self.assertEqual(node.selected_mode, harness.MODES.MANUAL)
+                self.assertTrue(node.fault_codes)
+                self.assertFalse(node._source_gate(self.platform.now)[0])
+                self.assertTrue(node._toggle_drives_service(None, SimpleNamespace()).success)
+                for seconds in (11.1, 11.2, 11.45):
+                    self.inputs(seconds, enabled=True, motion=True, fault=0, ack=True)
+                    node.operator_selector.header.stamp = self.platform.now.to_msg()
+                    node.operator_selector_received = self.platform.now
+                    node._control()
+                self.assertIsNone(node.reset_started_at)
+                self.assertFalse(node.fault_codes)
+                self.assertIsNone(node.manual_command)
+                self.assertFalse(self.platform.states[-1][2])
+                self.assertEqual(node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
+                self.assertFalse(node._source_gate(self.platform.now)[0])
+
+    def test_faulted_manual_selection_requires_disabled_proof_and_no_known_motion(self):
+        for cause in ('enabled', 'stale_status', 'unknown_status', 'moving', 'reset_active'):
+            with self.subTest(cause=cause):
+                self.setUp()
+                node = self.node
+                node.selected_mode = node.requested_mode = harness.MODES.AUTONOMOUS
+                if cause == 'enabled':
+                    node.wheel_status.modules[0].traction.enabled = True
+                elif cause == 'stale_status':
+                    node.wheel_status.modules[0].steering.status_stamp = 1
+                elif cause == 'unknown_status':
+                    node.wheel_status.modules[0].steering.status_known = False
+                elif cause == 'moving':
+                    self.inputs(11, motion=True)
+                    node.measured_velocity.twist.linear.x = .5
+                else:
+                    node.reset_started_at = self.platform.now
+                self.assertFalse(node._request_mode(harness.MODES.MANUAL)[0])
+                self.assertEqual(node.selected_mode, harness.MODES.AUTONOMOUS)
+                self.assertTrue(node.fault_codes)
+
+    def test_second_toggle_cancels_reset_and_latches_disable(self):
+        self.assertTrue(self.node._toggle_drives_service(None, SimpleNamespace()).success)
+        self.assertIsNotNone(self.node.reset_started_at)
+        self.assertTrue(self.node._toggle_drives_service(None, SimpleNamespace()).success)
+        self.assertIsNone(self.node.reset_started_at)
+        self.assertTrue(self.node.operator_drives_disabled)
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
+
     def test_failed_startup_admits_explicit_reset_with_fresh_disabled_states(self):
         self.inputs(11, enabled=False, motion=False, fault=0)
         for module in self.node.wheel_status.modules:
@@ -140,6 +203,41 @@ class ResetRecoveryTest(unittest.TestCase):
         operation = self.node.module_command_publisher.messages[-1]
         self.assertTrue(operation.enable)
         self.assertEqual(operation.reset_id, self.node.reset_id)
+
+    def test_accepted_recovery_initializes_before_fault_clear_without_permitting_joystick_motion(self):
+        self.inputs(11, enabled=False, motion=False, fault=0xff10)
+        self.assertTrue(self.request().success)
+        self.inputs(11.1, enabled=False, motion=False, fault=0xff10, ack=True)
+        for module in self.node.wheel_status.modules:
+            module.reset_acknowledged = False
+            module.startup_complete = False
+            module.startup_failed = True
+            module.initialized = False
+        self.node._control()
+        operation = self.node.module_command_publisher.messages[-1]
+        self.assertTrue(operation.enable)
+        self.assertEqual(operation.reset_id, self.node.reset_id)
+        self.assertFalse(self.node._reset_acknowledged(self.platform.now))
+        self.assertTrue(self.node.fault_codes)
+        self.assertIsNotNone(self.node.reset_started_at)
+        self.assertFalse(self.fixture.publish_state().motion_permitted)
+        command = harness.TwistStamped()
+        command.header.stamp = self.platform.now.to_msg()
+        command.twist.linear.x = .3
+        self.node._manual_command_callback(command)
+        self.assertIsNone(self.node.manual_command)
+        for final in self.node.final_command_publisher.messages:
+            self.assertTrue(all(m.traction_velocity == 0 and m.steering_profile_velocity == 0 for m in final.modules))
+
+    def test_accepted_recovery_with_drive_fault_still_requires_external_interlocks(self):
+        self.assertTrue(self.request().success)
+        self.inputs(11.1, fault=0xff10, ack=True)
+        for module in self.node.wheel_status.modules:
+            module.reset_acknowledged = False
+        self.node.manual_state.estop_pressed = True
+        self.node._control()
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
+        self.assertTrue(self.node.fault_codes)
 
     def test_each_native_disabled_state_must_be_known_fresh_and_match_topology(self):
         changes = (
@@ -179,11 +277,19 @@ class ResetRecoveryTest(unittest.TestCase):
                 self.assertIn('movement', self.request().message)
                 self.assertIsNone(self.node.reset_started_at)
 
+    def test_low_soc_does_not_block_b2_recovery(self):
+        for soc in (0.0, .1, .199, .2):
+            with self.subTest(soc=soc):
+                self.setUp()
+                self.node.battery_state.minimum_percentage = soc
+                self.assertTrue(self.node._toggle_drives_service(None, SimpleNamespace()).success)
+                self.assertIsNotNone(self.node.reset_started_at)
+
     def test_external_fault_stop_disconnect_or_deflected_controls_block_acceptance(self):
         changes = (
             lambda n: setattr(n.battery_state, 'high_voltage_connected', False),
             lambda n: setattr(n.battery_state, 'faulted_batteries', ['battery1']),
-            lambda n: setattr(n.battery_state, 'minimum_percentage', .1),
+            lambda n: setattr(n.battery_state, 'minimum_percentage', float('nan')),
             lambda n: setattr(n.manual_state, 'connected', False),
             lambda n: setattr(n.manual_state, 'estop_pressed', True),
             lambda n: setattr(n.manual_state, 'estop_state_known', False),

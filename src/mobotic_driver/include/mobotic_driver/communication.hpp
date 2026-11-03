@@ -600,7 +600,7 @@ public:
 
   std::vector<can_msgs::msg::Frame> enableFromObservedState() const
   {
-    if (!initialized() || hasError() || getErrorCode() != 0) { return {}; }
+    if (!initialized() || hasError()) { return {}; }
     if (!isTractionController()) { return enabled() ? std::vector<can_msgs::msg::Frame>{} : changeDeviceStateRequests(ENABLE); }
     if (!hasStatusword()) { return {}; }
     // Elmo DS402 manual, sections 6.4-6.6: advance one observed transition
@@ -825,7 +825,12 @@ public:
 
   bool enabled() const { return enabled_; }
   const FeedbackFreshness& feedbackFreshness() const { return feedback_freshness_; }
-  bool hasError() const { return error_ != 0; }
+  // Elmo DS402 0x603F records the last fault and can remain nonzero after
+  // recovery. Current error-register/statusword observations gate operation.
+  bool hasError() const
+  { return error_ != 0 || (isTractionController() && has_statusword_ && (statusword_ & 0x0008)); }
+  int activeErrorCode() const
+  { return !hasError() ? 0 : error_code_ != 0 ? error_code_ : error_ != 0 ? error_ : 1; }
   bool initialized() const { return initialized_ && current_mode_ == target_mode_; }
   bool hasStatusword() const { return has_statusword_; }
   unsigned short statusword() const { return statusword_; }

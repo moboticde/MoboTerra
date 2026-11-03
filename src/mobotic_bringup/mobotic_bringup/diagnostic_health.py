@@ -19,7 +19,7 @@ def battery_health(msg, minimum=0.2):
             not math.isfinite(msg.minimum_percentage) or not 0 <= msg.minimum_percentage <= 1):
         return ERROR, 'Battery not ready/invalid'
     if msg.minimum_percentage < minimum:
-        return WARN, 'SOC below enable threshold'
+        return WARN, 'Low SOC; warning only, startup and B2 recovery permitted'
     return OK, 'Battery ready'
 
 

@@ -103,8 +103,7 @@ are not measured end-to-end latency or guaranteed stopping times.
 | 4 | ERROR | Automatic required-system fault; latched until verified explicit reset |
 | 255 | UNKNOWN | Startup monitoring/readiness has not yet been established |
 
-Only 0/1/2 are selectable. AUTO_VELOCITY and AUTO_DIRECT remain numeric aliases
-for 1 and 2. A mode change blocks candidates, stops through the outgoing path
+Only MANUAL (0), AUTONOMOUS (1) and KINEMATICOFF (2) are selectable. A mode change blocks candidates, stops through the outgoing path
 and checks fresh body and all-joint standstill. Default proof duration is 0.25 s;
 limits are 0.02 m/s body translation, 0.02 rad/s yaw and 0.1 rad/s per joint.
 A 10 s timeout latches ERROR. Fresh commands are required after a completed
@@ -294,8 +293,8 @@ ScannerSafetyState provides communication, protective/warning clear state, OSSD
 state and corresponding known flags. On hardware the adapter reads evaluated
 application output paths from each scanner's `raw_data`, with validity checks
 and a 0.3 s deadline. Physical OSSD and field-set numbers remain unknown. The
-supervisor combines both scanners: red commands zero immediately; yellow ramps
-to an absolute 0.3 m/s cap; both clear remove the scanner cap. Missing/unknown
+supervisor combines both scanners: red commands zero immediately; yellow caps commands
+at an absolute 0.3 m/s; both clear remove the scanner cap. Missing/unknown
 field status blocks motion. This applies to manual, autonomous velocity and
 direct wheel commands, including the two-module hardware-STO profile. Virtual
 bringup explicitly uses mock safety I/O instead of hardware scanner messages.

@@ -138,7 +138,7 @@ Change:
 - Register the new types in src/mobotic_interfaces/CMakeLists.txt and package.xml.
 - Add the necessary policies to src/mobotic_config/config/*.yaml, mobotic_config/policy_schema.py and configuration.py; update configuration tests/baseline after intentional schema changes.
 
-Use MANUAL=0, AUTONOMOUS=1, KINEMATICOFF=2, SAFETY=3, ERROR=4 and UNKNOWN=255. Keep AUTO_VELOCITY=1 and AUTO_DIRECT=2 as deprecated source-level constant aliases. Use customer spelling KINEMATICOFF consistently.
+Use MANUAL=0, AUTONOMOUS=1, KINEMATICOFF=2, SAFETY=3, ERROR=4 and UNKNOWN=255. Use only these canonical mode constants; do not retain alternate aliases. Use customer spelling KINEMATICOFF consistently.
 
 VehicleModeState contains header, current_mode, selected_mode, requested_mode, transition_in_progress, motion_permitted, safety_stop_active, error_active, reset_in_progress, reset result/reason, drives_enabled, ready_to_drive, readiness-known/fresh information, a structured reason-code array and status_message. current_mode is the effective state; selected_mode is the active underlying command path; requested_mode is a pending target. Keep the old selection until a verified switch completes. Selectable values are only 0/1/2. Keep joystick requests limited to 0/1 and service requests accepting 0/1/2.
 

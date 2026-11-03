@@ -30,16 +30,39 @@ native SDO disable if PDO setup was incomplete. Failure is reported through
 failure. An explicit B2 enable press may clear faults using fresh disabled-drive
 status, then authorize a new bounded initialization/enable attempt. Ordinary
 enable requests cannot silently rearm a failed startup.
-Repeated supervisor requests do not extend the deadline. As in the example EC
-driver, reported initialization/enable errors trigger fault-clear retries every
+Repeated supervisor requests do not extend the deadline. Each explicit reset ID
+permits only one new startup attempt; cancellation
+requires a new reset transaction rather than repeating enable under the same ID.
+As in the example EC driver, reported initialization/enable errors trigger fault-clear retries every
 200 ms while supervisor enable remains granted. Retries stop on permission loss
 or startup failure; explicit B2 recovery remains necessary for latched runtime
 faults. The initial enable clears once on entry before the zero-target sequence.
+As in the example, a reported pre-existing fault does not suppress that initial
+zero-target enable sequence. It still prevents startup completion and motion
+until fresh fault-free, enabled feedback is acquired.
+
+For Elmo, `DriveStatus.error_code` retains object `0x603F` (the last fault,
+DS402 manual section 4.3). A nonzero historical code alone does not inhibit
+initialization, reset completion or motion. The current error register and
+native DS402 fault bit remain authoritative, with the normal freshness gates.
+`WheelModuleStatus.error_code` reports an active fault; the retained native code
+stays available in the nested drive diagnostics.
+
+Identical physical RPDO/SYNC cycles requested by repeated idle/stop callbacks
+are coalesced to `traction_pdo_period`. Changed traction targets or controlwords
+(including a new stop or enable/disable transition) bypass this coalescing.
+This keeps repeated inhibited authority from multiplying the configured CAN
+feedback rate and overloading downstream odometry on the host.
 
 The commissioned PAIL B2 uses `wheel_modules/toggle_drives` (Trigger): while
 enabled it requests disable, latched until the next press; while disabled it
 requests fault clearing followed by initialization and zero-target enable.
 Enable requires neutral fresh controls and the normal external interlocks.
+During an accepted reset, zero-velocity HOLD commands do not repeatedly disable
+the drives just because steering feedback has not resumed. The driver keeps
+zero targets while the matching reset ID, fresh enable lease and released
+safety stop authorize recovery. It never applies a steering position without
+fresh actual feedback. Outside that recovery, missing position still disables.
 Disable does not require neutral when fresh vehicle state confirms enabled
 drives. The public `wheel_modules/clear_errors` service remains a separate reset
 transaction and does not toggle the operator disable latch.
@@ -52,25 +75,32 @@ parameters, home an axis or change encoder reference. PDO configuration and
 operating settings now intentionally change to the selected platform profile.
 
 B2 uses the verified operator profile's `reset` input (the captured robot mapping
-uses SP4). Release B2 before pressing it; holding it during startup does not reset.
-Sticks must remain neutral and external interlocks must be ready. Admission
+uses SP4). Release B2 before pressing it; holding it during startup does not toggle.
+When drives are enabled or initialization is pending, B2 requests disable and
+latches it until another press. Disabling does not require neutral controls.
+For enabling/recovery, sticks must remain neutral and external interlocks must be ready. Admission
 requires either fresh sustained measured standstill or fresh individual native
 disabled states for every configured, initialized drive. Missing motion data
 never counts as standstill; known movement rejects the request. The disabled
 path allows fault clearing and zero-target feedback acquisition only.
 
-1. A new B2 press calls `wheel_modules/clear_errors` on the supervisor.
+1. A new B2 press calls `wheel_modules/toggle_drives` on the supervisor.
+   With drives disabled, it starts the following supervised drive recovery;
+   it never clears receiver errors or restarts receiver communication.
 2. The supervisor starts a bounded reset transaction, clears cached motion,
    retains its fault latch and requests disable. The driver independently
    checks admission and the active supervisor/reset ID before clearing anything.
 3. The driver disables the configured drives and sends Elmo fault reset 0x0080
    (MiControl uses its error-clear object).
-4. Fresh cleared error-register/code replies acknowledge each drive's reset;
-   the reset bit is released with 0x0000.
-5. After fresh fault-clearance acknowledgements from all expected modules,
-   external readiness and neutral controls permit zero-target enable to
-   reacquire motion feedback. Reset stays active and ordinary motion remains
-   blocked. Enabled, initialized, fault-free modules with valid fresh feedback
+4. After the reset write's serialized SDO exchange, the reset bit is released
+   with 0x0000. Release does not wait for the error register to become zero:
+   some faults need initialization/enable before they clear.
+5. Fresh matching reset IDs from all expected modules confirm that the driver
+   admitted the transaction. External readiness and neutral controls then permit
+   zero-target initialization/enable, including while the reported drive fault
+   remains present. Fresh cleared error-register/code replies separately
+   acknowledge fault clearance. Reset and ERROR stay active and ordinary motion
+   remains blocked. Enabled, initialized, fault-free modules with valid fresh feedback
    and a new 0.25 s sustained body/all-joint standstill proof complete recovery.
    Samples from before the reset cannot satisfy that proof; movement, invalid
    samples or a feedback gap restart it. B2 also re-enables disabled drives.
@@ -78,11 +108,14 @@ path allows fault clearing and zero-target feedback acquisition only.
    required before the robot moves.
 
 `vehicle/mode.reset_result` reports fault-clearance waiting, zero-target feedback
-acquisition, completion or timeout. The default reset deadline is 5 s. A timeout
+acquisition, completion or timeout. The default reset deadline is 20 s, covering
+the bounded 15 s driver startup and subsequent standstill proof. A timeout
 retains ERROR and requests disable; retries require a new explicit B2/service
 request. STOP, operator loss, low SOC, HV loss, required host/safety failures or
-deflected operator controls prevent recovery enable. A failed startup or
-controller reboot still requires investigation/restart rather than B2.
+deflected operator controls prevent recovery enable. A failed startup may be
+rearmed by this explicit transaction; ordinary enable publications cannot rearm
+it. Persistent receiver/drive faults still require diagnosis. PAIL/USB input
+topics remain observable in ERROR; forwarding motion requires completed recovery.
 
 The two-module `hardwired_sto` profile requires no Siemens Ethernet data. Its
 physical Siemens/scanner/STO circuit remains independent. Four-module profiles

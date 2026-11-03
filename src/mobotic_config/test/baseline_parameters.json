@@ -232,7 +232,7 @@
     "button_mode_switch": 4,
     "mode_switch_type": "toggle",
     "mode_switch_manual_value": 0,
-    "mode_switch_auto_velocity_value": 1,
+    "mode_switch_autonomous_value": 1,
     "mode_state_timeout": 0.5,
     "max_velocity_linear": 1.25,
     "max_velocity_angular": 1.51,

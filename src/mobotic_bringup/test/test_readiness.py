@@ -62,7 +62,7 @@ class ReadinessTest(unittest.TestCase):
                  ('wheel_modules/status', 'feedback_fresh', False),
                  ('wheel_modules/status', 'position_valid', False),
                  ('battery/system_state', 'high_voltage_connected', False),
-                 ('battery/system_state', 'minimum_percentage', .1),
+                 ('battery/system_state', 'minimum_percentage', float('nan')),
                  ('battery/system_state', 'faulted_batteries', ['battery1']),
                  ('operator/state', 'connected', False),
                  ('operator/state', 'estop_state_known', False),
@@ -74,6 +74,14 @@ class ReadinessTest(unittest.TestCase):
             setattr(record, field, value)
             report = live_report(self.cfg, samples, 10_000_000_000)
             self.assertFalse(report['software_ready'], (key, field))
+
+    def test_low_soc_is_a_warning_without_blocking_readiness(self):
+        for soc in (0.0, .1, .199, .2):
+            with self.subTest(soc=soc):
+                self.samples['battery/system_state'][0].minimum_percentage = soc
+                report = live_report(self.cfg, self.samples, 10_000_000_000)
+                self.assertTrue(report['software_ready'], report['blockers'])
+                self.assertEqual(bool(report['warnings']), soc < .2)
 
     def test_duplicate_or_missing_modules_are_rejected(self):
         self.samples['wheel_modules/status'][0].modules[1].name = 'front_right'

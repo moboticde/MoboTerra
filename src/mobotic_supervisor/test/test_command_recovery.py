@@ -13,7 +13,7 @@ class CommandRecoveryTest(unittest.TestCase):
         self.platform.setUp()
         self.node = self.platform.node
         del self.node._source_gate
-        self.node.selected_mode = harness.MODES.AUTO_VELOCITY
+        self.node.selected_mode = harness.MODES.AUTONOMOUS
         self.node.direct_traction_control_mode = 'velocity'
         self.node.max_direct_steering_velocity = 4.32
         self.node.max_direct_traction_velocity = 11.12
@@ -58,7 +58,7 @@ class CommandRecoveryTest(unittest.TestCase):
         self.assertFalse(self.node._source_gate(self.platform.now)[0])
 
     def test_only_selected_source_is_forwarded_when_all_sources_publish(self):
-        for mode in (harness.MODES.MANUAL, harness.MODES.AUTO_VELOCITY, harness.MODES.AUTO_DIRECT):
+        for mode in (harness.MODES.MANUAL, harness.MODES.AUTONOMOUS, harness.MODES.KINEMATICOFF):
             with self.subTest(mode=mode):
                 self.setUp()
                 self.node.selected_mode = mode
@@ -71,8 +71,8 @@ class CommandRecoveryTest(unittest.TestCase):
                 self.node._publish_direct = lambda source, *args: outputs.append(('direct', source))
                 self.node._control()
                 selected = {harness.MODES.MANUAL: ('velocity', manual),
-                            harness.MODES.AUTO_VELOCITY: ('velocity', automatic),
-                            harness.MODES.AUTO_DIRECT: ('direct', direct)}[mode]
+                            harness.MODES.AUTONOMOUS: ('velocity', automatic),
+                            harness.MODES.KINEMATICOFF: ('direct', direct)}[mode]
                 self.assertEqual(len(outputs), 1)
                 self.assertEqual(outputs[0][0], selected[0])
                 self.assertIs(outputs[0][1], selected[1])
@@ -92,7 +92,7 @@ class CommandRecoveryTest(unittest.TestCase):
         return command
 
     def test_velocity_recovery_requires_new_original_source_command(self):
-        for mode in (harness.MODES.MANUAL, harness.MODES.AUTO_VELOCITY):
+        for mode in (harness.MODES.MANUAL, harness.MODES.AUTONOMOUS):
             with self.subTest(mode=mode):
                 self.setUp()
                 node = self.node
@@ -125,7 +125,7 @@ class CommandRecoveryTest(unittest.TestCase):
             with self.subTest(traction_mode=traction_mode):
                 self.setUp()
                 node = self.node
-                node.selected_mode = harness.MODES.AUTO_DIRECT
+                node.selected_mode = harness.MODES.KINEMATICOFF
                 node.direct_traction_control_mode = traction_mode
                 old = self.joints()
                 node._autonomy_joint_callback(old)
@@ -190,7 +190,7 @@ class CommandRecoveryTest(unittest.TestCase):
                 self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
 
     def test_direct_safety_override_recovery_requires_new_command(self):
-        self.node.selected_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.KINEMATICOFF
         self.node._autonomy_joint_callback(self.joints())
         self.node.safety_state.safety_override_active = True
         self.node._control()
@@ -201,7 +201,7 @@ class CommandRecoveryTest(unittest.TestCase):
         self.assertIsNone(self.node.autonomy_joint_command)
 
     def test_direct_joint_feedback_recovery_requires_new_command(self):
-        self.node.selected_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.KINEMATICOFF
         self.node._autonomy_joint_callback(self.joints())
         invalid = harness.JointState()
         invalid.header.stamp = self.platform.now.to_msg()

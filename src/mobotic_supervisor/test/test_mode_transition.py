@@ -91,10 +91,56 @@ class ModeTransitionTest(unittest.TestCase):
         self.feedback(**feedback)
         self.node._control()
 
-    def request(self, mode=harness.MODES.AUTO_VELOCITY):
+    def request(self, mode=harness.MODES.AUTONOMOUS):
         accepted, started, _ = self.node._request_mode(mode)
         self.assertTrue(accepted)
         self.assertTrue(started)
+
+    def selector(self, active):
+        node = self.node
+        node.operator_scanner_override_enabled = True
+        node.require_operator_interlock = True
+        node.safety_source = 'hardwired_sto'
+        node.manual_state = SimpleNamespace(
+            header=SimpleNamespace(stamp=self.now.to_msg()), source_id='remdevice',
+            connected=True, estop_state_known=True, estop_pressed=False)
+        node.manual_state_received = self.now
+        node.operator_selector = SimpleNamespace(
+            header=SimpleNamespace(stamp=self.now.to_msg(), frame_id=node.output_frame_id),
+            buttons=[0] * 10 + [int(active)])
+        node.operator_selector_received = self.now
+
+    def test_auto_selection_requires_fresh_rp2_safety_enabled(self):
+        for mode in (harness.MODES.AUTONOMOUS, harness.MODES.KINEMATICOFF):
+            for selector in ('disabled', 'stale', 'missing', 'invalid', 'enabled'):
+                with self.subTest(mode=mode, selector=selector):
+                    self.setUp()
+                    self.selector(selector == 'disabled')
+                    if selector == 'stale':
+                        self.node.operator_selector.header.stamp = harness.Time(9).to_msg()
+                    elif selector == 'missing':
+                        self.node.operator_selector = None
+                    elif selector == 'invalid':
+                        self.node.operator_selector.buttons[-1] = 2
+                    accepted, started, _ = self.node._request_mode(mode)
+                    self.assertEqual(accepted, selector == 'enabled')
+                    self.assertEqual(started, selector == 'enabled')
+                    self.assertEqual(self.node.selected_mode, harness.MODES.MANUAL)
+
+    def test_rp2_disable_during_auto_transition_cancels_before_source_change(self):
+        for mode in (harness.MODES.AUTONOMOUS, harness.MODES.KINEMATICOFF):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.selector(False)
+                self.request(mode)
+                self.advance(.01)
+                self.selector(True)
+                self.advance(.25)
+                self.assertEqual(self.node.selected_mode, harness.MODES.MANUAL)
+                self.assertFalse(self.node.transition_in_progress)
+                self.assertFalse(self.states[-1][2])
+                self.assertIsNone(self.node.autonomy_command)
+                self.assertIsNone(self.node.autonomy_joint_command)
 
     def test_moving_vehicle_does_not_switch_after_old_fixed_delay(self):
         self.request()
@@ -125,7 +171,7 @@ class ModeTransitionTest(unittest.TestCase):
         for _ in range(21):
             self.advance(0.1)
         self.advance(0.3)
-        self.assertEqual(self.node.selected_mode, harness.MODES.AUTO_VELOCITY)
+        self.assertEqual(self.node.selected_mode, harness.MODES.AUTONOMOUS)
 
     def test_standstill_hold_completes_only_with_new_feedback(self):
         self.request()
@@ -134,7 +180,7 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertTrue(self.node.transition_in_progress)
         self.advance(0.05)
         self.assertFalse(self.node.transition_in_progress)
-        self.assertEqual(self.node.selected_mode, harness.MODES.AUTO_VELOCITY)
+        self.assertEqual(self.node.selected_mode, harness.MODES.AUTONOMOUS)
         self.assertFalse(self.states[-1][2])
 
     def test_motion_resets_standstill_hold(self):
@@ -224,7 +270,7 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertTrue(self.node.transition_in_progress)
         self.assertEqual(self.node.selected_mode, harness.MODES.MANUAL)
         self.assertIn('timed out', self.states[-1][3])
-        accepted, _, _ = self.node._request_mode(harness.MODES.AUTO_VELOCITY)
+        accepted, _, _ = self.node._request_mode(harness.MODES.AUTONOMOUS)
         self.assertFalse(accepted)  # Timeout is now latched until explicit reset.
         self.assertIn('MODE_TRANSITION_TIMEOUT', self.node.fault_codes)
 
@@ -239,7 +285,7 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertTrue(self.node.transition_in_progress)
 
     def test_direct_mode_stop_uses_only_direct_joint_input(self):
-        self.node.selected_mode = harness.MODES.AUTO_DIRECT
+        self.node.selected_mode = harness.MODES.KINEMATICOFF
         self.request(harness.MODES.MANUAL)
         self.node._control()
         self.assertFalse(self.node.cmd_vel_publisher.messages)
@@ -267,20 +313,20 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertIs(self.node.autonomy_command, new)
 
     def test_entering_direct_mode_stops_through_existing_velocity_path(self):
-        self.request(harness.MODES.AUTO_DIRECT)
+        self.request(harness.MODES.KINEMATICOFF)
         self.node._control()
         self.assertTrue(self.node.cmd_vel_publisher.messages)
         self.assertFalse(self.node.direct_command_publisher.messages)
         self.advance(0.25)
-        self.assertEqual(self.node.selected_mode, harness.MODES.AUTO_DIRECT)
+        self.assertEqual(self.node.selected_mode, harness.MODES.KINEMATICOFF)
 
     def test_timeout_is_latched_before_any_mode_request_can_retry(self):
         self.request()
         self.advance(10.0)
         # No intervening control tick may be needed to latch the fault.
         self.assertIn('MODE_TRANSITION_TIMEOUT', self.node.fault_codes)
-        for requested in (harness.MODES.MANUAL, harness.MODES.AUTO_VELOCITY,
-                          harness.MODES.AUTO_DIRECT):
+        for requested in (harness.MODES.MANUAL, harness.MODES.AUTONOMOUS,
+                          harness.MODES.KINEMATICOFF):
             accepted, started, reason = self.node._request_mode(requested)
             self.assertFalse(accepted or started)
             self.assertIn('reset faults', reason)
@@ -295,19 +341,19 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertFalse(self.states[-1][2])
 
     def test_conflicting_requests_cannot_select_two_modes_during_transition(self):
-        self.request(harness.MODES.AUTO_DIRECT)
-        accepted, started, _ = self.node._request_mode(harness.MODES.AUTO_VELOCITY)
+        self.request(harness.MODES.KINEMATICOFF)
+        accepted, started, _ = self.node._request_mode(harness.MODES.AUTONOMOUS)
         self.assertFalse(accepted)
         self.assertFalse(started)
         self.assertEqual(self.node.selected_mode, harness.MODES.MANUAL)
-        self.assertEqual(self.node.requested_mode, harness.MODES.AUTO_DIRECT)
+        self.assertEqual(self.node.requested_mode, harness.MODES.KINEMATICOFF)
 
     def test_topic_and_service_requests_share_stop_before_switch_path(self):
         for via_service in (False, True):
             with self.subTest(via_service=via_service):
                 self.setUp()
                 request = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()),
-                                          requested_mode=harness.MODES.AUTO_VELOCITY)
+                                          requested_mode=harness.MODES.AUTONOMOUS)
                 if via_service:
                     response = self.node._set_mode_service(request, SimpleNamespace())
                     self.assertTrue(response.accepted)
@@ -319,12 +365,12 @@ class ModeTransitionTest(unittest.TestCase):
                 self.assertTrue(self.node.transition_in_progress)
                 self.advance(0.02)
                 self.advance(0.25)
-                self.assertEqual(self.node.selected_mode, harness.MODES.AUTO_VELOCITY)
+                self.assertEqual(self.node.selected_mode, harness.MODES.AUTONOMOUS)
                 self.assertFalse(self.node.transition_in_progress)
 
-    def test_auto_direct_is_rejected_on_topic_but_available_through_service(self):
+    def test_kinematicoff_is_rejected_on_topic_but_available_through_service(self):
         request = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()),
-                                  requested_mode=harness.MODES.AUTO_DIRECT)
+                                  requested_mode=harness.MODES.KINEMATICOFF)
         self.node._mode_request_callback(request)
         self.assertFalse(self.node.transition_in_progress)
         self.assertEqual(self.node.selected_mode, harness.MODES.MANUAL)
@@ -333,11 +379,11 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertTrue(response.transition_started)
         self.node._control()
         self.advance(0.25)
-        self.assertEqual(self.node.selected_mode, harness.MODES.AUTO_DIRECT)
+        self.assertEqual(self.node.selected_mode, harness.MODES.KINEMATICOFF)
 
     def test_all_mode_pairs_require_standstill_before_switching(self):
-        for old in (harness.MODES.MANUAL, harness.MODES.AUTO_VELOCITY, harness.MODES.AUTO_DIRECT):
-            for new in (harness.MODES.MANUAL, harness.MODES.AUTO_VELOCITY, harness.MODES.AUTO_DIRECT):
+        for old in (harness.MODES.MANUAL, harness.MODES.AUTONOMOUS, harness.MODES.KINEMATICOFF):
+            for new in (harness.MODES.MANUAL, harness.MODES.AUTONOMOUS, harness.MODES.KINEMATICOFF):
                 with self.subTest(old=old, new=new):
                     self.setUp()
                     self.node.selected_mode = old
@@ -354,7 +400,7 @@ class ModeTransitionTest(unittest.TestCase):
         self.node.manual_command = self.node.autonomy_command = harness.TwistStamped()
         self.node.autonomy_joint_command = harness.JointState()
         self.node.last_output = [0.5, 0.0, 0.0]
-        self.request(harness.MODES.AUTO_DIRECT)
+        self.request(harness.MODES.KINEMATICOFF)
         self.assertIsNone(self.node.manual_command)
         self.assertIsNone(self.node.autonomy_command)
         self.assertIsNone(self.node.autonomy_joint_command)

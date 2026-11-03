@@ -117,7 +117,7 @@ class SafetyMonitor(Node):
         state.protective_stop_active = not clear
         state.sto_active = active
         state.emergency_stop_active = state.safety_override_active = False
-        # Unknown warning-field state retains reduced speed and inhibits AUTO_DIRECT.
+        # Unknown warning-field state retains reduced speed and inhibits KINEMATICOFF.
         state.warning_field_active = True
         state.status_message = ('Siemens hardwired STO active' if active else
                                 'Siemens hardwired STO clear; individual scanner/E-stop signals unavailable' if clear else
