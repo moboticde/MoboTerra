@@ -82,6 +82,16 @@ default outside the virtual CAN launch.
 | Back | button 4 | Toggle MANUAL (0) / AUTONOMOUS (1), temporary RP1 role |
 | Left stick vertical, face buttons, Start, stick clicks, D-pad and triggers | unused | No assigned function |
 
+The supervisor bounds final MANUAL steering joint targets relative to their
+calibrated zero: Crab (right stick, zero yaw) stays within **-90 to +90 degrees**;
+Ackermann (left stick, nonzero yaw) and stationary left-paddle pre-steering stay
+within **-45 to +45 degrees**. A held stick keeps a fixed bounded target. Once
+feedback reaches it (within 0.001 rad), the steering profile velocity is zero.
+Equivalent wheel headings reverse traction instead of requesting another half
+or full turn. At an Ackermann limit, traction is projected onto the bounded
+heading, so saturation cannot increase wheel speed. Final commands continue
+refreshing the driver watchdog while the stick is held.
+
 The two right-stick translation axes are independent. Left-stick yaw is proportional to
 forward/reverse input, so it does not command stationary rotation. The supervisor
 still applies planar speed and safety limits. L1 or R1 boosts while held; pressing

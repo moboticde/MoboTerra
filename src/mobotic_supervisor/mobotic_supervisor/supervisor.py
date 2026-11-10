@@ -26,7 +26,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import JointState, Joy
 from std_srvs.srv import Trigger
 
-from .control_math import clamp, clamp_planar, slew, steering_position_representable
+from .control_math import bounded_steering_target, clamp, clamp_planar, slew, steering_position_representable
 
 
 class MoboticSupervisor(Node):
@@ -1790,8 +1790,35 @@ class MoboticSupervisor(Node):
         if entry[1] == WheelModuleCommandArray.MOTION and not self._source_gate(now)[0]:
             return
         msg = self._manual_stationary_candidate(msg, entry, now)
+        msg = self._bounded_manual_candidate(msg, entry, now)
         msg = self._aligned_manual_candidate(msg, entry, now)
         self._emit_final(msg, entry[2], now, entry[1])
+
+    def _bounded_manual_candidate(self, msg, entry, now):
+        if (self.selected_mode != VehicleModeState.MANUAL
+                or entry[1] != WheelModuleCommandArray.MOTION):
+            return msg
+        # Zero yaw is Crab; a yaw request is Ackermann. This decision belongs
+        # to the same velocity sample as the kinematics candidate.
+        limit = math.pi / 2.0 if len(entry) < 5 or entry[4] else math.pi / 4.0
+        output = copy.deepcopy(msg)
+        indices = {name: i for i, name in enumerate(output.name)}
+        feedback = (dict(zip(self.joint_state.name, self.joint_state.position))
+                    if self.joint_state is not None else {})
+        for steering, traction in zip(self.expected_steering_joint_names,
+                                      self.expected_traction_joint_names):
+            index = indices[steering]
+            original = output.position[index]
+            position = feedback.get(steering, 0.0)
+            target = bounded_steering_target(original, position, limit)
+            output.position[index] = target
+            # Reverse traction for an equivalent half-turn heading. At a
+            # saturated Ackermann angle, use the requested velocity's component
+            # along the bounded wheel heading instead of increasing its speed.
+            output.velocity[indices[traction]] *= math.cos(original - target)
+            if steering in feedback and abs(target - position) <= 1e-3:
+                output.velocity[index] = 0.0
+        return output
 
     def _aligned_manual_candidate(self, msg, entry, now):
         # A virtual zero-yaw translation starts only after all wheels face its
@@ -1845,11 +1872,13 @@ class MoboticSupervisor(Node):
         requested = {name: i for i, name in enumerate(request.name)}
         for name in self.expected_steering_joint_names:
             position = self.joint_state.position[feedback_indices[name]]
-            # A stationary wheel's heading is equivalent modulo pi. Select the
-            # closest angle so pre-steering cannot cause an unnecessary sweep.
-            output.position[indices[name]] = position + math.remainder(
-                request.position[requested[name]] - position, math.pi)
-            output.velocity[indices[name]] = request.velocity[requested[name]]
+            # Stationary left-stick pre-steering uses the same +/-45 degree
+            # absolute envelope as moving Ackermann steering.
+            target = bounded_steering_target(
+                request.position[requested[name]], position, math.pi / 4.0)
+            output.position[indices[name]] = target
+            output.velocity[indices[name]] = (0.0 if abs(target - position) <= 1e-3
+                                              else request.velocity[requested[name]])
         for name in self.expected_traction_joint_names:
             output.velocity[indices[name]] = 0.0
         return output if self._steering_positions_valid(output) else msg

@@ -24,3 +24,18 @@ def clamp_planar(x_value, y_value, maximum_magnitude):
 
 def slew(value, previous, maximum_delta):
     return clamp(value, previous - maximum_delta, previous + maximum_delta)
+
+
+def bounded_steering_target(angle, position, limit):
+    """Choose an absolute joint heading inside the manual steering envelope.
+
+    A wheel heading is equivalent modulo pi when traction is reversed. Feedback
+    only breaks the tie at +/-90 degrees (including encoder/mount tolerance);
+    it never adds another half/full turn.
+    """
+    target = math.remainder(angle, math.pi)
+    if (abs(abs(target) - math.pi / 2.0) <= 1e-9
+            or (abs(abs(target) - math.pi / 2.0) <= 1e-3
+                and abs(position) >= math.pi / 2.0 - 1e-3)):
+        target = math.copysign(math.pi / 2.0, position if position != 0.0 else target)
+    return clamp(target, -limit, limit)
