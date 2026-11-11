@@ -11,6 +11,7 @@
 #include <map>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 // Shared timing, per-node transactions, bus arbitration, and final sender queue.
@@ -34,6 +35,15 @@ public:
   void push(const can_msgs::msg::Frame& frame, Clock::time_point now = Clock::now(), double command_watchdog = 0.1)
   {
     const bool read = frame.data[0] == READ_FROM_DEVICE;
+    if (!read && stopCommand(frame))
+    {
+      // A stop revokes the whole unsent steering move, including a target
+      // waiting for its profile acknowledgement. Reads remain observable.
+      queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [](const Entry& entry) {
+        return entry.required_profile.has_value();
+      }), queue_.end());
+      steering_continuation_ = false;
+    }
     const auto same = [&frame](const Entry& entry) {
       return entry.frame.id == frame.id && entry.frame.data == frame.data;
     };
@@ -74,6 +84,50 @@ public:
     queue_.push_back({frame, now});
   }
 
+  void pushSteering(const can_msgs::msg::Frame& profile, const can_msgs::msg::Frame& target,
+      Clock::time_point now = Clock::now(), double command_watchdog = 0.1)
+  {
+    if (profile.id != target.id || profile.id <= 0x600 || profile.id > 0x67f ||
+        profile.is_error || profile.is_rtr || profile.is_extended ||
+        target.is_error || target.is_rtr || target.is_extended ||
+        profile.dlc != 8 || target.dlc != 8 || profile.data[3] || target.data[3] ||
+        profile.data[0] != WRITE_TO_DEVICE_4B || target.data[0] != WRITE_TO_DEVICE_4B ||
+        shortFromFrame(profile, 1) != STEERING_PROFILE_VELOCITY_INPUT ||
+        shortFromFrame(target, 1) != ABSOLUTE_POSITION_INPUT || intFromFrame(profile, 4) <= 0)
+    { throw std::invalid_argument("steering move requires a positive profile and same-node position target"); }
+
+    // A new admitted move replaces an unsent stop, but cannot bypass an
+    // in-flight stop or profile: next() waits for its acknowledgement.
+    queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [](const Entry& entry) {
+      return profileUpdate(entry.frame) || (entry.frame.data[0] != READ_FROM_DEVICE &&
+          shortFromFrame(entry.frame, 1) == STEERING_PROFILE_VELOCITY_INPUT);
+    }), queue_.end());
+    auto queued = std::find_if(queue_.begin(), queue_.end(), [](const Entry& entry) {
+      return entry.frame.data[0] != READ_FROM_DEVICE &&
+          shortFromFrame(entry.frame, 1) == ABSOLUTE_POSITION_INPUT;
+    });
+    const auto proof = acknowledged_targets_.find(STEERING_PROFILE_VELOCITY_INPUT);
+    const bool profile_known = proof != acknowledged_targets_.end() && proof->second.frame.data == profile.data;
+    const auto previous = acknowledged_targets_.find(ABSOLUTE_POSITION_INPUT);
+    const bool in_flight = pending_ && pending_->required_profile &&
+        pending_->frame.data == target.data && pending_->required_profile->data == profile.data;
+    const bool recently_applied = profile_known && previous != acknowledged_targets_.end() &&
+        previous->second.required_profile && previous->second.required_profile->data == profile.data &&
+        previous->second.frame.data == target.data &&
+        std::chrono::duration<double>(now - previous->second.queued).count() < std::min(0.05, command_watchdog / 2.0);
+    if (in_flight || recently_applied)
+    {
+      if (queued != queue_.end()) { queue_.erase(queued); }
+      steering_continuation_ = false;
+      return;
+    }
+    const Entry move{target, now, profile};
+    // Refresh from a newly admitted command without moving the transaction to
+    // the back. Repeated 50-Hz target changes must not forfeit its service slot.
+    if (queued != queue_.end()) { *queued = move; }
+    else { queue_.push_back(move); }
+  }
+
   bool motionReadQueued() const
   { return std::any_of(queue_.begin(), queue_.end(), [](const Entry& e) { return motionRead(e.frame); }); }
   bool motionReadOutstanding() const
@@ -107,13 +161,13 @@ public:
       int64_t stamp_ns = 0, bool motion_phase = false, bool native_enable_fresh = true)
   {
     if (pending_ && now - sent_ > can_scheduling::response_timeout) { pending_.reset(); }
-    if (pending_) { return std::nullopt; }
     queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [now, write_timeout, native_enable_fresh](const Entry& e) {
-      return (!native_enable_fresh && enableCommand(e.frame)) ||
+      return (!native_enable_fresh && (enableCommand(e.frame) || e.required_profile)) ||
           (e.frame.data[0] != READ_FROM_DEVICE && !stopCommand(e.frame) &&
            std::chrono::duration<double>(now - e.queued).count() > write_timeout);
     }), queue_.end());
-    if (queue_.empty()) { return std::nullopt; }
+    if (queue_.empty()) { steering_continuation_ = false; return std::nullopt; }
+    if (pending_) { return std::nullopt; }
     auto selected = queue_.begin();
     // Alternate writes with reads under load so motion traffic cannot starve
     // the status/fault observations that authorize it.
@@ -130,6 +184,10 @@ public:
     });
     const auto fault = std::find_if(queue_.begin(), queue_.end(), [](const Entry& e) { return requiredFaultRead(e.frame); });
     const auto native = std::find_if(queue_.begin(), queue_.end(), [](const Entry& e) { return nativeRead(e.frame); });
+    const auto continuation = std::find_if(queue_.begin(), queue_.end(), [](const Entry& e) {
+      return e.required_profile.has_value();
+    });
+    if (continuation == queue_.end()) { steering_continuation_ = false; }
     const auto management = std::find_if(queue_.begin(), queue_.end(), [motion_phase](const Entry& e) {
       if (e.frame.data[0] == READ_FROM_DEVICE) { return false; }
       const unsigned index = e.frame.data[1] | (unsigned(e.frame.data[2]) << 8);
@@ -143,6 +201,9 @@ public:
     // before optional telemetry and ordinary targets. The batch admission
     // barrier prevents the next motion generation from overtaking these reads.
     else if (!motion_phase && fault != queue_.end()) { selected = fault; }
+    // Finish one started profile/target pair before ordinary reads or another
+    // motion generation can repeatedly postpone its target. Stops still win.
+    else if (steering_continuation_ && continuation != queue_.end()) { selected = continuation; }
     else if (!motion_phase && native != queue_.end()) { selected = native; }
     else if (motion_phase)
     {
@@ -175,7 +236,20 @@ public:
         else { queue_.push_front({zero, now}); selected = queue_.begin(); }
       }
     }
-    pending_ = *selected; queue_.erase(selected);
+    const auto proof = acknowledged_targets_.find(STEERING_PROFILE_VELOCITY_INPUT);
+    if (selected->required_profile && (proof == acknowledged_targets_.end() ||
+        proof->second.frame.data != selected->required_profile->data))
+    {
+      // Retain the target until this exact profile has a successful reply.
+      // An abort or lost acknowledgement can never release the target.
+      pending_ = Entry{*selected->required_profile, selected->queued};
+      steering_continuation_ = true;
+    }
+    else
+    {
+      if (selected->required_profile) { steering_continuation_ = false; }
+      pending_ = *selected; queue_.erase(selected);
+    }
     const bool selected_write = pending_->frame.data[0] != READ_FROM_DEVICE;
     // Native/motion phases must not restart ordinary write/read alternation:
     // otherwise the first service slot always writes and faults never refresh.
@@ -189,6 +263,10 @@ public:
       {
         const unsigned index = frame.data[1] | (unsigned(frame.data[2]) << 8);
         acknowledged_targets_.erase(index);
+        // Even a brief 347 -> 0 -> 347 profile cycle needs a new position
+        // latch. An earlier same-value target ACK predates that profile write.
+        if (index == STEERING_PROFILE_VELOCITY_INPUT || profileUpdate(frame))
+        { acknowledged_targets_.erase(ABSOLUTE_POSITION_INPUT); }
         // Any potentially moving write invalidates previous zero-stop proof,
         // including a new position target paired with a profile-velocity stop.
         if (!zeroMotionCommand(frame))
@@ -222,13 +300,14 @@ public:
       { acknowledged_targets_.clear(); native_values_[index] = value; }
     }
     if (!read && frame.data[0] == WRITE_REPLY && motionTarget(request))
-    { acknowledged_targets_[request.data[1] | (unsigned(request.data[2]) << 8)] = Entry{request, sent_}; }
+    { acknowledged_targets_[request.data[1] | (unsigned(request.data[2]) << 8)] = Entry{request, sent_, pending_->required_profile}; }
     pending_.reset();
     return true;
   }
 
   void cancelWrites(bool preserve_reset = false, bool preserve_stop = false)
   {
+    steering_continuation_ = false;
     queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [preserve_reset, preserve_stop](const Entry& e) {
       if (e.frame.data[0] == READ_FROM_DEVICE) { return false; }
       if (preserve_stop && stopCommand(e.frame)) { return false; }
@@ -239,6 +318,7 @@ public:
   }
   void cancelMotionTargets()
   {
+    steering_continuation_ = false;
     queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [](const Entry& e) {
       const unsigned index = static_cast<unsigned>(e.frame.data[1]) | (static_cast<unsigned>(e.frame.data[2]) << 8);
       return e.frame.data[0] != READ_FROM_DEVICE && index != MICONTROL_DEVICE_STATE && index != MICONTROL_CLEAR_ERROR_STATUS;
@@ -246,7 +326,7 @@ public:
     for (auto it = acknowledged_targets_.begin(); it != acknowledged_targets_.end();)
     { if (!zeroMotionCommand(it->second.frame)) { it = acknowledged_targets_.erase(it); } else { ++it; } }
   }
-  void clear() { queue_.clear(); pending_.reset(); acknowledged_targets_.clear(); native_values_.clear(); last_was_stop_ = false; }
+  void clear() { queue_.clear(); pending_.reset(); acknowledged_targets_.clear(); native_values_.clear(); last_was_stop_ = false; steering_continuation_ = false; }
 
   bool faultResetPending() const
   {
@@ -307,7 +387,12 @@ private:
                         index == S_VELOCITY_INPUT || index == CURRENT_INPUT;
     return profileUpdate(frame) || (state && shortFromFrame(frame, 4) == 0) || (target && intFromFrame(frame, 4) == 0);
   }
-  struct Entry { can_msgs::msg::Frame frame; Clock::time_point queued; };
+  struct Entry
+  {
+    can_msgs::msg::Frame frame;
+    Clock::time_point queued;
+    std::optional<can_msgs::msg::Frame> required_profile{};
+  };
   std::deque<Entry> queue_;
   std::optional<Entry> pending_;
   std::map<unsigned, Entry> acknowledged_targets_;
@@ -316,6 +401,7 @@ private:
   int64_t sent_stamp_ns_{0};
   bool last_was_write_{false};
   bool last_was_stop_{false};
+  bool steering_continuation_{false};
 };
 
 // -----------------------------------------------------------------------------

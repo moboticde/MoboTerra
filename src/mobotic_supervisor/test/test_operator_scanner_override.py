@@ -73,6 +73,7 @@ class OperatorScannerOverrideTest(unittest.TestCase):
         self.assertFalse(self.n._enable_gate(self.f.now)[0])
 
     def test_diagonal_translation_cap_even_if_warning_policy_is_higher(self):
+        self.n.manual_state.controls_neutral = False
         self.n.warning_speed_limit = 1.0
         self.n.max_acceleration_linear = 100
         source = h.TwistStamped()

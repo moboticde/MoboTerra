@@ -64,6 +64,7 @@ private:
   void enforceFeedbackFreshness();
   void publishDiagnostics();
   void publishCanFrame(const can_msgs::msg::Frame& frame);
+  void publishSteeringMove(const can_msgs::msg::Frame& profile, const can_msgs::msg::Frame& target);
   void dispatchSdo();
   void advanceStartup();
   bool steeringAlignmentPending() const;

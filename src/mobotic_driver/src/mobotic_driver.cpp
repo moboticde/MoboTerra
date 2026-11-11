@@ -1479,17 +1479,18 @@ bool MoboticDriver::applyJointSetpoints(const sensor_msgs::msg::JointState& msg)
       }
 
       const auto profile_velocity = drive.getTarget(STEERING_PROFILE_VELOCITY_INPUT, msg.velocity.at(idx));
-      publishCanFrame(stampFrame(drive.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT, profile_velocity),
-                                "can", this->now()));
+      const auto profile = stampFrame(drive.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT, profile_velocity),
+                                      "can", this->now());
       // Position moves latch profile settings. Zero must be explicitly applied
       // with DEV_Cmd Update; a profile write alone leaves an active move running.
       if (profile_velocity != 0)
       {
-        publishCanFrame(stampFrame(drive.setTargetRequest(ABSOLUTE_POSITION_INPUT,
+        publishSteeringMove(profile, stampFrame(drive.setTargetRequest(ABSOLUTE_POSITION_INPUT,
             drive.getTarget(ABSOLUTE_POSITION_INPUT, msg.position.at(idx))), "can", this->now()));
       }
       else
       {
+        publishCanFrame(profile);
         publishCanFrame(stampFrame(drive.steeringProfileUpdateRequest(), "can", this->now()));
       }
       command_sent = true;
@@ -1715,6 +1716,19 @@ void MoboticDriver::initializeAllDrives()
   }
 }
 
+void MoboticDriver::publishSteeringMove(const can_msgs::msg::Frame& profile, const can_msgs::msg::Frame& target)
+{
+  if (virtual_position_source_)
+  { publishCanFrame(profile); publishCanFrame(target); return; }
+  const unsigned node = profile.id - 0x600;
+  const auto drive = std::find_if(drives_.begin(), drives_.end(), [node](const auto& item) {
+    return item.second.rawCanNodeID() == node && !item.second.isTractionJoint();
+  });
+  if (!controller_control_started_ || drive == drives_.end())
+  { RCLCPP_ERROR(this->get_logger(), "Refusing steering move without an admitted steering controller"); return; }
+  sdo_channels_[node].pushSteering(profile, target, SdoChannel::Clock::now(), watchdog_timeout_);
+}
+
 void MoboticDriver::publishCanFrame(const can_msgs::msg::Frame& frame)
 {
   if (!virtual_position_source_ && frame.id >= 0x601 && frame.id <= 0x67F)
@@ -1855,14 +1869,15 @@ void MoboticDriver::advanceSteeringAlignment()
       fresh_after_command = fresh_after_command && acknowledged != steering_alignment_target_ack_ns_.end() &&
           stamp > acknowledged->second;
     }
-    at_home = at_home && std::abs(drive.feedback(POSITION_FEEDBACK) - steering_alignment_targets_.at(name)) <= 1 &&
+    at_home = at_home && steeringPositionWithinTolerance(drive.feedback(POSITION_FEEDBACK),
+        steering_alignment_targets_.at(name), drive.resolution()) &&
         std::abs(drive.velocityFeedbackRadPerSec()) <= 0.05;
   }
   if (at_home && fresh_after_command)
   {
     steering_alignment_ = SteeringAlignment::COMPLETE;
     sendStopToAllDrives();
-    RCLCPP_INFO(this->get_logger(), "Steering alignment complete: all steering positions within 1 controller unit of nearest home with fresh standstill feedback.");
+    RCLCPP_INFO(this->get_logger(), "Steering alignment complete: all steering positions within 1 degree (or finer one-count tolerance) of nearest home with fresh standstill feedback.");
     return;
   }
   if (std::chrono::duration<double>(steady - last_steering_alignment_command_).count() < 0.1) { return; }
@@ -1874,10 +1889,12 @@ void MoboticDriver::advanceSteeringAlignment()
     // Even an already-home drive needs an acknowledged target, replacing any
     // retained older target before recovery can complete.
     const bool moving = beginning || steering_alignment_target_ack_ns_.count(name) == 0 ||
-        std::abs(drive.feedback(POSITION_FEEDBACK) - target) > 1 || std::abs(drive.velocityFeedbackRadPerSec()) > 0.05;
-    publishCanFrame(stampFrame(drive.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT,
-        moving ? drive.getTarget(STEERING_PROFILE_VELOCITY_INPUT, steering_alignment_velocity_) : 0), "can", now));
-    if (moving) { publishCanFrame(stampFrame(drive.setTargetRequest(ABSOLUTE_POSITION_INPUT, target), "can", now)); }
+        !steeringPositionWithinTolerance(drive.feedback(POSITION_FEEDBACK), target, drive.resolution()) ||
+        std::abs(drive.velocityFeedbackRadPerSec()) > 0.05;
+    const auto profile = stampFrame(drive.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT,
+        moving ? drive.getTarget(STEERING_PROFILE_VELOCITY_INPUT, steering_alignment_velocity_) : 0), "can", now);
+    if (moving) { publishSteeringMove(profile, stampFrame(drive.setTargetRequest(ABSOLUTE_POSITION_INPUT, target), "can", now)); }
+    else { publishCanFrame(profile); }
   }
 }
 

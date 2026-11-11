@@ -64,6 +64,21 @@ after recovery completes. Fresh matching driver transaction IDs permit zero-targ
 
 Default command expiry is 250 ms, the control cycle 20 ms, startup grace 10 s and reset timeout 20 s (covering the 15 s drive startup attempt). Policies, module names and limits come from `mobotic_config`. Monitoring loss, actual drive/BMS faults and required component health are root fault inputs; protective stops and low SOC are not themselves system errors.
 
+Fresh connected neutral operator evidence or an explicit fresh zero manual
+command cancels manual motion without a software deceleration ramp. It also replaces older in-flight kinematics results
+with zero traction and zero steering-profile holds at measured positions, so a
+late candidate cannot resume a released move. Neutral evidence must be at least
+as new as the candidate's source input; newer joystick motion remains eligible.
+Drive deceleration and all existing feedback/authority checks still apply.
+
+When `motion_limits.steering_return_home_on_neutral` is enabled, a fresh zero
+manual command plus fresh connected all-controls-neutral evidence instead
+authorizes a zero-traction return to nearest full-turn home. The first batch
+stops all profiles; steering waits for a newer feedback sample with every
+traction joint at standstill. This remains a normal permitted MANUAL motion,
+so safety, source, feedback, mode-transition and reset gates still apply.
+Interlock HOLD commands cannot home. Stick movement cancels the return.
+
 For component health, `ComponentHealthArray.header` is the producer's report
 time; each component's header remains its input acquisition time. Both report
 age and local receipt age must fit `health_timeout` (300 ms). Kinematics and
@@ -114,8 +129,19 @@ commissioned RP2/D5 policy for either layout. This speed rule does not authorize
 scanner bypass or relax any mode-selection, red-zone, STO, E-stop, battery or
 fault interlock.
 
+`vehicle/mode.reason_codes` and `status_message` identify every source of a
+reduced-speed cap: `SCANNER_WARNING:<location>`, `SAFETY_DISABLED_RP2`,
+`FLEXISOFT_WARNING`, `FLEXISOFT_IO_WARNING` or `SAFETY_DISABLED_FLEXISOFT`.
+The supervisor logs changes to this policy. Both scanners clear and Safety
+Enabled remove this cap; enabling scanner monitoring alone never reduces speed.
+
 The body-command limit uses `hypot(vx, vy)`, including reverse and crab, with a
-proportional angular limit. The final supervisor output also caps every wheel's
+proportional angular limit. For the manual steering policy, either body limit
+uniformly scales forward, lateral and yaw velocity, preserving the curvature or
+crab direction of the velocity being capped. This applies to target limits and
+the immediate output cap when a reduced-speed condition begins. The existing
+acceleration ramps still govern changes between requested velocities.
+The final supervisor output also caps every wheel's
 peripheral speed (`abs(traction_velocity) * wheel_radius`) at 0.3 m/s. Wheel
 commands are scaled together to retain direction and relative wheel speeds;
 this covers pure rotation, combined translation/rotation, velocity wheel commands

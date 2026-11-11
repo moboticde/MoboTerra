@@ -47,7 +47,14 @@ Neutral commands hold the measured wheel angles. PAIL axis mappings and independ
 sideways input remain unchanged. The installed steering position scale is 121
 native user units per output turn (about 30 units for a quarter turn); raw encoder
 counts and traction scaling must not be substituted. The shared platform profile
-provides this scale to both the driver and the per-wheel endpoint tolerance.
+provides this scale to the driver and manual policy. The correction deadband is
+at most one degree, retaining stricter one-count tolerances on finer controllers.
+Error is checked against the rounded native command so unreachable sub-count
+targets do not keep restarting a move. Ideal headings and home references stay
+fixed; drift and overshoot resume correction, including at an endpoint, without
+disabling steering. Coarse 121-unit feedback cannot verify physical one-degree
+accuracy: the nearest requested angle can differ by up to about 1.49 degrees,
+and sub-count drift is not visible. Finer feedback/target units need calibration.
 
 Topics remain:
 

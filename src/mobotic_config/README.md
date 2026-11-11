@@ -52,8 +52,12 @@ revolution** for the installed miControl `0x3762` feedback and `0x3790` absolute
 target. Raw encoder increments at `0x3772` are a different quantity. Keep traction
 at its separate 4096-count scale. With a zero home reference, a 90-degree steering
 request rounds to 30 native user units; using 4096 here would request about 8.46
-physical turns. Per-wheel stop tolerances are derived from the same position
-scale. See [controller scaling evidence](../../docs/controller_object_mapping.md).
+physical turns. Per-wheel correction tolerances are the smaller of one degree
+and one native count. The geometry includes the native position resolution so
+the policy compares feedback with the controller's reachable target while
+retaining ideal headings for continuity. This is a correction deadband, not proof
+of physical one-degree accuracy with 2.98-degree position units.
+See [controller scaling evidence](../../docs/controller_object_mapping.md).
 
 ```yaml
 modules:
@@ -218,3 +222,21 @@ profiles were converted from their former output rad/s values by multiplying by
 wheel radius, preserving their physical limits. Driver, kinematics and supervisor
 share this unit. Native actuator velocity limits use motor rpm. The driver receives the same `geometry.wheel_radius` used by
 kinematics; m/s-to-native conversion occurs only at the driver boundary.
+
+`motion_limits.max_crab_angle` optionally sets the homing-relative crab travel
+envelope in radians, from pi/2 (the default +/-90 degrees) through pi (+/-180
+degrees). It reaches the operator policy and both final manual authorities through
+their shared steering geometry. With limits enabled, Ackermann uses +/-45 degrees.
+Set `motion_limits.steering_angle_limits_enabled: false` to remove these absolute
+angle envelopes and keep continuous targets around the previous requested
+heading. The active robot uses this option; speed limits, mode selection and
+endpoint stopping remain independent.
+
+`motion_limits.steering_return_home_on_neutral` optionally returns steering to
+the nearest full-turn home after fresh neutral input and traction standstill.
+It defaults to false for existing profiles. `steering_neutral_home_velocity`
+defaults to normal steering speed; the active robot enables neutral return at
+1.2 rad/s while normal joystick steering stays at 0.3 rad/s. The driver command
+ceiling includes the homing speed, validated against every steering controller's
+native RPM bounds. B2 startup alignment is separately enabled by
+`driver.steering_align_on_enable`; the active physical override restores it.

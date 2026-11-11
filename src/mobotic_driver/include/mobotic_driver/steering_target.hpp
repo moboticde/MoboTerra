@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -27,6 +28,15 @@ inline std::optional<int32_t> checkedSteeringPosition(double angle, double resol
   }
   constexpr double PI = 3.14159265358979323846;
   return checkedCanPosition(angle * resolution / (2.0 * PI));
+}
+
+// B2 completion requires at most one degree, retaining stricter one-count
+// precision on finer controllers. One count at 121 units/turn is 2.98 degrees
+// and must still be corrected. This predicate never disables a drive.
+inline bool steeringPositionWithinTolerance(double position, double target, double resolution)
+{
+  return std::isfinite(position) && std::isfinite(target) && std::isfinite(resolution) &&
+      resolution > 0.0 && std::abs(position - target) <= std::min(1.0, resolution / 360.0) + 1e-12;
 }
 
 // Preserve the existing zero reference and select only full-turn equivalents.

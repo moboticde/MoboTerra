@@ -67,14 +67,22 @@ Physical startup uses the miControl disable/reset/mode/enable sequence.
 Position and velocity may be unavailable until the controllers are enabled;
 neither the supervisor nor the physical driver requires them to start enable.
 All position access remains through CANopen, with no direct encoder connection,
-homing, reference-zeroing or external retained-reference prerequisite.
+reference-zeroing or external retained-reference prerequisite.
+
+The active physical profile sets `steering_align_on_enable: true`. Initialization
+clears faults and selects modes, then enable aligns steering to the nearest
+full-turn equivalent of the existing zero at 1.2 rad/s. Traction remains zero
+throughout recovery. Fresh neutral joystick input also returns steering home,
+after newer complete feedback shows traction standstill. The target is frozen
+for that neutral period; moving the stick cancels the return. Safety stops,
+stale input and inhibited motion hold measured angles instead of homing.
 
 1. Before supervisor permission, the driver sends only state/fault SDO reads and
    its master heartbeat. It publishes truthful missing-feedback status.
 2. The supervisor checks fresh battery readiness/HV/SOC, the configured operator
    interlock, host health when required, and the applicable safety/STO conditions.
-   A fresh B2 press with neutral controls authorizes controller initialization,
-   not robot motion; external readiness returning alone cannot enable drives.
+   A fresh B2 press with neutral controls authorizes controller initialization
+   and steering alignment with zero traction; external readiness returning alone cannot enable drives.
 3. Once authorized, the driver disables and zeros targets, clears initial errors,
    and selects the configured native steering/traction modes using SDOs. Mode
    writes require matching readback; reset/disable/zero actions require acknowledgement.
@@ -83,7 +91,8 @@ homing, reference-zeroing or external retained-reference prerequisite.
    and zero steering profile velocity. Actual enable is read from `3002:0` bit 0.
 5. Enabled controllers supply position (`3762:0`), velocity (`3A04:1`), native
    status/mode and faults through serialized SDO reads. Fresh complete feedback
-   makes startup complete and allows motion.
+   supplies the nearest-home alignment targets. Startup completes after steering
+   reaches home and the normal sustained standstill proof succeeds.
 
 No drive PDO mapping, NMT setup or SYNC cycle is generated. Unsolicited PDOs
 cannot update feedback or freshness. Both transport compatibility flags,

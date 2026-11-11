@@ -49,6 +49,36 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual([p['controller_type'] for _, p in cfg.virtual_drives()], expected)
             self.assertEqual(cfg.parameters('driver')['drives.modes'], ['position', 'velocity'] * 4)
 
+    def test_neutral_homing_geometry_and_driver_ceiling(self):
+        platform = four_module_platform()
+        platform['motion_limits'].update(max_steering_velocity=.3,
+            steering_return_home_on_neutral=True, steering_neutral_home_velocity=1.2)
+        self.verified_path.write_text(yaml.safe_dump(platform))
+        cfg = Configuration(self.verified_path)
+        geometry = json.loads(cfg.parameters('manual')['steering_geometry'])
+        self.assertTrue(geometry['steering_return_home_on_neutral'])
+        self.assertEqual(geometry['steering_neutral_home_velocity'], 1.2)
+        self.assertEqual(geometry['max_steering_velocity'], .3)
+        self.assertEqual(cfg.parameters('driver')['max_steering_velocity'], 1.2)
+        self.assertEqual(cfg.parameters('kinematics')['max_steering_velocity'], .3)
+        with self.assertRaisesRegex(ConfigurationError, 'conflicts with platform_config'):
+            cfg.apply_overrides('driver', {'max_steering_velocity': .3})
+
+    def test_invalid_neutral_homing_configuration_is_rejected(self):
+        for key, value in [('steering_return_home_on_neutral', 'true'),
+                           ('steering_neutral_home_velocity', 0.),
+                           ('steering_neutral_home_velocity', -1.),
+                           ('steering_neutral_home_velocity', float('nan')),
+                           ('steering_neutral_home_velocity', 100.)]:
+            with self.subTest(key=key, value=value):
+                platform = four_module_platform()
+                platform['motion_limits'].update(steering_return_home_on_neutral=True,
+                                                 steering_neutral_home_velocity=1.2)
+                platform['motion_limits'][key] = value
+                self.verified_path.write_text(yaml.safe_dump(platform))
+                with self.assertRaises(ConfigurationError):
+                    Configuration(self.verified_path)
+
     def test_steering_alignment_policy_bounds(self):
         self.cfg.apply_overrides('driver', {'steering_align_on_enable': True,
                                            'steering_alignment_velocity': 0.3,
@@ -76,10 +106,23 @@ class ConfigurationTest(unittest.TestCase):
                     self.assertEqual(round((math.pi/2)*resolutions[name]/(2*math.pi)), 30)
                     self.assertAlmostEqual(30*(2*math.pi)/resolutions[name]*180/math.pi, 89.2561983471)
                 geometry = json.loads(cfg.parameters('manual')['steering_geometry'])
-                self.assertEqual(geometry['steering_position_tolerances'], [2*math.pi/121] * 4)
+                self.assertEqual(geometry['steering_position_tolerances'], [math.radians(1.)] * 4)
+                self.assertEqual(geometry['steering_position_resolutions'], [121.] * 4)
                 virtual = dict(cfg.virtual_drives())
                 for name in steering:
                     self.assertEqual(virtual[name]['encoder_resolution'], resolutions[name])
+
+    def test_one_degree_cap_keeps_finer_encoder_tolerances(self):
+        platform = four_module_platform()
+        for module, resolution in zip(platform['modules'], [121, 4096, 720, 8192]):
+            module['steering']['resolution'] = resolution
+        self.verified_path.write_text(yaml.safe_dump(platform))
+        cfg = Configuration(self.verified_path)
+        for component, key in [('manual', 'steering_geometry'), ('supervisor', 'manual_steering_geometry')]:
+            geometry = json.loads(cfg.parameters(component)[key])
+            self.assertEqual(geometry['steering_position_resolutions'], [121., 4096., 720., 8192.])
+            self.assertEqual(geometry['steering_position_tolerances'],
+                [min(math.radians(1.), 2*math.pi/r) for r in [121, 4096, 720, 8192]])
 
     def test_homing_can_run_twice_as_fast_as_manual_steering(self):
         platform = copy.deepcopy(self.cfg.platform)
@@ -103,6 +146,7 @@ class ConfigurationTest(unittest.TestCase):
             platform['modules'][0]['traction']['controller'] = bad
             with self.assertRaises(ConfigurationError):
                 validate_platform(platform)
+
         platform = copy.deepcopy(self.cfg.platform)
         platform['modules'][0]['steering']['controller'] = 'ELMO'
         with self.assertRaises(ConfigurationError):
@@ -112,6 +156,50 @@ class ConfigurationTest(unittest.TestCase):
             min_traction_velocity=-100, max_traction_velocity=100)
         with self.assertRaisesRegex(ConfigurationError, 'traction limits'):
             validate_platform(platform)
+
+    def test_optional_180_degree_crab_range_reaches_both_manual_authorities(self):
+        platform=copy.deepcopy(self.cfg.platform)
+        platform['motion_limits']['max_crab_angle']=math.pi
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'wide-crab.yaml'
+            path.write_text(yaml.safe_dump(platform))
+            cfg=Configuration(path)
+            manual=json.loads(cfg.parameters('manual')['steering_geometry'])
+            supervisor=json.loads(cfg.parameters('supervisor')['manual_steering_geometry'])
+            self.assertEqual(manual['max_crab_angle'],math.pi)
+            self.assertEqual(manual,supervisor)
+        for bad in (True,0.,math.pi/4,math.pi+.001,float('nan')):
+            platform['motion_limits']['max_crab_angle']=bad
+            with self.subTest(angle=bad),self.assertRaises(ConfigurationError):
+                validate_platform(platform)
+
+    def test_steering_angle_limits_can_be_disabled_for_both_manual_authorities(self):
+        platform=copy.deepcopy(self.cfg.platform)
+        platform['motion_limits']['steering_angle_limits_enabled']=False
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'continuous-steering.yaml'
+            path.write_text(yaml.safe_dump(platform))
+            cfg=Configuration(path)
+            manual=json.loads(cfg.parameters('manual')['steering_geometry'])
+            supervisor=json.loads(cfg.parameters('supervisor')['manual_steering_geometry'])
+            self.assertIs(manual['steering_angle_limits_enabled'],False)
+            self.assertEqual(manual,supervisor)
+        for value in (None,0,1,'false'):
+            platform['motion_limits']['steering_angle_limits_enabled']=value
+            with self.subTest(value=value),self.assertRaises(ConfigurationError):
+                validate_platform(platform)
+
+    def test_homing_speed_can_double_to_1_2_without_changing_manual_speed(self):
+        platform=copy.deepcopy(self.cfg.platform)
+        platform['motion_limits']['max_steering_velocity']=.3
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'homing.yaml'
+            path.write_text(yaml.safe_dump(platform))
+            cfg=Configuration(path)
+            cfg.apply_overrides('driver',{'steering_align_on_enable':True,'steering_alignment_velocity':1.2})
+            cfg._validate_policy()
+            self.assertEqual(cfg.parameters('driver')['steering_alignment_velocity'],1.2)
+            self.assertEqual(cfg.parameters('driver')['max_steering_velocity'],.3)
 
     def test_prepared_four_module_micontrol_profile(self):
         path = Path(__file__).resolve().parents[1] / 'config/platform-four-micontrol.yaml'
@@ -187,7 +275,8 @@ class ConfigurationTest(unittest.TestCase):
         geometry_data = {key: self.cfg.parameters('kinematics')[key] for key in (
             'wheels_x', 'wheels_y', 'steering_joint_names', 'traction_joint_names',
             'wheel_mount_angles', 'max_steering_velocity')}
-        geometry_data['steering_position_tolerances'] = [2.0 * math.pi / 121] * 4
+        geometry_data['steering_position_tolerances'] = [math.radians(1.)] * 4
+        geometry_data['steering_position_resolutions'] = [121.] * 4
         geometry = json.dumps(geometry_data)
         baseline['manual']['steering_geometry'] = geometry
         baseline['supervisor']['manual_steering_geometry'] = geometry

@@ -372,6 +372,11 @@ class ManualControl(Node):
             self.last_update_time = now
             return
 
+        if self.controls_neutral:
+            self.command = [0.0, 0.0, 0.0]
+            self.last_update_time = now
+            return
+
         requested = [
             self.max_velocity_linear * speed * linear_scale,
             self.max_velocity_linear * crab * linear_scale,

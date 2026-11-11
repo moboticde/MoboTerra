@@ -1,5 +1,6 @@
 """Exercise manual authority with real messages, without CAN or physical nodes."""
 import copy
+import math
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -125,6 +126,73 @@ def test_fresh_correlated_candidate_only_and_replay_rejected(node):
     assert result.modules[0].traction_velocity == .1
     node._candidate(joints)
     assert node.command_pub.publish.call_count == 1
+
+
+@pytest.mark.parametrize('velocity', [-2., -1., .1, 1., 2.])
+@pytest.mark.parametrize('curvature', [-.6, -.22827042, .22827042, .6])
+def test_ackermann_cap_preserves_partial_steering_through_final_wheel_command(node, velocity, curvature):
+    from mobotic_kinematics.manual_steering import ManualSteering
+    node.max_velocity_linear = node.max_traction_velocity = 2.
+    node.max_steering_velocity = .3
+    node.steering_policy = ManualSteering({
+        'wheels_x': [.845], 'wheels_y': [.495],
+        'steering_joint_names': node.steering_joint_names,
+        'traction_joint_names': node.traction_joint_names,
+        'wheel_mount_angles': [0.], 'max_steering_velocity': .3})
+    node.phase = 'enabled'
+    joints = seed(node, True)
+    node.samples['operator'][0].controls_neutral = False
+    command = node.samples['command'][0]
+    command.twist.linear.x = velocity
+    command.twist.angular.z = velocity*curvature
+    node._tick()
+    output = node.velocity_pub.publish.call_args.args[0]
+    body = output.twist
+    assert body.linear.x == pytest.approx(math.copysign(min(abs(velocity), .3), velocity))
+    assert body.angular.z/body.linear.x == pytest.approx(curvature)
+    # Feed a complete solver result back through the real final authority.
+    candidate = copy.deepcopy(joints)
+    candidate.header = copy.deepcopy(output.header)
+    wheel_x = body.linear.x - body.angular.z*.495
+    wheel_y = body.angular.z*.845
+    candidate.position[0] = math.atan2(wheel_y, wheel_x)
+    candidate.velocity = [.3, math.hypot(wheel_x, wheel_y)]
+    node._candidate(candidate)
+    wheel = node.command_pub.publish.call_args.args[0].modules[0]
+    expected = math.atan2(curvature*.845, 1.-curvature*.495)
+    assert wheel.steering_position == pytest.approx(expected)
+    assert abs(wheel.traction_velocity) <= .3 + 1e-12
+    assert node.phase == 'enabled'
+
+
+@pytest.mark.parametrize('limit', [.15, 2.])
+def test_manual_only_caps_body_speed_without_scanner_zone_evidence(node, limit):
+    node.max_velocity_linear = limit
+    node.max_traction_velocity = 2.
+    node.phase = 'enabled'
+    seed(node, True)
+    command = node.samples['command'][0]
+    command.twist.linear.x = command.twist.linear.y = 2.
+    command.twist.angular.z = node.max_velocity_angular
+    node._tick()
+    velocity = node.velocity_pub.publish.call_args.args[0].twist
+    cap = min(limit, .3)
+    assert math.hypot(velocity.linear.x, velocity.linear.y) == pytest.approx(cap)
+    assert velocity.angular.z == pytest.approx(node.max_velocity_angular * cap / math.hypot(2., 2.))
+
+
+@pytest.mark.parametrize('speed', [-2., 2.])
+def test_manual_only_caps_final_wheels_from_a_fast_robot_profile(node, speed):
+    node.max_velocity_linear = node.max_traction_velocity = 2.
+    node.phase = 'enabled'
+    joints = seed(node, True)
+    node._tick()
+    joints.header = copy.deepcopy(node.velocity_pub.publish.call_args.args[0].header)
+    joints.velocity = [.2, speed]
+    node._candidate(joints)
+    result = node.command_pub.publish.call_args.args[0].modules[0]
+    assert result.traction_velocity == pytest.approx(math.copysign(.3, speed))
+    assert result.steering_profile_velocity == .2
 
 
 @pytest.mark.parametrize('fault', ['uncorrelated', 'stale', 'nan', 'limit', 'duplicate', 'generation'])
@@ -301,3 +369,61 @@ def test_recovery_still_aborts_for_operator_stop_or_loss(node,fault):
     node._tick()
     assert node.phase=='disabled'
     assert not node.operation_pub.publish.call_args.args[0].enable
+
+
+def test_neutral_drift_is_corrected_without_disabling_steering(node):
+    from mobotic_kinematics.manual_steering import ManualSteering
+    node.max_steering_velocity = .3
+    node.steering_policy = ManualSteering({
+        'wheels_x': [.845], 'wheels_y': [.495],
+        'steering_joint_names': node.steering_joint_names,
+        'traction_joint_names': node.traction_joint_names,
+        'wheel_mount_angles': [0.], 'max_steering_velocity': .3,
+        'steering_return_home_on_neutral': True, 'steering_neutral_home_velocity': 1.2,
+        'steering_position_tolerances': [math.radians(1.)],
+        'steering_position_resolutions': [121.]})
+    node.phase = 'enabled'
+    generation = node.generation
+    unit = 2*math.pi/121
+    for i, position in enumerate([0., 0., unit, 0., -unit, 0.]*10):
+        node.test_now = 100. + i*.02
+        joints = seed(node, True)
+        joints.position[0] = position
+        node.samples['command'][0].twist.linear.x = 0.
+        node._tick()
+        candidate = copy.deepcopy(joints)
+        candidate.header = copy.deepcopy(node.velocity_pub.publish.call_args.args[0].header)
+        node._candidate(candidate)
+        output = node.command_pub.publish.call_args.args[0].modules[0]
+        assert output.steering_position == 0.
+        assert output.steering_profile_velocity == (1.2 if position else 0.)
+        assert output.traction_velocity == 0.
+        assert node.phase == 'enabled' and node.generation == generation
+        assert node.operation_pub.publish.call_args.args[0].enable
+
+
+def test_manual_only_neutral_homing_uses_faster_profile_with_zero_traction(node):
+    from mobotic_kinematics.manual_steering import ManualSteering
+    node.max_steering_velocity = .3
+    node.steering_policy = ManualSteering({
+        'wheels_x': [.845], 'wheels_y': [.495],
+        'steering_joint_names': node.steering_joint_names,
+        'traction_joint_names': node.traction_joint_names,
+        'wheel_mount_angles': [0.], 'max_steering_velocity': .3,
+        'steering_return_home_on_neutral': True, 'steering_neutral_home_velocity': 1.2})
+    node.phase = 'enabled'
+    for i in range(2):
+        node.test_now = 100. + i*.1
+        joints = seed(node, True)
+        joints.position[0] = .8
+        node.samples['command'][0].twist.linear.x = 0.
+        node._tick()
+        candidate = copy.deepcopy(joints)
+        candidate.header = copy.deepcopy(node.velocity_pub.publish.call_args.args[0].header)
+        candidate.velocity = [.3, 2.]  # Old candidate cannot restart traction.
+        node._candidate(candidate)
+        result = node.command_pub.publish.call_args.args[0].modules[0]
+        assert result.traction_velocity == 0.
+        assert result.steering_profile_velocity == (0. if i == 0 else 1.2)
+        if i:
+            assert result.steering_position == 0.

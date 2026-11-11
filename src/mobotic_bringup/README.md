@@ -289,6 +289,14 @@ and fresh timestamp-correlated kinematics output can reach the driver; autonomy,
 RP1 mode requests and direct-current control are not accepted. Driver limits,
 feedback checks and watchdogs are unchanged.
 
+Manual-only body and final wheel speeds are capped at **0.3 m/s**, including
+boosted input and rotation, because this authority has no scanner-zone evidence.
+Body limits apply one common scale to forward, lateral and yaw velocity. Reduced
+speed therefore preserves Ackermann turning radius and crab heading, including
+partial steering and reverse travel, rather than tightening a turn as speed falls.
+Use supervised operation for the active robot's 1 m/s normal and 2 m/s boosted
+green-zone travel. Yellow zones and Safety Disabled remain capped at 0.3 m/s.
+
 This explicitly omits supervisor scanner and battery ROS gates. Keep the
 independent hardware scanner/stop circuit working; software tests do not verify
 its physical effectiveness. The robot-local wrapper preserves the original

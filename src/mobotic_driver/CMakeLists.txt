@@ -71,6 +71,11 @@ if(BUILD_TESTING)
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
   ament_add_test(test_sdo_native_freshness COMMAND "$<TARGET_FILE:test_can_scheduling>" --freshness
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
+  add_executable(test_steering_sdo_updates test/test_steering_sdo_updates.cpp)
+  target_include_directories(test_steering_sdo_updates PRIVATE include)
+  ament_target_dependencies(test_steering_sdo_updates can_msgs rclcpp std_msgs)
+  ament_add_test(test_steering_sdo_updates COMMAND "$<TARGET_FILE:test_steering_sdo_updates>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
   # ROS integration cases exercise the same driver implementation.
   add_library(driver_test_core OBJECT src/mobotic_driver.cpp)
   target_compile_definitions(driver_test_core PRIVATE MOBOTIC_DRIVER_NO_MAIN)
@@ -90,6 +95,16 @@ if(BUILD_TESTING)
   ament_add_test(test_micontrol_traction_sdo_low_rate COMMAND "$<TARGET_FILE:test_micontrol_traction>" --feedback-period=0.1
     --software-enable-diagnostics
     TIMEOUT 120 ENV ROS_DOMAIN_ID=154 ROS_LOCALHOST_ONLY=1
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
+
+  ament_add_test(test_micontrol_steering_restarts COMMAND "$<TARGET_FILE:test_micontrol_traction>"
+    --feedback-period=0.1 --reply-delay-ms=2 --steering-updates-only --software-enable-diagnostics
+    TIMEOUT 45 ENV ROS_DOMAIN_ID=218 ROS_LOCALHOST_ONLY=1
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
+
+  ament_add_test(test_micontrol_startup_preserves_position COMMAND "$<TARGET_FILE:test_micontrol_traction>"
+    --feedback-period=0.1 --reply-delay-ms=2 --startup-hold-only --software-enable-diagnostics
+    TIMEOUT 45 ENV ROS_DOMAIN_ID=221 ROS_LOCALHOST_ONLY=1
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
 
   ament_add_test(test_micontrol_steering_alignment COMMAND "$<TARGET_FILE:test_micontrol_traction>"
@@ -134,6 +149,8 @@ if(BUILD_TESTING)
   set_tests_properties(test_micontrol_traction
     test_micontrol_traction_sdo_low_rate test_micontrol_default_polling
     test_micontrol_sustained_freshness test_micontrol_steering_alignment test_micontrol_nearest_home test_virtual_sdo
+    test_micontrol_steering_restarts
+    test_micontrol_startup_preserves_position
     PROPERTIES RUN_SERIAL TRUE)
   add_executable(test_update_protocol test/test_update_protocol.cpp)
   target_include_directories(test_update_protocol PRIVATE include)

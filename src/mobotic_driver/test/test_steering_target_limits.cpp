@@ -22,6 +22,19 @@ MoboticDriveCanCommunication drive(double resolution = 4096.0,
       {{MIN_STEERING_POSITION, minimum}, {MAX_STEERING_POSITION, maximum}});
 }
 
+void alignmentTolerance()
+{
+  check(steeringPositionWithinTolerance(-605, -605, 121), "exact multi-turn home completes");
+  check(!steeringPositionWithinTolerance(-604, -605, 121), "one-count undershoot exceeds one degree");
+  check(!steeringPositionWithinTolerance(-606, -605, 121), "one-count overshoot exceeds one degree");
+  check(steeringPositionWithinTolerance(1.0/3.0, 0., 120), "one-degree boundary accepted");
+  check(!steeringPositionWithinTolerance(.34, 0., 120), "over one degree still requires correction");
+  check(steeringPositionWithinTolerance(4097, 4096, 4096), "finer one-count precision preserved");
+  check(!steeringPositionWithinTolerance(4098, 4096, 4096), "finer tolerance not loosened to one degree");
+  check(!steeringPositionWithinTolerance(0, 0, 0), "invalid position scale never completes");
+  check(!steeringPositionWithinTolerance(std::numeric_limits<double>::infinity(), 0, 121), "nonfinite feedback never completes");
+}
+
 void signedWireBoundaries()
 {
   check(checkedCanPosition(MIN_TICKS).value() == std::numeric_limits<int32_t>::min(), "signed minimum accepted");
@@ -141,6 +154,7 @@ int main()
 {
   const std::vector<std::pair<const char*, std::function<void()>>> cases{
       {"signed wire and half-tick boundaries", signedWireBoundaries},
+      {"one-degree alignment tolerance and retained fine precision", alignmentTolerance},
       {"nearest full-turn home", nearestHome},
       {"rounding and unchanged multi-turn commands", roundingAndMultiturn},
       {"encoder resolutions and signed CAN roundtrip", encoderResolutionAndWireRoundtrip},

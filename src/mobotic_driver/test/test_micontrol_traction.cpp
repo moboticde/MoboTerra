@@ -43,6 +43,11 @@ int main(int argc, char** argv)
         [](const char* arg) { return std::string(arg) == "--idle-only"; });
     const bool sustained_only = std::any_of(argv, argv + argc,
         [](const char* arg) { return std::string(arg) == "--sustained-only"; });
+    const bool steering_updates_only = std::any_of(argv, argv + argc,
+        [](const char* arg) { return std::string(arg) == "--steering-updates-only"; });
+    const bool startup_hold_only = std::any_of(argv, argv + argc,
+        [](const char* arg) { return std::string(arg) == "--startup-hold-only"; });
+    require(!startup_hold_only || !align_on_enable, "position-preserving startup disables optional alignment");
     require(!paced_sender || sdo_only, "paced sender integration uses SDO-only transport");
     double feedback_period = .02;
     unsigned reply_delay_ms = 0;
@@ -140,6 +145,9 @@ int main(int argc, char** argv)
     { controllers.emplace(node, VirtualDriveProtocol(node, node % 2 == 0, 4096, node % 2 ? 121 : 16, "micontrol")); }
     std::map<unsigned, int32_t> home_targets{{1, 0}, {3, 0}, {5, 0}, {7, 0}};
     if (align_on_enable) { controllers.at(5).setInitialPosition(119); }
+    const std::map<unsigned, int32_t> startup_positions{{1, 700}, {3, -900}, {5, 4596}, {7, -7392}};
+    if (startup_hold_only)
+    { for (const auto& [node, position] : startup_positions) { controllers.at(node).setInitialPosition(position); } }
     if (nearest_home)
     {
       require(align_on_enable, "nearest-home fixture requires alignment");
@@ -340,6 +348,7 @@ int main(int argc, char** argv)
     uint8_t selected = State::MANUAL, requested = State::MANUAL;
     double speed = .5;
     double amps = .75;
+    double steering_goal = 0, steering_profile = 0;
     auto heartbeat = bus->create_wall_timer(std::chrono::milliseconds(20), [&] {
       for (auto& [node, controller] : controllers)
       { if (!(jam_steering && node == 5)) { controller.advance(.02); } }
@@ -363,8 +372,9 @@ int main(int argc, char** argv)
       for (const auto& name : modules)
       {
         mobotic_interfaces::msg::WheelModuleCommand module;
-        module.name = name; module.steering_position = sustained_only ? .1 * std::sin(bus->now().seconds()) : 0;
-        module.steering_profile_velocity = sustained_only ? .2 : 0;
+        module.name = name;
+        module.steering_position = steering_updates_only ? steering_goal : sustained_only ? .1 * std::sin(bus->now().seconds()) : 0;
+        module.steering_profile_velocity = steering_updates_only ? steering_profile : sustained_only ? .2 : 0;
         module.traction_current_control = selected == State::KINEMATICOFF;
         module.traction_velocity = module.traction_current_control ? 0.0 : speed;
         module.traction_current = module.traction_current_control ? amps : 0.0;
@@ -545,6 +555,76 @@ int main(int argc, char** argv)
                   << std::dec << " per_second=" << count << '\n'; }
     }
     require(started, "all four miControl modules complete physical startup");
+    if (startup_hold_only)
+    {
+      spin_until([] { return false; }, .5);
+      require(all([](const auto& m) { return m.startup_complete && m.enabled && m.feedback_fresh && m.position_valid; }),
+              "startup completes with fresh feedback while steering remains away from zero");
+      for (const auto& [node, position] : startup_positions)
+      {
+        const auto request = createAndFillMoboticHeader(0x600 + node, READ_FROM_DEVICE, POSITION_FEEDBACK, 0);
+        const auto reply = controllers.at(node).handle(request);
+        require(reply.size() == 1 && intFromFrame(reply.front(), 4) == position,
+                "enable must retain each measured steering position, including negative and multiple turns");
+      }
+      require(std::none_of(transmitted.begin(), transmitted.end(), [](const Frame& frame) {
+        if (frame.id < 0x601 || frame.id > 0x607 || frame.id % 2 == 0 || frame.data[0] == READ_FROM_DEVICE) { return false; }
+        const auto index = static_cast<uint16_t>(shortFromFrame(frame, 1));
+        return index == ABSOLUTE_POSITION_INPUT || index == POSITION_FEEDBACK || index == 0x3772 ||
+            (index == STEERING_PROFILE_VELOCITY_INPUT && intFromFrame(frame, 4) != 0);
+      }), "startup without alignment cannot write a position target, encoder value or positive steering profile");
+      std::cout << "PASS: Terra Spiro-style enable preserves all four nonzero steering positions; no homing or encoder writes\n";
+      if (sender_executor) { sender_executor->stop(); }
+      rclcpp::shutdown();
+      return 0;
+    }
+    if (steering_updates_only)
+    {
+      speed = 0; moving = true;
+      double max_skew_ms = 0, max_delay_ms = 0;
+      const auto steering_stopped = [&] {
+        unsigned count = 0;
+        for (std::size_t i = 0; i < joints.name.size(); ++i)
+        { if (joints.name[i].find("steering") != std::string::npos && std::abs(joints.velocity[i]) < .005) { ++count; } }
+        return count == 4;
+      };
+      for (unsigned phase = 0; phase < 6; ++phase)
+      {
+        steering_profile = 0;
+        spin_until([] { return false; }, .25);
+        require(spin_until(steering_stopped, 2), "each steering restart begins with measured standstill");
+        const auto begin = transmitted.size();
+        const auto at = std::chrono::steady_clock::now();
+        steering_goal = phase % 2 ? -.3 : .3; steering_profile = .3;
+        const int target = std::lround(steering_goal * 4096 / (2 * M_PI));
+        std::map<unsigned, std::chrono::steady_clock::time_point> first;
+        const auto received_targets = [&] {
+          for (std::size_t i = begin; i < transmitted.size(); ++i)
+          {
+            const auto& frame = transmitted[i];
+            if (frame.id >= 0x601 && frame.id <= 0x607 && frame.id % 2 && frame.data[0] == WRITE_TO_DEVICE_4B &&
+                shortFromFrame(frame, 1) == ABSOLUTE_POSITION_INPUT && intFromFrame(frame, 4) == target)
+            { first.emplace(frame.id, socket_attempts[i]); }
+          }
+          return first.size() == 4;
+        };
+        require(spin_until(received_targets, 1), "all four nodes must receive the common steering target");
+        auto bounds = std::minmax_element(first.begin(), first.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+        max_skew_ms = std::max(max_skew_ms, std::chrono::duration<double, std::milli>(bounds.second->second-bounds.first->second).count());
+        max_delay_ms = std::max(max_delay_ms, std::chrono::duration<double, std::milli>(bounds.second->second-at).count());
+        spin_until([] { return false; }, .3);
+        require(all([](const auto& m) { return m.enabled && m.feedback_fresh && m.position_valid; }),
+                "common starts preserve required feedback freshness");
+      }
+      steering_profile = 0;
+      require(spin_until(steering_stopped, 2), "zero profile still stops every steering drive");
+      std::cout << "STEERING_RESTART_SAMPLE phases=6 max_start_skew_ms=" << max_skew_ms
+                << " max_request_to_target_ms=" << max_delay_ms << '\n';
+      require(max_skew_ms < 100 && max_delay_ms < 250,
+              "steering targets cannot drift through repeated feedback rounds");
+      rclcpp::shutdown();
+      return 0;
+    }
     if (sustained_only)
     {
       moving = true;

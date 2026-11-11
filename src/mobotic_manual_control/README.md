@@ -95,12 +95,20 @@ centre. Reversing changes yaw sign with travel direction.
 
 Crab uses only the right-stick vector and ignores the left stick. Sideways-only
 input drives sideways at a 90-degree heading; diagonal input gives the corresponding
-intermediate heading. Every wheel stays within +/-90 degrees. Straight travel
+intermediate heading. Every wheel stays within its configured crab envelope. Straight travel
 without steering does not reserve a family. After selection, only neutral owning
 controls plus fresh measured body AND individual traction standstill release it.
 Returning the ignored stick to centre is not required. A connection/authority
 reset discards the selection and old motion commands. `operator/state.status_message`
 reports `steering=ackermann`, `crab`, `straight` or `idle`.
+
+Manual-only and supervised manual speed caps scale forward, lateral and yaw
+velocity together. Normal/boost speed or a reduced-speed condition therefore
+does not change the requested Ackermann turning radius or crab direction.
+For example, a 1 m/s request with 0.22827 rad/s yaw becomes 0.3 m/s with
+0.06848 rad/s yaw at the 0.3 m/s cap; the front-left steering target remains
+about 12.27 degrees instead of jumping to 45 degrees. Steering travel and the
+supervisor's acceleration ramps still take time to follow changing input.
 
 Final manual wheel commands are checked in both authorities, for native and romb
 backends. Targets use the nearest full-turn home and account for pi-mounted right
@@ -115,10 +123,46 @@ Crab uses one shared rolling-axis choice for all four modules, including
 pi-mounted right motors. Starting directly sideways and approaching sideways
 gradually choose the same controller-angle branch. When an up-to-sideways-to-down
 stick sweep reaches +/-90 degrees, steering stays at that endpoint and traction
-is zero beyond the boundary. Returning toward the forward half-plane or neutral
-releases the boundary; no nearly-180-degree steering sweep is requested.
-At neutral, the command reports measured hold positions instead of unbounded
-wrapped kinematics angles.
+is zero beyond the boundary. A new inward heading releases the boundary,
+including straight forward or reverse travel at 0 degrees and inward reverse
+diagonals. This does not require a neutral step or completion of the old turn.
+Outward requests remain blocked. The optional platform setting
+`motion_limits.max_crab_angle` (radians, from pi/2 through pi) widens this envelope.
+Bounded profiles can use +/-180 degrees: a continuous sweep can pass sideways
+and reach a backward-facing wheel heading. Straight input at a +/-90-degree tie
+still chooses the inward 0-degree axis.
+
+The active robot sets `motion_limits.steering_angle_limits_enabled: false`.
+This removes absolute homing-relative angle caps for both manual steering
+families. Steering follows the nearest equivalent heading around the previous
+target, reversing traction when that avoids a large steering change, as in
+Terra Spiro. A gradual joystick sweep can therefore accumulate continuous turns.
+With neutral homing enabled, releasing the controls returns to the nearest
+full-turn home with zero traction. The Ackermann/crab mode
+lock and the existing joystick curvature mapping remain unchanged. Profiles
+with angle limits enabled retain their configured crab and +/-45-degree
+Ackermann envelopes.
+Without neutral homing enabled, neutral holds measured positions. Interlocks
+and stale input always hold position and cannot initiate a return-home move.
+
+Fresh neutral stick input cancels the source velocity immediately, including
+any remaining acceleration-ramp state. A request above the reduced-speed cap
+must not keep the wheels moving while that request ramps down. Starting motion
+still uses the configured acceleration limit, and the steering-family lock
+remains until measured standstill. Releasing the selected family's motion stick
+also stops with an ignored or steering stick still held. Physical stopping follows the drive's
+deceleration settings. With angle limits disabled, entering crab retains each
+controller's existing turn/traction branch; feedback either side of 180 degrees
+cannot introduce an extra full revolution after an arbitrary-angle restart.
+
+The active profile enables `steering_return_home_on_neutral` and sets
+`steering_neutral_home_velocity: 1.2` rad/s. Fresh all-controls-neutral evidence
+and a fresh zero manual command authorize this return. First a zero batch stops
+traction and the previous steering move; a newer complete feedback sample must
+show every traction joint within 0.02 m/s before steering moves home. Nearest
+full-turn targets are frozen once per neutral period, with half-turn ties toward
+the original zero. Each steering profile stops within its encoder tolerance.
+Fresh stick input cancels the home targets and resumes the normal 0.3 rad/s policy.
 
 Both kinematics backends publish complete wheel-target batches as fresh velocity
 commands arrive, using the latest fresh, complete joint feedback. Publication is
@@ -127,9 +171,15 @@ not throttled to the slower physical SDO feedback cycle: the driver retains its
 remain enforced.
 Every moving steering motor receives the same configured profile-speed limit,
 as in the example. Each motor's profile becomes zero when its target is reached
-within one configured encoder count. Small endpoint overshoot does not restart
-corrections; inward input permits steering again. The driver applies the zero
-profile and skips another position-move request while traction continues.
+within one degree of the native reachable target, or a finer configured
+one-count tolerance. Drift or overshoot beyond this tolerance resumes correction
+toward the retained target, including at an envelope endpoint. Reaching a target
+does not disable the steering drive or discard its reference. Targets used for
+continuity remain unrounded, so repeated corrections do not accumulate rounding
+error. The driver applies a zero profile while within tolerance and skips another
+position-move request while traction continues. The installed 2.98-degree native
+position step still limits physical accuracy; a one-degree deadband cannot measure
+sub-count drift or remove the native target's up-to-1.49-degree rounding error.
 
 Steering bounds retain a fixed full-turn reference for each homing/authority
 cycle; moving feedback cannot shift it. Physical-heading and controller-coordinate

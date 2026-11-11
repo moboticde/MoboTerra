@@ -706,11 +706,24 @@ class MoboticSupervisor(Node):
                    for state, _ in self.scanner_states.values())
 
     def _warning_active(self):
-        return (self._operator_scanner_override_active() or self._scanner_warning_active()
-                or (self._requires_safety_telemetry() and (
-                    (self.safety_state is not None and (
-                        self.safety_state.warning_field_active or self.safety_state.safety_override_active))
-                    or self._io_warning_active())))
+        return bool(self._speed_limit_reasons())
+
+    def _speed_limit_reasons(self):
+        reasons = []
+        if self._operator_scanner_override_active():
+            reasons.append('SAFETY_DISABLED_RP2')
+        for name, (state, _) in self.scanner_states.items():
+            if state is not None and state.warning_state_known and not state.warning_field_clear:
+                reasons.append('SCANNER_WARNING:' + name)
+        if self._requires_safety_telemetry():
+            if self.safety_state is not None:
+                if self.safety_state.warning_field_active:
+                    reasons.append('FLEXISOFT_WARNING')
+                if self.safety_state.safety_override_active:
+                    reasons.append('SAFETY_DISABLED_FLEXISOFT')
+            if self._io_warning_active():
+                reasons.append('FLEXISOFT_IO_WARNING')
+        return reasons
 
     def _reduced_speed_limit(self):
         # An overlay may request a lower limit, but cannot raise the project cap.
@@ -1326,12 +1339,45 @@ class MoboticSupervisor(Node):
         # absolute (m/s), independent of normal platform limits or percentages.
         return 1.0
 
+    def _manual_stop_requested(self, source_stamp, now):
+        if (self.selected_mode != VehicleModeState.MANUAL
+                or not self._stamp_valid(source_stamp, self.manual_timeout, now)):
+            return False
+        source_ns = Time.from_msg(source_stamp).nanoseconds
+        state = getattr(self, 'manual_state', None)
+        if (getattr(state, 'controls_neutral', False)
+                and getattr(state, 'connected', False)
+                and self._message_fresh(state, self.manual_state_received, self.manual_timeout, now)
+                and Time.from_msg(state.header.stamp).nanoseconds >= source_ns):
+            return True
+        # Releasing the motion stick also stops when an ignored/steering stick
+        # is still held, so all-controls-neutral evidence may be absent.
+        command = getattr(self, 'manual_command', None)
+        return (self._message_fresh(command, getattr(self, 'manual_command_received', None), self.manual_timeout, now)
+                and all(v == 0.0 for v in (command.twist.linear.x, command.twist.linear.y, command.twist.angular.z))
+                and Time.from_msg(command.header.stamp).nanoseconds >= source_ns)
+
+    def _manual_neutral_home_requested(self, now):
+        policy = getattr(self, 'manual_steering_policy', None)
+        state, command = getattr(self, 'manual_state', None), getattr(self, 'manual_command', None)
+        return (self.selected_mode == VehicleModeState.MANUAL
+                and policy is not None and policy.return_home_on_neutral
+                and getattr(state, 'connected', False) and getattr(state, 'command_active', False)
+                and getattr(state, 'controls_neutral', False)
+                and self._message_fresh(state, self.manual_state_received, self.manual_timeout, now)
+                and self._message_fresh(command, self.manual_command_received, self.manual_timeout, now)
+                and all(v == 0.0 for v in (command.twist.linear.x, command.twist.linear.y, command.twist.angular.z))
+                and Time.from_msg(state.header.stamp).nanoseconds >= Time.from_msg(command.header.stamp).nanoseconds)
+
     def _publish_velocity(self, source, now, immediate_stop=False):
         output = TwistStamped()
         output.header.stamp = now.to_msg()
         output.header.frame_id = self.output_frame_id
 
-        if source is None or immediate_stop:
+        manual_zero = (source is not None and self.selected_mode == VehicleModeState.MANUAL
+                       and self._stamp_valid(source.header.stamp, self.manual_timeout, now)
+                       and all(v == 0.0 for v in (source.twist.linear.x, source.twist.linear.y, source.twist.angular.z)))
+        if source is None or immediate_stop or manual_zero or self._manual_stop_requested(source.header.stamp, now):
             self.last_output = [0.0, 0.0, 0.0]
             self.last_control_time = now
             self._publish_velocity_candidate(output, source, now)
@@ -1345,16 +1391,16 @@ class MoboticSupervisor(Node):
             linear_limit = min(linear_limit, speed_limit)
             angular_limit = min(angular_limit, self.max_velocity_angular * min(
                 1.0, speed_limit / self.max_velocity_linear))
-        target_x, target_y = clamp_planar(
-            source.twist.linear.x,
-            source.twist.linear.y,
-            linear_limit,
-        )
-        target_angular = clamp(
-            source.twist.angular.z,
-            -angular_limit,
-            angular_limit,
-        )
+        manual_policy = (getattr(self, 'manual_steering_policy', None)
+                         if self.selected_mode == VehicleModeState.MANUAL else None)
+        if manual_policy is not None:
+            target_x, target_y, target_angular = manual_policy.cap_velocity(
+                (source.twist.linear.x, source.twist.linear.y, source.twist.angular.z),
+                linear_limit, angular_limit)
+        else:
+            target_x, target_y = clamp_planar(
+                source.twist.linear.x, source.twist.linear.y, linear_limit)
+            target_angular = clamp(source.twist.angular.z, -angular_limit, angular_limit)
         dt = max((now - self.last_control_time).nanoseconds * 1.0e-9, 0.0)
         delta_x, delta_y = clamp_planar(target_x - self.last_output[0], target_y - self.last_output[1],
                                        self.max_acceleration_linear * scale * dt)
@@ -1363,20 +1409,13 @@ class MoboticSupervisor(Node):
         # Cap published commands as soon as reduced-speed policy is active,
         # including a transition from a previously faster command. Physical
         # deceleration still follows the configured drive/controller limits.
-        output.twist.linear.x, output.twist.linear.y = clamp_planar(
-            output_x,
-            output_y,
-            linear_limit,
-        )
-        output.twist.angular.z = clamp(
-            slew(
-                target_angular,
-                self.last_output[2],
-                self.max_acceleration_angular * scale * dt,
-            ),
-            -angular_limit,
-            angular_limit,
-        )
+        output_angular = slew(target_angular, self.last_output[2], self.max_acceleration_angular * scale * dt)
+        if manual_policy is not None:
+            output.twist.linear.x, output.twist.linear.y, output.twist.angular.z = manual_policy.cap_velocity(
+                (output_x, output_y, output_angular), linear_limit, angular_limit)
+        else:
+            output.twist.linear.x, output.twist.linear.y = clamp_planar(output_x, output_y, linear_limit)
+            output.twist.angular.z = clamp(output_angular, -angular_limit, angular_limit)
         self.last_output = [
             output.twist.linear.x,
             output.twist.linear.y,
@@ -1484,6 +1523,8 @@ class MoboticSupervisor(Node):
             reasons.add('B2_ENABLE_REQUIRED')
         if self._safety_selector_mismatch(now):
             reasons.add('SAFETY_SELECTOR_MISMATCH')
+        speed_reasons = tuple(self._speed_limit_reasons())
+        reasons.update(speed_reasons)
         state.reason_codes = sorted(reasons)
         state.supervisor_instance = getattr(self, 'supervisor_instance', '')
         state.authority_generation = getattr(self, 'authority_generation', 0)
@@ -1507,6 +1548,14 @@ class MoboticSupervisor(Node):
         if low_soc:
             state.status_message += (f'; WARNING: battery SOC {self.battery_state.minimum_percentage:.1%}'
                                      f' below {self.minimum_battery_percentage:.0%}; advisory only')
+        if speed_reasons:
+            state.status_message += (f'; speed limited to {self._reduced_speed_limit():g} m/s: '
+                                     + ', '.join(speed_reasons))
+        if speed_reasons != getattr(self, '_last_speed_limit_reasons', None):
+            self._last_speed_limit_reasons = speed_reasons
+            self.get_logger().info(
+                f'Speed limited to {self._reduced_speed_limit():g} m/s: ' + ', '.join(speed_reasons)
+                if speed_reasons else f'Speed policy: no reduced-speed condition; platform cap {self.max_velocity_linear:g} m/s')
         self.mode_state_publisher.publish(state)
 
     def _standstill_gate(self, now):
@@ -2071,6 +2120,20 @@ class MoboticSupervisor(Node):
         if not self._joint_feedback_valid(msg) or msg.effort:
             return
         if entry[1] == WheelModuleCommandArray.MOTION and not self._source_gate(now)[0]:
+            return
+        # A delayed kinematics result from before a neutral sample must not
+        # restart traction or finish its old steering target after release.
+        if self._manual_stop_requested(entry[2], now):
+            if self._message_fresh(self.joint_state, self.joint_state_received, self.wheel_status_timeout, now):
+                home = (entry[1] == WheelModuleCommandArray.MOTION and self._manual_neutral_home_requested(now))
+                if getattr(self, 'manual_steering_policy', None):
+                    self.manual_steering_policy.release_crab_boundary()
+                    try:
+                        msg = self.manual_steering_policy.align(msg, self.joint_state, (0., 0., 0.), neutral=home)
+                    except ValueError:
+                        return
+                self._emit_final(msg, entry[2], now,
+                                 WheelModuleCommandArray.MOTION if home else WheelModuleCommandArray.HOLD)
             return
         msg = self._manual_stationary_candidate(msg, entry, now)
         msg = self._aligned_manual_candidate(msg, entry, now)

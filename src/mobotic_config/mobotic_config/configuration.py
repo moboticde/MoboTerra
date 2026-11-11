@@ -151,8 +151,21 @@ def validate_platform(platform):
                     required=actuator_keys)
             controller_type(platform['actuators'][role], role)
         _record(platform['traction_profile'], ('max_velocity', 'acceleration', 'deceleration'), 'traction_profile')
-        _record(platform['motion_limits'], ('max_velocity_linear', 'max_velocity_angular', 'max_acceleration_linear',
-                'max_acceleration_angular', 'max_steering_velocity', 'max_traction_velocity', 'max_traction_current'), 'motion_limits')
+        motion_keys = ('max_velocity_linear', 'max_velocity_angular', 'max_acceleration_linear',
+                       'max_acceleration_angular', 'max_steering_velocity', 'max_traction_velocity', 'max_traction_current')
+        _record(platform['motion_limits'], (*motion_keys, 'max_crab_angle', 'steering_angle_limits_enabled',
+                                          'steering_return_home_on_neutral', 'steering_neutral_home_velocity'),
+                'motion_limits', required=motion_keys)
+        if type(platform['motion_limits'].get('steering_angle_limits_enabled', True)) is not bool:
+            raise ConfigurationError('steering_angle_limits_enabled must be boolean')
+        if type(platform['motion_limits'].get('steering_return_home_on_neutral', False)) is not bool:
+            raise ConfigurationError('steering_return_home_on_neutral must be boolean')
+        _number(platform['motion_limits'].get('steering_neutral_home_velocity',
+                                            platform['motion_limits']['max_steering_velocity']),
+                'steering_neutral_home_velocity', positive=True)
+        crab_angle = _number(platform['motion_limits'].get('max_crab_angle', math.pi / 2), 'max_crab_angle')
+        if not math.pi / 2 <= crab_angle <= math.pi:
+            raise ConfigurationError('max_crab_angle must be between pi/2 and pi radians')
         _record(platform['usb_joystick'], ('device_id', 'autorepeat_rate', 'deadzone', 'sticky_buttons'), 'usb_joystick')
         _record(platform['scanners'], ('host_ip', 'units'), 'scanners')
         _record(platform['battery'], ('primary_id', 'participants', 'readiness'), 'battery', required=('primary_id', 'participants'))
@@ -239,7 +252,10 @@ def validate_platform(platform):
                     if ticks > ceiling or limits['max_traction_current'] * 1000 > min(drive['max_current'], -drive['min_current']):
                         raise ConfigurationError(f'{joint}: software traction limits exceed controller limits')
                 else:
-                    rpm = limits['max_steering_velocity'] * drive['gear_ratio'] * 60 / (2 * math.pi)
+                    velocity = limits['max_steering_velocity']
+                    if limits.get('steering_return_home_on_neutral', False):
+                        velocity = max(velocity, limits.get('steering_neutral_home_velocity', velocity))
+                    rpm = velocity * drive['gear_ratio'] * 60 / (2 * math.pi)
                     if rpm > min(drive['max_steering_velocity'], -drive['min_steering_velocity']):
                         raise ConfigurationError(f'{joint}: software steering limit exceeds controller limit')
         if len(set(ids)) != len(ids) or len(set(joints)) != len(joints):
@@ -420,6 +436,9 @@ class Configuration:
                                                             'max_acceleration_linear', 'max_acceleration_angular')}
         joint_limits = {key: float(limits[key]) for key in ('max_steering_velocity', 'max_traction_velocity', 'max_traction_current')}
         driver.update({key: joint_limits[key] for key in ('max_steering_velocity', 'max_traction_velocity', 'max_traction_current')})
+        if limits.get('steering_return_home_on_neutral', False):
+            driver['max_steering_velocity'] = max(driver['max_steering_velocity'],
+                float(limits.get('steering_neutral_home_velocity', limits['max_steering_velocity'])))
         driver['wheel_radius'] = float(p['geometry']['wheel_radius'])
         kinematics = {'module_names': names, 'steering_joint_names': steering, 'traction_joint_names': traction,
                       'wheels_x': [float(m['cad_steering_xyz'][0]) for m in modules],
@@ -444,7 +463,15 @@ class Configuration:
             'wheels_x', 'wheels_y', 'steering_joint_names', 'traction_joint_names',
             'wheel_mount_angles', 'max_steering_velocity')}
         steering_geometry_data['steering_position_tolerances'] = [
-            2.0 * math.pi / resolution for resolution in resolutions]
+            min(math.radians(1.0), 2.0 * math.pi / resolution) for resolution in resolutions]
+        steering_geometry_data['steering_position_resolutions'] = resolutions
+        if 'max_crab_angle' in limits:
+            steering_geometry_data['max_crab_angle'] = float(limits['max_crab_angle'])
+        if 'steering_angle_limits_enabled' in limits:
+            steering_geometry_data['steering_angle_limits_enabled'] = limits['steering_angle_limits_enabled']
+        for key in ('steering_return_home_on_neutral', 'steering_neutral_home_velocity'):
+            if key in limits:
+                steering_geometry_data[key] = limits[key]
         steering_geometry = json.dumps(steering_geometry_data)
         supervisor['manual_steering_geometry'] = steering_geometry
         manual = {'steering_geometry': steering_geometry, 'frame_id': frame,
@@ -615,6 +642,10 @@ class Configuration:
         if self._parameters['driver']['telemetry_pdo_sync_divider'] not in range(1, 241):
             raise ConfigurationError('telemetry_pdo_sync_divider must be an integer in 1..240')
         driver = self._parameters['driver']
+        motion = self.platform['motion_limits']
+        if (motion.get('steering_return_home_on_neutral', False) and
+                driver['max_steering_velocity'] < motion.get('steering_neutral_home_velocity', motion['max_steering_velocity'])):
+            raise ConfigurationError('driver steering ceiling must allow the neutral home velocity')
         if (driver['steering_alignment_velocity'] <= 0 or
                 driver['steering_alignment_timeout'] <= 0 or
                 (driver['steering_align_on_enable'] and driver['steering_alignment_timeout'] >= driver['startup_timeout'])):

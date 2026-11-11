@@ -27,6 +27,9 @@ def stamp_ns(stamp):
 
 
 class ManualDriveControl(Node):
+    # This authority has no scanner-zone input, even with a faster robot profile.
+    SPEED_LIMIT = 0.3
+
     def __init__(self):
         super().__init__('manual_drive_control')
         defaults = {
@@ -286,12 +289,12 @@ class ManualDriveControl(Node):
         velocity.header.stamp, velocity.header.frame_id = now.to_msg(), self.output_frame_id
         if source is not None:
             velocity.twist = copy.deepcopy(source.twist)
-            speed = math.hypot(velocity.twist.linear.x, velocity.twist.linear.y)
-            scale = min(1.0, self.max_velocity_linear / speed) if speed else 1.0
-            velocity.twist.linear.x *= scale
-            velocity.twist.linear.y *= scale
-            velocity.twist.angular.z = max(-self.max_velocity_angular,
-                                         min(self.max_velocity_angular, velocity.twist.angular.z))
+            linear_limit = min(self.max_velocity_linear, self.SPEED_LIMIT)
+            angular_limit = self.max_velocity_angular * linear_limit / self.max_velocity_linear
+            # Keep yaw/forward curvature and crab direction under either cap.
+            velocity.twist.linear.x, velocity.twist.linear.y, velocity.twist.angular.z = ManualSteering.cap_velocity(
+                (velocity.twist.linear.x, velocity.twist.linear.y, velocity.twist.angular.z),
+                linear_limit, angular_limit)
             if self.steering_policy:
                 velocity.twist.linear.x, velocity.twist.linear.y, velocity.twist.angular.z = self.steering_policy.project(
                     (velocity.twist.linear.x, velocity.twist.linear.y, velocity.twist.angular.z))
@@ -303,17 +306,24 @@ class ManualDriveControl(Node):
     def _candidate(self, msg):
         entry = self.ledger.pop(stamp_ns(msg.header.stamp), None)
         now = self.get_clock().now()
-        if (entry is None or entry[0] != self.generation or self._motion_source() is None
+        source = self._motion_source()
+        if (entry is None or entry[0] != self.generation or source is None
                 or not 0 <= time.monotonic() - entry[2] <= self.candidate_timeout
                 or not 0 <= now.nanoseconds - stamp_ns(entry[1]) <= self.manual_timeout * 1e9
                 or not self._joint_valid(msg)):
             return
+        home = False
         if self.steering_policy:
             feedback = self._fresh('joints')
             if feedback is None:
                 return
+            state = self._fresh('operator')
+            stopped = all(v == 0.0 for v in (source.twist.linear.x, source.twist.linear.y, source.twist.angular.z))
+            home = bool(stopped and self.steering_policy.return_home_on_neutral
+                        and state and state.connected and state.command_active and state.controls_neutral
+                        and stamp_ns(state.header.stamp) >= stamp_ns(source.header.stamp))
             try:
-                msg = self.steering_policy.align(msg, feedback, entry[3])
+                msg = self.steering_policy.align(msg, feedback, (0., 0., 0.) if stopped else entry[3], neutral=home)
             except ValueError:
                 return
         indices = {n: i for i, n in enumerate(msg.name)}
@@ -326,10 +336,17 @@ class ManualDriveControl(Node):
             record.name, record.steering_position = name, msg.position[indices[steering]]
             record.steering_profile_velocity = msg.velocity[indices[steering]]
             record.traction_velocity = msg.velocity[indices[traction]]
-            if (not 0 <= record.steering_profile_velocity <= self.max_steering_velocity
+            steering_limit = max(self.max_steering_velocity, self.steering_policy.neutral_home_velocity) if home else self.max_steering_velocity
+            if (not 0 <= record.steering_profile_velocity <= steering_limit
                     or abs(record.traction_velocity) > self.max_traction_velocity):
                 return
             output.modules.append(record)
+        # Rotation can produce wheel speeds above the body's planar speed.
+        # Bound the final wheel command too, preserving relative wheel speeds.
+        peak = max(abs(module.traction_velocity) for module in output.modules)
+        scale = min(1.0, self.SPEED_LIMIT / peak) if peak else 1.0
+        for module in output.modules:
+            module.traction_velocity *= scale
         self.command_pub.publish(output)
 
 

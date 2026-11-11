@@ -117,6 +117,160 @@ class InterfaceUpdateTest(unittest.TestCase):
         self.node._kinematics_candidate_callback(msg)
         self.assertEqual(len(self.node.final_command_publisher.messages), 1)
 
+    def test_fresh_neutral_cancels_uncapped_request_without_supervisor_ramp(self):
+        self.node.manual_state = SimpleNamespace(controls_neutral=True, connected=True,
+            header=SimpleNamespace(stamp=self.fixture.now.to_msg()))
+        self.node.manual_state.header.stamp = self.fixture.now.to_msg()
+        self.node.manual_state_received = self.fixture.now
+        self.node.last_output = [.3, .2, .1]
+        self.node.last_control_time = harness.Time(9.99)
+        self.node.max_acceleration_linear = self.node.max_acceleration_angular = .5
+        source = harness.TwistStamped()
+        source.header.stamp = harness.Time(9.95).to_msg()
+        source.twist.linear.x = 2.
+        self.node._publish_velocity(source, self.fixture.now)
+        out = self.node.cmd_vel_publisher.messages[-1].twist
+        self.assertEqual([out.linear.x, out.linear.y, out.angular.z], [0., 0., 0.])
+        self.assertEqual(self.node.last_output, [0., 0., 0.])
+
+    def test_delayed_candidate_cannot_restart_traction_or_old_steering_after_neutral(self):
+        self.node.manual_state = SimpleNamespace(controls_neutral=True, connected=True,
+            header=SimpleNamespace(stamp=self.fixture.now.to_msg()))
+        self.node.manual_state.header.stamp = self.fixture.now.to_msg()
+        self.node.manual_state_received = self.fixture.now
+        self.node.joint_state = self.joints()
+        self.node.joint_state_received = self.fixture.now
+        msg = self.joints()
+        msg.position[:2] = [7., -9.]
+        self.node.last_final = {'front': .3, 'rear': -.3}
+        self.node.velocity_ledger[msg.header.stamp] = (
+            7, harness.WheelModuleCommandArray.MOTION, harness.Time(9.95).to_msg())
+        self.node._kinematics_candidate_callback(msg)
+        output = self.node.final_command_publisher.messages[-1]
+        self.assertEqual(output.purpose, harness.WheelModuleCommandArray.HOLD)
+        self.assertEqual([m.steering_position for m in output.modules], [.2, -.1])
+        self.assertEqual([m.steering_profile_velocity for m in output.modules], [0., 0.])
+        self.assertEqual([m.traction_velocity for m in output.modules], [0., 0.])
+
+    def test_neutral_proof_does_not_override_newer_input_or_other_modes(self):
+        self.node.manual_state = SimpleNamespace(controls_neutral=True, connected=True,
+            header=SimpleNamespace(stamp=self.fixture.now.to_msg()))
+        self.node.manual_state.header.stamp = harness.Time(9.9).to_msg()
+        self.node.manual_state_received = self.fixture.now
+        self.assertFalse(self.node._manual_stop_requested(harness.Time(9.95).to_msg(), self.fixture.now))
+        for mode in (harness.MODES.AUTONOMOUS, harness.MODES.KINEMATICOFF):
+            self.node.selected_mode = mode
+            self.assertFalse(self.node._manual_stop_requested(harness.Time(9.8).to_msg(), self.fixture.now))
+        self.node.selected_mode = harness.MODES.MANUAL
+        self.node.manual_state.header.stamp = harness.Time(9.).to_msg()
+        self.assertFalse(self.node._manual_stop_requested(harness.Time(9.8).to_msg(), self.fixture.now))
+
+    def test_explicit_manual_zero_cancels_ramp_and_late_candidates_without_all_sticks_neutral(self):
+        self.node.manual_state = SimpleNamespace(controls_neutral=False, connected=True,
+            header=SimpleNamespace(stamp=self.fixture.now.to_msg()))
+        source = harness.TwistStamped()
+        source.header.stamp = self.fixture.now.to_msg()
+        self.node.manual_command = source
+        self.node.manual_command_received = self.fixture.now
+        self.node.last_output = [.3, .2, .1]
+        self.node.last_control_time = harness.Time(9.99)
+        self.node._publish_velocity(source, self.fixture.now)
+        out = self.node.cmd_vel_publisher.messages[-1].twist
+        self.assertEqual([out.linear.x, out.linear.y, out.angular.z], [0., 0., 0.])
+        self.node.joint_state = self.joints()
+        self.node.joint_state_received = self.fixture.now
+        msg = self.joints()
+        self.node.velocity_ledger[msg.header.stamp] = (
+            7, harness.WheelModuleCommandArray.MOTION, harness.Time(9.95).to_msg())
+        self.node._kinematics_candidate_callback(msg)
+        output = self.node.final_command_publisher.messages[-1]
+        self.assertEqual(output.purpose, harness.WheelModuleCommandArray.HOLD)
+        self.assertEqual([m.traction_velocity for m in output.modules], [0., 0.])
+        # A later real command can start moving again; an older zero cannot veto it.
+        self.assertFalse(self.node._manual_stop_requested(harness.Time(10.001).to_msg(), harness.Time(10.01)))
+
+    def configure_neutral_home(self):
+        from mobotic_kinematics.manual_steering import ManualSteering
+        self.node.manual_steering_policy = ManualSteering({
+            'wheels_x': [.845, -.845], 'wheels_y': [.495, -.495],
+            'steering_joint_names': self.node.expected_steering_joint_names,
+            'traction_joint_names': self.node.expected_traction_joint_names,
+            'wheel_mount_angles': [0., 3.14152], 'max_steering_velocity': .3,
+            'steering_angle_limits_enabled': False, 'steering_return_home_on_neutral': True,
+            'steering_neutral_home_velocity': 1.2})
+        self.node.manual_state = SimpleNamespace(controls_neutral=True, connected=True, command_active=True,
+            header=SimpleNamespace(stamp=self.fixture.now.to_msg()))
+        self.node.manual_state_received = self.fixture.now
+        self.node.manual_command = harness.TwistStamped()
+        self.node.manual_command.header.stamp = self.fixture.now.to_msg()
+        self.node.manual_command_received = self.fixture.now
+        self.node.joint_state = self.joints()
+        self.node.joint_state.velocity = [0.] * 4
+        self.node.joint_state_received = self.fixture.now
+
+    def neutral_candidate(self, purpose=None):
+        msg = self.joints()
+        self.node.velocity_ledger[msg.header.stamp] = (7,
+            harness.WheelModuleCommandArray.MOTION if purpose is None else purpose,
+            self.node.manual_command.header.stamp, True, True, (0.,0.,0.))
+        self.node._kinematics_candidate_callback(msg)
+        return self.node.final_command_publisher.messages[-1]
+
+    def test_neutral_returns_home_only_after_new_traction_standstill_feedback(self):
+        self.configure_neutral_home()
+        first = self.neutral_candidate()
+        self.assertEqual([m.traction_velocity for m in first.modules], [0., 0.])
+        self.assertEqual([m.steering_profile_velocity for m in first.modules], [0., 0.])
+        self.fixture.now = harness.Time(10.1)
+        self.node.get_clock = lambda: SimpleNamespace(now=lambda: self.fixture.now)
+        self.node.joint_state.header.stamp = self.fixture.now.to_msg()
+        self.node.joint_state_received = self.fixture.now
+        homing = self.neutral_candidate()
+        self.assertEqual(homing.purpose, harness.WheelModuleCommandArray.MOTION)
+        self.assertEqual([m.steering_position for m in homing.modules], [0., 0.])
+        self.assertEqual([m.steering_profile_velocity for m in homing.modules], [1.2, 1.2])
+        self.assertEqual([m.traction_velocity for m in homing.modules], [0., 0.])
+
+    def test_neutral_never_homes_for_inhibited_stale_or_non_neutral_sources(self):
+        for cause in ('hold', 'source_gate', 'stale', 'stick_held'):
+            with self.subTest(cause=cause):
+                self.setUp()
+                self.configure_neutral_home()
+                if cause == 'source_gate':
+                    self.node._source_gate = lambda now, **kwargs: (False, 'safety stop')
+                elif cause == 'stale':
+                    self.node.manual_state.header.stamp = harness.Time(9.).to_msg()
+                elif cause == 'stick_held':
+                    self.node.manual_state.controls_neutral = False
+                if cause == 'source_gate':
+                    msg = self.joints()
+                    self.node.velocity_ledger[msg.header.stamp] = (7, harness.WheelModuleCommandArray.MOTION,
+                        self.node.manual_command.header.stamp, True, True, (0.,0.,0.))
+                    self.node._kinematics_candidate_callback(msg)
+                    self.assertFalse(self.node.final_command_publisher.messages)
+                else:
+                    result = self.neutral_candidate(harness.WheelModuleCommandArray.HOLD if cause == 'hold' else None)
+                    self.assertEqual(result.purpose, harness.WheelModuleCommandArray.HOLD)
+                    self.assertEqual([m.steering_profile_velocity for m in result.modules], [0., 0.])
+                self.assertIsNone(self.node.manual_steering_policy.neutral_home_targets)
+
+    def test_speed_limit_reason_identifies_each_warning_and_clears(self):
+        self.node.scanner_states['front_left'][0].warning_field_clear=False
+        state=self.publish_state()
+        self.assertIn('SCANNER_WARNING:front_left',state.reason_codes)
+        self.assertIn('speed limited to 0.3 m/s',state.status_message)
+        self.assertFalse(state.error_active)
+        self.node.scanner_states['front_left'][0].warning_field_clear=True
+        self.node.safety_state.safety_override_active=True
+        state=self.publish_state()
+        self.assertIn('SAFETY_DISABLED_FLEXISOFT',state.reason_codes)
+        self.assertNotIn('SCANNER_WARNING:front_left',state.reason_codes)
+        self.node.safety_state.safety_override_active=False
+        state=self.publish_state()
+        self.assertFalse(self.node._warning_active())
+        self.assertNotIn('speed limited',state.status_message)
+        self.assertFalse(any('WARNING' in code or 'DISABLED' in code for code in state.reason_codes))
+
     def test_wrong_generation_direct_mode_and_current_effort_drop_candidates(self):
         for mode, generation, effort in [(State.MANUAL, 6, []), (State.KINEMATICOFF, 7, []),
                                           (State.MANUAL, 7, [1.0] * 4)]:

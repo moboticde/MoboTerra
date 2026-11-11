@@ -24,6 +24,21 @@ def model(g, body):
     return sample(g,angles,[math.hypot(x,y) for x,y in vectors])
 
 
+@pytest.mark.parametrize('body', [(1.,0.,.22827042), (-1.,0.,-.22827042), (2.,0.,-.7),
+                                  (.1,0.,.02), (0.,1.,0.), (.6,-.8,0.), (0.,0.,.4), (0.,0.,0.)])
+@pytest.mark.parametrize('limits', [(.3,.2265), (.15,.1), (2.,1.51), (.3,.01)])
+def test_uniform_speed_caps_preserve_all_four_wheel_headings(body, limits):
+    g = geometry()
+    output = ManualSteering.cap_velocity(body, *limits)
+    assert math.hypot(*output[:2]) <= limits[0] + 1e-12
+    assert abs(output[2]) <= limits[1] + 1e-12
+    assert model(g, output).position[:4] == pytest.approx(model(g, body).position[:4])
+    if math.hypot(*body[:2]) <= limits[0] and abs(body[2]) <= limits[1]:
+        assert output == body
+    else:
+        assert math.hypot(*output[:2]) == pytest.approx(limits[0]) or abs(output[2]) == pytest.approx(limits[1])
+
+
 def test_left_alone_cannot_select_or_rotate():
     p=ManualSteering(geometry())
     assert p.command(0.,1.,0.,True,.1,.3,.5)==[0.,0.,0.]
@@ -37,8 +52,10 @@ def test_crab_wins_same_sample_and_ignores_left_stick():
     assert a==b and p.mode=='crab' and a[2]==0.
 
 
-def test_ackermann_first_ignores_subsequent_crab():
-    p=ManualSteering(geometry());q=ManualSteering(geometry())
+@pytest.mark.parametrize('limits_enabled',[True,False])
+def test_ackermann_first_ignores_subsequent_crab(limits_enabled):
+    g=geometry();g['steering_angle_limits_enabled']=limits_enabled
+    p=ManualSteering(g);q=ManualSteering(g)
     p.command(1.,1.,0.,True,.1,.3,.5);q.command(1.,1.,0.,True,.1,.3,.5)
     assert p.command(1.,1.,1.,False,.1,.3,.5)==q.command(1.,1.,0.,False,.1,.3,.5)
     assert p.mode=='ackermann' and p.output[1]==0.
@@ -233,7 +250,7 @@ def test_held_crab_reaches_native_target_and_stays_stopped(direction, home_turns
 
 @pytest.mark.parametrize('direction', [-1., 1.])
 @pytest.mark.parametrize('family', ['crab', 'ackermann'])
-def test_held_limit_stops_after_overshoot_and_allows_inward_input(direction, family):
+def test_held_limit_corrects_overshoot_and_allows_inward_input(direction, family):
     g=geometry(); p=ManualSteering(g)
     body=(0., direction*.3, 0.) if family=='crab' else (.3, 0., direction*.3*p.curvature_limit)
     candidate=model(g,body); feedback=sample(g,[0.]*4)
@@ -246,14 +263,80 @@ def test_held_limit_stops_after_overshoot_and_allows_inward_input(direction, fam
             endpoints.append(i)
             feedback.position[i]+=math.copysign(.01,target)
     assert endpoints
-    stopped=p.align(candidate,feedback,body)
-    assert stopped.velocity[:4]==[0.]*4
-    assert stopped.position==first.position
+    corrected=p.align(candidate,feedback,body)
+    assert corrected.position==first.position
+    assert corrected.velocity[4:]==first.velocity[4:]
+    for i in endpoints:
+        assert corrected.velocity[i]>0.
     inward=(.3, direction*.1, 0.) if family=='crab' else (.3, 0., 0.)
     moving=p.align(model(g,inward),feedback,inward)
     for i in endpoints:
         assert moving.velocity[i]>0.
         assert abs(moving.position[i])<abs(first.position[i])
+
+
+@pytest.mark.parametrize('limits_enabled', [True, False])
+@pytest.mark.parametrize('family', ['ackermann', 'crab'])
+@pytest.mark.parametrize('sign', [-1., 1.])
+def test_one_degree_corrects_native_drift_without_accumulating_target(limits_enabled, family, sign):
+    g = geometry()
+    g.update(steering_angle_limits_enabled=limits_enabled,
+             steering_position_tolerances=[math.radians(1.)]*4,
+             steering_position_resolutions=[121.]*4)
+    p = ManualSteering(g)
+    body = (.3, 0., sign*.3*p.curvature_limit) if family == 'ackermann' else (
+        .3*math.cos(math.radians(16)), sign*.3*math.sin(math.radians(16)), 0.)
+    candidate = model(g, body)
+    feedback = sample(g, [0.]*4)
+    target = p.align(candidate, feedback, body)
+    unit = 2*math.pi/121
+    native = [math.copysign(math.floor(abs(v/unit)+.5), v)*unit for v in target.position[:4]]
+    for _ in range(100):
+        feedback.position[:4] = native
+        settled = p.align(candidate, feedback, body)
+        assert settled.position == target.position
+        assert settled.velocity[:4] == [0.]*4
+        # Even one reported count is larger than the new one-degree threshold.
+        # Correct every wheel, even beyond its old endpoint, and retain traction.
+        feedback.position[:4] = [v + sign*unit for v in native]
+        correcting = p.align(candidate, feedback, body)
+        assert correcting.position == target.position
+        assert correcting.velocity[:4] == [.3]*4
+        assert correcting.velocity[4:] == target.velocity[4:]
+
+
+def test_one_degree_boundary_and_reachable_half_count_target():
+    g = geometry()
+    g['steering_position_tolerances'] = [math.radians(1.)]*4
+    p = ManualSteering(g)
+    body = (.3, .1, 0.)
+    candidate = model(g, body)
+    feedback = sample(g, [0.]*4)
+    target = p.align(candidate, feedback, body)
+    feedback.position[:4] = [v + math.radians(1.) for v in target.position[:4]]
+    assert p.align(candidate, feedback, body).velocity[:4] == [0.]*4
+    feedback.position[:4] = [v + math.radians(1.01) for v in target.position[:4]]
+    assert p.align(candidate, feedback, body).velocity[:4] == [.3]*4
+    g['steering_position_resolutions'] = [121.]*4
+    p = ManualSteering(g)
+    unit = 2*math.pi/121
+    # Native +/-.5 count rounds away from zero, as on the CAN wire.
+    for sign in (-1., 1.):
+        assert p._position_error(0, sign*.5*unit, sign*unit) == 0.
+        assert p._position_error(0, sign*.5*unit, 0.) > math.radians(1.)
+        # Adding .5 before floor would incorrectly round the closest float
+        # below a half count upward, disagreeing with std::round on the wire.
+        below = sign*math.nextafter(unit/2, 0.)
+        above = sign*math.nextafter(unit/2, math.inf)
+        assert p._position_error(0, below, 0.) == 0.
+        assert p._position_error(0, above, sign*unit) == 0.
+
+
+@pytest.mark.parametrize('bad', [[121.], [0.]*4, [121.5]*4, [math.nan]*4, [True]*4])
+def test_invalid_native_position_resolutions_rejected(bad):
+    g = geometry(); g['steering_position_resolutions'] = bad
+    with pytest.raises(ValueError, match='resolution'):
+        ManualSteering(g)
 
 
 def test_encoder_tolerance_is_individual_to_each_wheel():
@@ -332,10 +415,10 @@ def test_direct_sideways_and_gradual_approach_choose_one_shared_axis(direction):
 
 
 @pytest.mark.parametrize('direction', [-1., 1.])
-def test_sweep_up_sideways_down_stops_at_boundary_until_return_or_neutral(direction):
+def test_sweep_past_sideways_stays_bounded_and_straight_reverse_returns_inward(direction):
     g=geometry(); p=ManualSteering(g); feedback=sample(g,[0.]*4)
     previous=None
-    for degree in range(1,181):
+    for degree in range(1,180):
         angle=direction*math.radians(degree)
         body=(.3*math.cos(angle),.3*math.sin(angle),0.)
         output=p.align(model(g,body),feedback,body)
@@ -347,6 +430,13 @@ def test_sweep_up_sideways_down_stops_at_boundary_until_return_or_neutral(direct
             assert targets[0]==pytest.approx(direction*math.pi/2)
             assert output.velocity[4:]==[0.]*4
         previous=targets
+    # Straight reverse is a valid 0-degree rolling axis, even after this
+    # outward sweep. It must not require a neutral command to be accepted.
+    reverse=(-.3,0.,0.)
+    resumed=p.align(model(g,reverse),feedback,reverse)
+    assert max(map(abs,resumed.position[:4]))<1e-4
+    assert not p.crab_blocked
+    assert all(abs(v)>.01 for v in resumed.velocity[4:])
     angle=direction*math.radians(80)
     body=(.3*math.cos(angle),.3*math.sin(angle),0.)
     resumed=p.align(model(g,body),feedback,body)
@@ -373,7 +463,286 @@ def test_zero_command_during_interlock_cannot_release_crab_boundary():
     output=p.align(model(g,body),feedback,body)
     assert output.velocity[4:]==[0.]*4
     assert output.position[0]==-math.pi/2
+    assert p.crab_blocked
+
+
+@pytest.mark.parametrize('direction', [-1.,1.])
+@pytest.mark.parametrize('speed', [-.3,.3])
+@pytest.mark.parametrize('measured_angle', [.2,1.55])
+def test_blocked_crab_accepts_straight_target_before_wheels_reach_old_limit(direction,speed,measured_angle):
+    g=geometry();p=ManualSteering(g)
+    homes=[0.,0.,2*math.pi,0.]
+    feedback=sample(g,homes)
+    for body in ((0.,direction*.3,0.),(-.03,direction*.3,0.)):
+        blocked=p.align(model(g,body),feedback,body)
+    assert p.crab_blocked and blocked.velocity[4:]==[0.]*4
+    # The actual bag changes direction while the wheels are still travelling
+    # toward the old endpoint. Keep feedback away from both old and new goals.
+    feedback.position[:4]=[home+direction*measured_angle for home in homes]
+    body=(speed,0.,0.)
+    output=p.align(model(g,body),feedback,body)
+    assert not p.crab_blocked
+    for i,(home,mount) in enumerate(zip(homes,g['wheel_mount_angles'])):
+        assert output.position[i]-home==pytest.approx(0.,abs=1e-4)
+        assert output.velocity[i]==g['max_steering_velocity']
+        assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(speed,abs=3e-5)
+    targets=output.position[:4]
+    feedback.position[:4]=targets
+    completed=p.align(model(g,body),feedback,body)
+    assert completed.position[:4]==pytest.approx(targets)
+    assert completed.velocity[:4]==[0.]*4
+    assert all(abs(v)>.01 for v in completed.velocity[4:])
+
+
+@pytest.mark.parametrize('direction', [-1.,1.])
+def test_blocked_crab_accepts_inward_reverse_diagonal_without_neutral(direction):
+    g=geometry();p=ManualSteering(g);feedback=sample(g,[0.]*4)
+    for body in ((0.,direction*.3,0.),(-.03,direction*.3,0.)):
+        p.align(model(g,body),feedback,body)
+    assert p.crab_blocked
+    # Reverse with opposite lateral input asks for an interior heading on
+    # the same side of zero; only its forward velocity is negative.
+    body=(-.3,-direction*.1,0.)
+    output=p.align(model(g,body),feedback,body)
+    assert not p.crab_blocked
+    assert output.position[0]==pytest.approx(direction*math.atan(1/3))
+    for i,mount in enumerate(g['wheel_mount_angles']):
+        assert abs(output.position[i])<math.pi/2
+        assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
+        assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+
+
+def test_interlock_hold_preserves_boundary_but_does_not_block_a_new_inward_request():
+    g=geometry();p=ManualSteering(g);feedback=sample(g,[0.]*4)
+    for body in ((0.,-.3,0.),(-.03,-.3,0.),(0.,0.,0.)):
+        p.align(model(g,body),feedback,body)
+    assert p.crab_blocked and p.crab_heading==-math.pi/2
     body=(-.2,.2,0.)
     output=p.align(model(g,body),feedback,body)
-    assert output.velocity[4:]==[0.]*4
-    assert output.position[0]==-math.pi/2
+    assert not p.crab_blocked
+    assert output.position[0]==pytest.approx(-math.pi/4)
+    assert all(abs(v)>.01 for v in output.velocity[4:])
+
+
+@pytest.mark.parametrize('direction', [-1.,1.])
+@pytest.mark.parametrize('home_turns', [-2,0,3])
+def test_180_degree_crab_sweep_crosses_sideways_and_stays_in_fixed_home_range(direction,home_turns):
+    g=geometry();g['max_crab_angle']=math.pi
+    p=ManualSteering(g);home=home_turns*2*math.pi
+    feedback=sample(g,[home]*4)
+    previous=None
+    for degree in range(1,181):
+        angle=direction*math.radians(degree)
+        body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+        output=p.align(model(g,body),feedback,body)
+        relative=[target-home for target in output.position[:4]]
+        assert relative[0]==pytest.approx(angle)
+        assert all(abs(target)<=math.pi for target in relative)
+        assert not p.crab_blocked
+        if previous is not None:
+            assert max(abs(a-b) for a,b in zip(relative,previous))<math.radians(1.01)
+        for i,mount in enumerate(g['wheel_mount_angles']):
+            assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
+            assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+        previous=relative
+    feedback.position[:4]=output.position[:4]
+    held=p.align(model(g,body),feedback,body)
+    assert held.velocity[:4]==[0.]*4
+    for degree in range(181,221):
+        angle=direction*math.radians(degree)
+        body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+        blocked=p.align(model(g,body),feedback,body)
+        assert blocked.position[:4]==pytest.approx(held.position[:4])
+        assert blocked.velocity[4:]==[0.]*4
+        assert p.crab_blocked
+    angle=direction*math.radians(170)
+    body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+    inward=p.align(model(g,body),feedback,body)
+    assert inward.position[0]-home==pytest.approx(angle)
+    assert not p.crab_blocked
+    assert all(abs(v)>.01 for v in inward.velocity[4:])
+
+
+@pytest.mark.parametrize('direction', [-1.,1.])
+@pytest.mark.parametrize('limits_enabled',[True,False])
+def test_180_range_straight_reverse_tie_at_sideways_still_returns_to_zero(direction,limits_enabled):
+    g=geometry();g['max_crab_angle']=math.pi;g['steering_angle_limits_enabled']=limits_enabled
+    p=ManualSteering(g);feedback=sample(g,[0.]*4)
+    body=(0.,direction*.3,0.)
+    p.align(model(g,body),feedback,body)
+    body=(-.3,0.,0.)
+    output=p.align(model(g,body),feedback,body)
+    assert max(map(abs,output.position[:4]))<1e-4
+    assert not p.crab_blocked
+
+
+def test_180_range_initial_heading_keeps_existing_large_crab_angle():
+    g=geometry();g['max_crab_angle']=math.pi
+    p=ManualSteering(g);angle=math.radians(150)
+    body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+    output=p.align(model(g,body),sample(g,[angle]*4),body)
+    assert output.position[0]==pytest.approx(angle)
+
+
+@pytest.mark.parametrize('angle', [0.,math.pi/4,math.pi+.001,math.nan,math.inf])
+def test_invalid_crab_envelope_is_rejected(angle):
+    g=geometry();g['max_crab_angle']=angle
+    with pytest.raises(ValueError,match='max_crab_angle'):
+        ManualSteering(g)
+
+
+@pytest.mark.parametrize('direction',[-1.,1.])
+@pytest.mark.parametrize('home_turns',[-2,0,3])
+def test_unbounded_crab_keeps_continuity_through_multiple_turns(direction,home_turns):
+    g=geometry();g['steering_angle_limits_enabled']=False
+    p=ManualSteering(g);home=home_turns*2*math.pi
+    feedback=sample(g,[home]*4);previous=None
+    for degree in range(1,1081):
+        angle=direction*math.radians(degree)
+        body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+        output=p.align(model(g,body),feedback,body)
+        relative=[target-home for target in output.position[:4]]
+        assert relative[0]==pytest.approx(angle)
+        assert max(relative)-min(relative)<1e-4
+        assert not p.crab_blocked
+        if previous is not None:
+            assert max(abs(a-b) for a,b in zip(relative,previous))<math.radians(1.01)
+        for i,mount in enumerate(g['wheel_mount_angles']):
+            assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
+            assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+        previous=relative
+    assert abs(output.position[0]-home)>5*math.pi
+
+
+def test_unbounded_crab_neutral_does_not_unwind_completed_turns():
+    g=geometry();g['steering_angle_limits_enabled']=False
+    p=ManualSteering(g);feedback=sample(g,[0.]*4)
+    for degree in range(0,766,15):
+        angle=math.radians(degree)
+        body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+        output=p.align(model(g,body),feedback,body)
+    targets=output.position[:4]
+    feedback.position[:4]=targets
+    held=p.align(model(g,body),feedback,(0.,0.,0.))
+    assert held.position[:4]==targets and held.velocity==[0.]*8
+    p.release_crab_boundary()
+    resumed=p.align(model(g,body),feedback,body)
+    assert resumed.position[:4]==pytest.approx(targets)
+    assert resumed.velocity[:4]==[0.]*4
+    reverse=tuple(-value for value in body)
+    reversed_output=p.align(model(g,reverse),feedback,reverse)
+    assert reversed_output.position[:4]==pytest.approx(targets)
+    assert reversed_output.velocity[4:]==pytest.approx([-v for v in resumed.velocity[4:]])
+
+
+def test_unbounded_ackermann_uses_previous_targets_instead_of_home_angle_caps():
+    g=geometry();g['steering_angle_limits_enabled']=False
+    p=ManualSteering(g);feedback=sample(g,[0.]*4)
+    for degree in range(0,271,10):
+        angle=math.radians(degree)
+        body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+        previous=p.align(model(g,body),feedback,body)
+    body=(.3,0.,.1)
+    output=p.align(model(g,body),feedback,body)
+    assert all(abs(target)>math.pi for target in output.position[:4])
+    for i,mount in enumerate(g['wheel_mount_angles']):
+        assert abs(output.position[i]-previous.position[i])<=math.pi/2+1e-4
+        speed=output.velocity[4+i];angle=output.position[i]+mount
+        assert speed*math.cos(angle)==pytest.approx(body[0]-body[2]*g['wheels_y'][i],abs=3e-5)
+        assert speed*math.sin(angle)==pytest.approx(body[1]+body[2]*g['wheels_x'][i],abs=3e-5)
+
+
+def test_unbounded_native_endpoint_stays_stopped_without_clipping_target():
+    g=geometry();g['steering_angle_limits_enabled']=False
+    unit=2*math.pi/121
+    g['steering_position_tolerances']=[unit]*4
+    p=ManualSteering(g);feedback=sample(g,[0.]*4)
+    for degree in range(0,766,15):
+        angle=math.radians(degree)
+        body=(.3*math.cos(angle),.3*math.sin(angle),0.)
+        first=p.align(model(g,body),feedback,body)
+    targets=first.position[:4]
+    feedback.position[:4]=[round(angle/unit)*unit for angle in targets]
+    for _ in range(100):
+        output=p.align(model(g,body),feedback,body)
+        assert output.position[:4]==pytest.approx(targets)
+        assert output.velocity[:4]==[0.]*4
+        assert all(abs(v)>.01 for v in output.velocity[4:])
+
+
+@pytest.mark.parametrize('value',[None,0,1,'false'])
+def test_steering_angle_limit_switch_requires_boolean(value):
+    g=geometry();g['steering_angle_limits_enabled']=value
+    with pytest.raises(ValueError,match='steering_angle_limits_enabled'):
+        ManualSteering(g)
+
+
+@pytest.mark.parametrize('speed_limit',[1.,2.])
+@pytest.mark.parametrize('controls',[(1.,1.,0.),(1.,0.,1.),(0.,0.,-1.)])
+def test_neutral_cancels_full_speed_request_without_waiting_for_ramp(speed_limit,controls):
+    p=ManualSteering(geometry())
+    for _ in range(100):
+        p.command(*controls,False,.05,speed_limit,.5)
+    mode=p.mode
+    assert math.hypot(*p.output[:2])>.9
+    assert p.command(0.,0.,0.,False,.05,speed_limit,.5)==[0.,0.,0.]
+    assert p.mode==mode  # Physical motion still locks the family.
+    assert p.command(0.,0.,0.,True,.05,speed_limit,.5)==[0.,0.,0.]
+    assert p.mode is None
+    resumed=p.command(*controls,True,.05,speed_limit,.5)
+    assert math.hypot(*resumed[:2])<=.025+1e-10
+
+
+@pytest.mark.parametrize('sign',[-1.,1.])
+@pytest.mark.parametrize('turns',[-3,0,4])
+def test_unbounded_restart_near_half_turn_cannot_add_a_revolution(sign,turns):
+    g=geometry();g['steering_angle_limits_enabled']=False
+    unit=2*math.pi/121;g['steering_position_tolerances']=[unit]*4
+    # Opposite sides of the half-turn rounding boundary; different encoders
+    # have already accumulated different numbers of complete turns.
+    angles=[2*math.pi*(turns+t)+sign*math.pi+error for t,error in
+            zip((0,1,0,2),(-unit/2,unit/2,-unit/2,unit/2))]
+    feedback=sample(g,angles);p=ManualSteering(g)
+    p.align(model(g,(0.,0.,0.)),feedback,(0.,0.,0.))
+    for degree in range(1,541):
+        heading=sign*(math.pi+math.radians(degree))
+        body=(.3*math.cos(heading),.3*math.sin(heading),0.)
+        output=p.align(model(g,body),feedback,body)
+        if degree==1:
+            assert max(abs(a-b) for a,b in zip(output.position[:4],angles))<math.radians(5)
+        else:
+            assert max(abs(a-b) for a,b in zip(output.position[:4],previous))<math.radians(1.01)
+        for i,mount in enumerate(g['wheel_mount_angles']):
+            assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
+            assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+        previous=output.position[:4]
+    assert abs(previous[0]-angles[0])>2*math.pi  # Continuous travel remains unrestricted.
+
+
+def test_neutral_rebases_cancelled_unbounded_target_to_measured_position():
+    g=geometry();g['steering_angle_limits_enabled']=False
+    p=ManualSteering(g);feedback=sample(g,[0.]*4)
+    for degree in range(1,271):
+        a=math.radians(degree);body=(.3*math.cos(a),.3*math.sin(a),0.)
+        p.align(model(g,body),feedback,body)
+    feedback.position[:4]=[math.radians(15)]*4  # Actual wheels lag the old target.
+    held=p.align(model(g,(0.,0.,0.)),feedback,(0.,0.,0.))
+    assert held.velocity==[0.]*8
+    p.release_crab_boundary()
+    body=(.3,0.,0.)
+    resumed=p.align(model(g,body),feedback,body)
+    assert max(abs(a-b) for a,b in zip(resumed.position[:4],feedback.position[:4]))<math.pi/2
+
+
+@pytest.mark.parametrize('family', ['ackermann','crab'])
+def test_releasing_motion_stick_stops_even_with_other_stick_held(family):
+    p=ManualSteering(geometry())
+    initial=(1.,1.,0.) if family=='ackermann' else (1.,0.,1.)
+    for _ in range(100):
+        p.command(*initial,False,.05,2.,.5)
+    assert math.hypot(*p.output[:2])>1.9
+    # Left steering alone must never keep propulsion active. The ignored
+    # sideways stick cannot keep an Ackermann move active either.
+    released=(0.,1.,1.) if family=='ackermann' else (0.,1.,0.)
+    assert p.command(*released,False,.05,2.,.5)==[0.,0.,0.]
+    assert p.mode==family

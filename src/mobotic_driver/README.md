@@ -126,6 +126,14 @@ Hardware timing, units and stop behavior still require commissioning.
 
 ## Steering alignment on B2 enable
 
+The active physical profile restores `steering_align_on_enable: true`. B2
+clears/initializes/enables the controllers and aligns steering to its nearest
+full-turn home at 1.2 rad/s, with traction held at zero. This uses the existing
+encoder zero; it does not search for a home sensor or redefine the reference.
+The configured manual policy also returns steering home on fresh neutral input,
+after new complete feedback confirms traction standstill. Normal joystick
+steering remains 0.3 rad/s; fresh stick motion cancels the neutral return.
+
 `steering_align_on_enable` opts a physical profile into bounded nearest-home
 alignment during each supervisor-authorized B2 recovery. Each steering target is
 selected once from fresh post-enable feedback as the nearest full-turn equivalent
@@ -138,7 +146,7 @@ This never writes an encoder origin, searches for a home sensor, or saves
 controller settings. Verify the configured position scale and physical home.
 
 Traction remains zero and `startup_pending` stays true until all steering actual
-positions are within one controller position unit of their selected home and fresh
+positions are within one degree of their selected home (or a finer one-count tolerance) and fresh
 steering velocities confirm standstill. The supervisor then completes its normal sustained
 standstill proof before accepting fresh joystick motion. Controls must be neutral
 to request recovery; subsequent stick movement is ignored until recovery ends.
@@ -163,9 +171,19 @@ profile zero is applied with the documented miControl Update command, including
 before enable; the virtual protocol models profile latching rather than stopping
 an active move on a profile write alone.
 
+Physical steering updates queue the positive speed profile and position target
+as one acknowledged transaction. The target waits for its matching profile ACK;
+new command samples replace the unsent target in place. An unchanged proven
+profile is reused, while a changed profile requires the position to be latched
+again even when the target angle is unchanged. A started pair finishes before
+ordinary read scheduling can repeatedly postpone its target. Required fault
+service, stop/disable priority, command expiry and the shared 2 ms send spacing
+remain in force. Stops and lost native-state evidence revoke unsent moves;
+a late acknowledgement cannot restore a revoked target.
+
 Homing speed is independent of normal manual steering speed. The default
-steering alignment profile is 0.6 rad/s (previously 0.3 rad/s); the active physical
-SDO overlay uses the same value. Each steering motor's configured native RPM
+steering alignment profile is 0.6 rad/s; the physical SDO overlay retains
+1.2 rad/s for optional alignment, which is currently disabled. Each steering motor's configured native RPM
 limit bounds homing. The physical profile retains 0.3 rad/s for joystick
 steering. Homing timeout, fresh-feedback proof and traction inhibition remain
 in force.
@@ -173,6 +191,10 @@ in force.
 The active four-miControl steering profile uses 121 native position units per
 output revolution for 0x3762/0x3790, not 4096 raw encoder increments. A 90-degree
 move rounds to 30 controller units (about 89.26 degrees). One native unit is about
-2.98 degrees; endpoint tolerance follows that quantization. Traction retains its
+2.98 degrees; the one-degree correction threshold therefore requires the reported
+home count to match exactly. Normal manual alignment compares with the reachable
+native target and resumes corrections if the wheel drifts by even one count;
+deviation alone does not disable an enabled steering drive. This cannot prove
+physical one-degree accuracy using coarse user-unit telemetry. Traction retains its
 separate 4096-count motor encoder scale. The 4096-count home example above applies
 only to controllers configured with that position-unit scale.

@@ -502,6 +502,28 @@ class ManualControlTest(unittest.TestCase):
         self.node._joy_callback(msg)
         self.assertEqual(self.node.command, [0.0] * 3)
 
+    def test_one_and_two_metre_travel_with_manual_steering_and_boost(self):
+        from mobotic_kinematics.manual_steering import ManualSteering
+        for boosted, expected in ((False, 1.), (True, 2.)):
+            for speed, crab in ((1., 0.), (-1., 0.), (0., 1.), (1., 1.)):
+                with self.subTest(boosted=boosted, speed=speed, crab=crab):
+                    self.setUp()
+                    self.node.max_velocity_linear = 2.
+                    self.node.scale_linear = .5
+                    self.node.max_acceleration_linear = 100.
+                    self.node.steering_policy = ManualSteering({
+                        'wheels_x': [.845, .845, -.845, -.845],
+                        'wheels_y': [.495, -.495, .495, -.495]})
+                    self.node._joy_callback(self.joy())
+                    self.now = Time(10.1)
+                    msg = self.joy(turbo=boosted)
+                    msg.axes[3], msg.axes[2] = speed, crab
+                    self.node._joy_callback(msg)
+                    self.node._publish()
+                    vx, vy, _ = self.output()
+                    self.assertAlmostEqual(math.hypot(vx, vy), expected)
+                    self.assertEqual(self.node.turbo_active, boosted)
+
     def test_invalid_layout_is_inactive(self):
         self.node._joy_callback(self.joy(moving=True))
         self.node._joy_callback(SimpleNamespace(axes=[], buttons=[]))
@@ -509,6 +531,28 @@ class ManualControlTest(unittest.TestCase):
         self.assertEqual(self.output(), [0.0] * 3)
         self.assertFalse(self.node.state_publisher.messages[-1].connected)
         self.assertFalse(self.node.state_publisher.messages[-1].command_active)
+
+    def test_neutral_cancels_translation_and_rotation_in_next_publication(self):
+        for with_policy in (False, True):
+            with self.subTest(with_policy=with_policy):
+                self.setUp()
+                if with_policy:
+                    from mobotic_kinematics.manual_steering import ManualSteering
+                    self.node.steering_policy = ManualSteering({
+                        'wheels_x': [.845, .845, -.845, -.845],
+                        'wheels_y': [.495, -.495, .495, -.495]})
+                    self.node._stationary = lambda now: False
+                    self.node.steering_policy.output = [1.5, .5, 0.]
+                    self.node.steering_policy.mode = 'crab'
+                self.seed_motion()
+                self.node.command = [1.5, .5, .2]
+                self.node.rearm_phase = 'armed'
+                self.now = Time(10.05)
+                self.node._joy_callback(self.joy())
+                self.node._publish()
+                self.assertEqual(self.output(), [0., 0., 0.])
+                self.assertTrue(self.node.state_publisher.messages[-1].controls_neutral)
+                self.assertTrue(self.node.state_publisher.messages[-1].connected)
 
     def test_boost_configuration_is_validated(self):
         for buttons in ([], [-1], [9, 9]):
