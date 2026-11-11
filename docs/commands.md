@@ -214,9 +214,13 @@ MANUAL readiness and complete joint feedback are established, then move the
 PAIL sticks. Missing feedback still blocks motion; removing scanner hardware
 does not bypass that gate.
 
-The left paddle steers the wheels, including while stationary. The right stick
-commands forward/reverse and left/right crab translation; with the left paddle
-centred it does not request yaw. Keep both controls centred for initial rearm.
+The left paddle selects Ackermann steering only with right-stick forward/reverse.
+Right-stick sideways selects crab, which ignores the left paddle. First steering
+input wins, with crab winning a same-sample tie; neutral owning controls and a
+measured stop release the selection. Left paddle alone does not steer. Ackermann
+headings are bounded to +/-45 degrees and crab to +/-90 degrees. Steering and
+traction run concurrently; there is no heading-error traction pause. Keep controls
+centred for initial rearm.
 
 The GUI command selects loopback-only UDP discovery because RViz and the runtime
 use separate container shared-memory namespaces and user IDs. With Jazzy,
@@ -433,7 +437,7 @@ sequence to run automatically:
 # AUTONOMOUS: external body velocity
 ros2 service call /moboterra/vehicle/set_mode \
   mobotic_interfaces/srv/SetVehicleMode '{requested_mode: 1}'
-# KINEMATICOFF: external steering position and traction velocity
+# KINEMATICOFF: external steering position and traction current (miControl)
 ros2 service call /moboterra/vehicle/set_mode \
   mobotic_interfaces/srv/SetVehicleMode '{requested_mode: 2}'
 ros2 topic echo /moboterra/vehicle/mode
@@ -449,6 +453,14 @@ A transition stops the outgoing path and verifies fresh measured standstill
 for 0.25 s. A 10 s timeout latches ERROR. In KINEMATICOFF, operator/autonomy
 velocity candidates and kinematics output have no motion effect. Returning to
 a velocity mode requires the same verified transition and a new command.
+KINEMATICOFF uses traction current, not wheel velocity. Its stamped JointState
+input must include all joint names and full position/velocity/effort arrays:
+steering position/profile speed with zero effort, traction zero velocity with
+signed amperes in effort. The prepared miControl profile limits current to
+4 A. The supervisor waits for native mode acknowledgement after standstill;
+ELMO current-mode selection is rejected until its mapping is verified. Current
+warnings/stale commands request zero current; zero current does not prove that
+the vehicle has stopped.
 
 ### Fault recovery and odometry reset
 
@@ -469,8 +481,7 @@ Successful recovery clears cached motion and still requires a fresh command.
 
 A confirmed safety stop clears without a fault reset only if no separate fault
 is latched. Motion then requires a new command. Manual operation also requires
-neutral controls; if configured, release and press the deadman again. The USB
-profile has no deadman assigned by default.
+neutral controls and fresh input.
 
 Odometry has a separate standstill-guarded reset; this is not an encoder reset:
 
@@ -502,7 +513,7 @@ verified released safety button. Raw `joy` remains `joy`. The vehicle's mode
 aggregates operator, safety-chain and system-fault conditions separately.
 
 `joint_states` is the authoritative eight-joint measurement: steering and wheel
-position [rad], steering and wheel velocity [rad/s]; `effort` is empty.
+position [rad], steering velocity [rad/s] and traction contact speed [m/s]; `effort` is empty.
 `wheel_modules/status` contains per-module `steering` and `traction` drive
 status, with separate `motor_current` [A] and `current_known`, status/fault/mode
 fields and acquisition stamps. It also exposes `position_valid`,

@@ -8,7 +8,8 @@ class DriveStartupTest(unittest.TestCase):
     def setUp(self):
         harness.EnableGateTest.setUp(self)
         node = self.node
-        node.safety_source = 'hardwired_sto'
+        node.safety_source = 'flexisoft'
+        node.require_flexisoft_telemetry = False
         node.started_at = harness.Time(1)
         node.startup_grace = 0.0
         node.selected_mode = harness.MODES.AUTONOMOUS
@@ -57,7 +58,9 @@ class DriveStartupTest(unittest.TestCase):
                                  monitoring_valid=True, fault_active=False)
         node.component_health = {'host': (record, self.now)}
         node._control()
-        self.assertTrue(node.module_command_publisher.messages[-1].enable)
+        self.assertFalse(node.module_command_publisher.messages[-1].enable)
+        self.assertTrue(node.operator_drives_disabled)
+        node.drive_startup_requested = True
         record.fault_active = True
         node._control()
         self.assertIn('COMPONENT_HEALTH_LOST:host', node.fault_codes)
@@ -87,8 +90,9 @@ class DriveStartupTest(unittest.TestCase):
         self.assertEqual(node.fault_codes, set())
         node.battery_state.faulted_batteries = []
         node._control()
-        self.assertTrue(node.module_command_publisher.messages[-1].enable)
-        self.assertTrue(node.drive_startup_requested)
+        self.assertFalse(node.module_command_publisher.messages[-1].enable)
+        self.assertTrue(node.operator_drives_disabled)
+        self.assertFalse(getattr(node, 'drive_startup_requested', False))
 
     def test_initial_fault_can_be_cleared_once_by_driver_startup(self):
         self.node.wheel_status.modules[0].error_code = 0x2310
@@ -110,6 +114,7 @@ class DriveStartupTest(unittest.TestCase):
         self.assertFalse(node._enable_gate(self.now)[0])
         node.wheel_status.modules[0].sto_active = False
         node.safety_source = 'flexisoft'
+        node.require_flexisoft_telemetry = True
         node.safety_state.motion_permitted = False
         self.assertFalse(node._enable_gate(self.now)[0])
 

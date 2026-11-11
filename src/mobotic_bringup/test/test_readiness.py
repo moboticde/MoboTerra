@@ -1,5 +1,7 @@
 """Readiness distinguishes validated configuration from live hardware evidence."""
 import copy
+import tempfile
+import yaml
 import sys
 from pathlib import Path
 from types import SimpleNamespace as Msg
@@ -8,13 +10,18 @@ import unittest
 PACKAGES = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PACKAGES / 'mobotic_config'))
 sys.path.insert(0, str(PACKAGES / 'mobotic_bringup'))
+sys.path.insert(0, str(PACKAGES / 'mobotic_config/test'))
+from platform_fixtures import four_module_platform
 from mobotic_config.configuration import Configuration
 from mobotic_bringup.readiness import configuration_report, live_report
 
 
 class ReadinessTest(unittest.TestCase):
     def setUp(self):
-        self.cfg = Configuration(PACKAGES / 'mobotic_config/config/platform-front-right-rear-left.yaml')
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        profile = Path(directory.name) / 'four-modules.yaml'
+        profile.write_text(yaml.safe_dump(four_module_platform()))
+        self.cfg = Configuration(profile)
         header = Msg(stamp=Msg(sec=10, nanosec=0))
         self.samples = {
             'vehicle/mode': (Msg(header=header, status_message='waiting for a motion command', motion_permitted=False,
@@ -22,7 +29,7 @@ class ReadinessTest(unittest.TestCase):
                 drives_enabled=True, ready_to_drive=True, reason_codes=[], selected_mode=0), 10_000_000_000),
             'wheel_modules/status': (Msg(header=header, modules=[Msg(name=name, startup_failed=False, startup_complete=True,
                 initialized=True, enabled=True, position_valid=True, feedback_fresh=True, error_code=0, status_message='')
-                for name in ('front_right', 'rear_left')]), 10_000_000_000),
+                for name in ('front_left', 'front_right', 'rear_left', 'rear_right')]), 10_000_000_000),
             'battery/system_state': (Msg(header=header, communication_ok=True, system_ready=True,
                 high_voltage_connected=True, faulted_batteries=[], minimum_percentage=.8, status_message=''), 10_000_000_000),
             'operator/state': (Msg(header=header, connected=True, estop_state_known=True, estop_pressed=False,
@@ -84,7 +91,7 @@ class ReadinessTest(unittest.TestCase):
                 self.assertEqual(bool(report['warnings']), soc < .2)
 
     def test_duplicate_or_missing_modules_are_rejected(self):
-        self.samples['wheel_modules/status'][0].modules[1].name = 'front_right'
+        self.samples['wheel_modules/status'][0].modules[1].name = 'front_left'
         self.assertFalse(live_report(self.cfg, self.samples, 10_000_000_000)['software_ready'])
 
 

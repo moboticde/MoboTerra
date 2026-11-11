@@ -16,7 +16,7 @@ setup(
     zip_safe=True,
     maintainer='Mobotic Development Team',
     maintainer_email='noreply@mobotic.invalid',
-    description='Supervised joystick command source with optional deadman for MoboTerra.',
+    description='Supervised joystick command source with neutral rearm for MoboTerra.',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [

@@ -10,7 +10,7 @@ DriveStatus steering
 DriveStatus traction
 bool initialized
 # Physical startup is authorized by the supervisor before motion telemetry is
-# available. Pending never permits motion; failed requires investigation/restart.
+# available. Pending never permits motion; failed waits for explicit B2 recovery.
 bool startup_pending
 bool startup_complete
 bool startup_failed

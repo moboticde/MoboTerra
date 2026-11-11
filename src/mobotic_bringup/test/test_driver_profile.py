@@ -32,57 +32,42 @@ class FourWheelDriverProfileTest(unittest.TestCase):
         self.assertEqual(heartbeat, 0.01)
         self.assertLess(heartbeat, 0.5)
 
-    def test_traction_limits_and_controller_profile_share_reference_ceiling(self):
-        ceiling = driver_value('traction_max_profile_velocity')
-        self.assertEqual(ceiling, 116053)
+    def test_all_four_traction_drives_use_motor_rpm_limits(self):
         lower = driver_value('drives.min_traction_velocities')
         upper = driver_value('drives.max_traction_velocities')
         self.assertEqual(len(lower), 8)
         self.assertEqual(len(upper), 8)
         for index in (1, 3, 5, 7):
-            self.assertEqual(lower[index], -ceiling)
-            self.assertEqual(upper[index], ceiling)
+            self.assertEqual((lower[index], upper[index]), (-1700, 1700))
 
-    def test_acceleration_and_deceleration_use_actual_wheel_radius_and_scaling(self):
-        radius = float(config_value('mobotic_kinematics', 'moboterra_kinematics.yaml', 'wheel_radius'))
-        self.assertEqual(radius, 0.325)
-        resolutions = driver_value('drives.resolutions')
-        gearing = driver_value('drives.gear_ratios')
-        for index in (1, 3, 5, 7):
-            increments_per_metre = resolutions[index] * gearing[index] / (2.0 * math.pi * radius)
-            for key in ('traction_profile_accel', 'traction_profile_decel'):
-                self.assertEqual(driver_value(key), round(increments_per_metre))
-                self.assertAlmostEqual(driver_value(key) / increments_per_metre, 1.0, places=4)
+    def test_installed_micontrol_ramps_are_not_driver_configuration(self):
+        parameters = Configuration().parameters('driver')
+        for key in ('traction_max_profile_velocity', 'traction_profile_accel', 'traction_profile_decel'):
+            self.assertNotIn(key, parameters)
 
-    def test_kinematics_and_direct_joint_limits_fit_controller_ceiling(self):
-        ceiling = driver_value('traction_max_profile_velocity')
-        for package, filename, key in (
-            ('mobotic_kinematics', 'moboterra_kinematics.yaml', 'max_traction_velocity'),
-            ('mobotic_supervisor', 'supervisor.yaml', 'max_direct_traction_velocity'),
-        ):
-            wheel_radians_per_second = float(config_value(package, filename, key))
+    def test_kinematics_and_direct_contact_speed_fit_native_rpm_limits(self):
+        cfg = Configuration()
+        radius = cfg.platform['geometry']['wheel_radius']
+        for speed in (cfg.parameters('kinematics')['max_traction_velocity'],
+                      cfg.parameters('supervisor')['max_direct_traction_velocity']):
             for index in (1, 3, 5, 7):
-                ticks_per_second = wheel_radians_per_second * driver_value('drives.resolutions')[index] * driver_value('drives.gear_ratios')[index] / (2.0 * math.pi)
-                self.assertLessEqual(ticks_per_second, ceiling)
+                rpm = speed / radius * driver_value('drives.gear_ratios')[index] * 60 / (2 * math.pi)
+                self.assertLessEqual(rpm, driver_value('drives.max_traction_velocities')[index])
 
-    def test_driver_fallback_defaults_match_integrated_profile(self):
-        source = (DRIVER / 'src' / 'mobotic_driver.cpp').read_text(encoding='utf-8')
-        for constant, parameter in (
-            ('DEFAULT_TRACTION_PROFILE_ACCEL', 'traction_profile_accel'),
-            ('DEFAULT_TRACTION_MAX_PROFILE_VELOCITY', 'traction_max_profile_velocity'),
-        ):
-            match = re.search(r'constexpr int ' + constant + r' = (\d+);', source)
+    def test_driver_fallback_motion_defaults_match_integrated_profile(self):
+        source = (DRIVER / 'src/mobotic_driver.cpp').read_text()
+        for parameter in ('max_traction_velocity', 'max_steering_velocity', 'wheel_radius', 'max_traction_current'):
+            match = re.search(r'declare_parameter\("' + parameter + r'", ([0-9.]+)\)', source)
             self.assertIsNotNone(match)
-            self.assertEqual(int(match.group(1)), driver_value(parameter))
-        self.assertTrue('DEFAULT_TRACTION_PROFILE_DECEL = DEFAULT_TRACTION_PROFILE_ACCEL' in source)
-        self.assertEqual(driver_value('traction_profile_decel'), driver_value('traction_profile_accel'))
+            self.assertEqual(float(match.group(1)), driver_value(parameter))
 
-    def test_standalone_launch_defaults_and_parameter_forwarding_match(self):
+    def test_standalone_launch_forwards_all_eight_drive_parameters(self):
         actions, _ = resolve(factory(DRIVER / 'launch/mobotic_driver.launch.py')())
         node = next(a for a in actions if a.kind == 'Node')
-        self.assertEqual(node.kwargs['parameters'][0], Configuration().parameters('driver'))
-        for key in ('can_heartbeat_period', 'traction_max_profile_velocity', 'traction_profile_accel', 'traction_profile_decel'):
-            self.assertEqual(node.kwargs['parameters'][0][key], driver_value(key))
+        parameters = node.kwargs['parameters'][0]
+        self.assertEqual(parameters, Configuration().parameters('driver'))
+        self.assertEqual(len(parameters['drives.names']), 8)
+        self.assertEqual(len(parameters['modules.names']), 4)
 
 
 if __name__ == '__main__':

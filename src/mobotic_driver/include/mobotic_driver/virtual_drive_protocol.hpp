@@ -8,23 +8,38 @@ class VirtualDriveProtocol
 public:
   using Frame = can_msgs::msg::Frame;
   VirtualDriveProtocol(unsigned node, bool traction, double resolution = 4096.0,
-                       double gearing = 121.0)
-      : node_(node), traction_(traction), resolution_(resolution), gearing_(gearing)
+                       double gearing = 121.0, const std::string& controller_type = "")
+      : node_(node), traction_joint_(traction), resolution_(resolution), gearing_(gearing)
   {
+    if (!controller_type.empty() && controller_type != "micontrol")
+    { throw std::invalid_argument("only micontrol controllers are supported"); }
     if (node == 0 || node > 127 || !std::isfinite(resolution) || resolution <= 0 ||
         !std::isfinite(gearing) || gearing <= 0)
     { throw std::invalid_argument("invalid virtual drive node/scaling"); }
   }
   bool enabled() const { return enabled_; }
-  void setFault(uint8_t error, uint16_t code)
+  // Test fixture setup only; no CAN command or hardware encoder write.
+  void setInitialPosition(int32_t value)
   {
-    error_ = error; error_code_ = code;
-    if (error || code) { setEnabled(false); statusword_ = 0x0008; }
+    if (enabled_) { throw std::logic_error("initial position requires a disabled model"); }
+    position_ = value; target_position_ = value;
+  }
+  // Model only the requested/actual enable distinction needed by status tests.
+  void setHardwareEnable(bool value)
+  {
+    hardware_enable_ = value;
+    setEnabled(software_enable_requested_ && hardware_enable_ && !error_);
+  }
+  void setFault(uint32_t error)
+  {
+    error_ = error;
+    if (error_) { setEnabled(false); }
   }
   void advance(double dt)
   {
     if (!std::isfinite(dt) || dt <= 0 || !enabled_) { return; }
-    if (traction_) { position_ += static_cast<double>(velocity_) * dt; return; }
+    if (mode_ == VELOCITY || mode_ == S_VELOCITY)
+    { position_ += static_cast<double>(velocity_) * resolution_ * dt / (60.0 * (traction_joint_ ? 1.0 : gearing_)); return; }
     const double previous = position_;
     if (mode_ == POSITION)
     {
@@ -37,23 +52,6 @@ public:
   std::vector<Frame> handle(const Frame& frame)
   {
     if (frame.is_error || frame.is_extended || frame.is_rtr || frame.dlc > 8) { return {}; }
-    if (frame.id == 0 && frame.dlc == 2 && (frame.data[1] == 0 || frame.data[1] == node_))
-    {
-      if (frame.data[0] == 1) { operational_ = true; sync_count_ = 0; }
-      else if (frame.data[0] == 0x80 || frame.data[0] == 2)
-      { operational_ = false; pending_rpdo_.reset(); setEnabled(false); }
-      else if (frame.data[0] == 0x81 || frame.data[0] == 0x82) { reset(); }
-      return {};
-    }
-    if (frame.id == 0x80 && frame.dlc == 0) { return sync(); }
-    const auto rpdo_cob = objects_.find(key(0x1400, 1));
-    if (traction_ && operational_ && rpdo_cob != objects_.end() &&
-        frame.id == (rpdo_cob->second & 0x7FFu) &&
-        !(rpdo_cob->second & CANOPEN_PDO_COB_ID_INVALID_BIT) &&
-        objects_[key(0x1600, 0)] == 2 && frame.dlc == 6 &&
-        objects_[key(0x1600, 1)] == EC_TRACTION_RPDO_CONTROLWORD_MAPPING &&
-        objects_[key(0x1600, 2)] == EC_TRACTION_RPDO_TARGET_VELOCITY_MAPPING)
-    { pending_rpdo_ = frame; return {}; }
     if (frame.id != 0x600 + node_ || frame.dlc != 8) { return {}; }
     const unsigned index = static_cast<uint16_t>(shortFromFrame(frame, 1)), sub = frame.data[3];
     if (frame.data[0] == READ_FROM_DEVICE)
@@ -74,7 +72,6 @@ public:
     return {error ? abort(frame, error) : response(frame, WRITE_REPLY)};
   }
 private:
-  static unsigned key(unsigned index, unsigned sub) { return index * 256 + sub; }
   Frame response(const Frame& request, uint8_t command) const
   {
     Frame reply; reply.id = 0x580 + node_; reply.dlc = 8;
@@ -87,192 +84,84 @@ private:
   void setEnabled(bool value)
   {
     if (!value || !enabled_)
-    { velocity_ = current_ = profile_rpm_ = 0; target_position_ = checkedCanPosition(position_).value(); }
-    if (!value) { pending_rpdo_.reset(); }
+    { velocity_ = current_ = profile_rpm_ = pending_profile_rpm_ = 0; target_position_ = checkedCanPosition(position_).value(); }
     enabled_ = value;
   }
-  void controlword(uint16_t value)
-  {
-    if (value & 0x80) { error_ = 0; error_code_ = 0; }
-    if (error_ || error_code_) { setEnabled(false); statusword_ = 8; return; }
-    if ((value & 0x8F) == 0x0F) { statusword_ = 0x27; setEnabled(true); }
-    else
-    {
-      setEnabled(false);
-      statusword_ = (value & 0x8F) == 7 ? 0x23 : (value & 0x87) == 6 ? 0x21 : 0x40;
-    }
-  }
-  void reset()
-  {
-    operational_ = false; setEnabled(false); mode_ = UNKNOWN;
-    error_ = 0; error_code_ = 0; statusword_ = 0x40;
-    objects_.clear(); pending_rpdo_.reset(); sync_count_ = 0;
-  }
+
   std::optional<std::pair<uint32_t, unsigned>> read(unsigned index, unsigned sub) const
   {
     const auto result = [](int64_t value, unsigned size) {
       return std::make_pair(static_cast<uint32_t>(value), size);
     };
-    if (traction_ && sub == 0)
+
+    if (sub == 0)
     {
       switch (index)
       {
-      case 0x1001: return result(error_, 1);
-      case 0x603F: return result(error_code_, 2);
-      case 0x6041: return result(statusword_, 2);
-      case 0x6060: case 0x6061: return result(mode_, 1);
-      case 0x606C: return result(velocity_, 4);
-      case 0x6064: return result(static_cast<int64_t>(std::llround(position_)), 4);
-      case 0x6078: return result(current_, 2);
-      case 0x6075: return result(1000, 4);  // 1 A reference, so existing virtual samples retain their scale.
-      case 0x22A2: return result(25, 2); // Synthetic temperature, no thermal model.
+      case 0x3001: return result(error_, 4);
+      case 0x3002: return result((enabled_ ? 1u : 0u) | (error_ ? 2u : 0u), 4);
+      case 0x3003: return result(mode_, 4);
+      case 0x3004: return result(software_enable_requested_ ? 1 : 0, 4);
+      case 0x3762: return result(checkedCanPosition(position_).value(), 4);
+      case 0x3111: return result(48000, 4); // Synthetic 48 V.
+      case 0x3114: return result(25, 4);
+      case 0x3262: return result(std::abs(static_cast<int64_t>(current_)), 4);
       default: break;
       }
     }
-    if (!traction_)
-    {
-      if (sub == 0)
-      {
-        switch (index)
-        {
-        case 0x3001: return result(error_, 4);
-        case 0x3003: return result(mode_, 4);
-        case 0x3004: return result(enabled_ ? 1 : 0, 2);
-        case 0x3762: return result(checkedCanPosition(position_).value(), 4);
-        case 0x3111: return result(48000, 4); // Synthetic 48 V.
-        case 0x3114: return result(25, 4);
-        case 0x3262: return result(std::abs(static_cast<int64_t>(current_)), 4);
-        default: break;
-        }
-      }
-      if (sub == 1 && index == 0x3A04) { return result(velocity_, 4); }
-      if (sub == 1 && index == 0x3262) { return result(current_, 4); }
-    }
-    const auto found = objects_.find(key(index, sub));
-    if (found != objects_.end())
-    {
-      const bool comm = index == 0x1400 || (index >= 0x1800 && index <= 0x1802);
-      const bool mapping = index == 0x1600 || (index >= 0x1A00 && index <= 0x1A02);
-      const bool gold_rpdo_type = traction_ && index == 0x1400 && sub == 2;
-      return result(found->second, !gold_rpdo_type && ((comm && sub == 2) || (mapping && sub == 0)) ? 1 : 4);
-    }
+    if (sub == 1 && index == 0x3A04) { return result(velocity_, 4); }
+    if (sub == 1 && index == 0x3262) { return result(current_, 4); }
+
     // In particular: never fabricate decoded STO/digital-input telemetry.
     return std::nullopt;
   }
   uint32_t write(unsigned index, unsigned sub, unsigned size, uint32_t value)
   {
-    const bool comm = (index >= 0x1800 && index <= 0x1802) || (traction_ && index == 0x1400);
-    const bool mapping = (index >= 0x1A00 && index <= 0x1A02) || (traction_ && index == 0x1600);
-    if (comm || mapping)
-    {
-      const bool gold_rpdo_type = traction_ && index == 0x1400 && sub == 2;
-      const unsigned expected = gold_rpdo_type ? 4 : comm ? (sub == 1 ? 4 : sub == 2 ? 1 : 0) : (sub == 0 ? 1 : sub <= 8 ? 4 : 0);
-      if (!expected) { return 0x06090011; }
-      if (size != expected) { return 0x06070010; }
-      // Standard TPDOs may prohibit RTR via bit 30; it is reserved for RPDOs.
-      const uint32_t cob_mask = index == 0x1400 ? 0x800007FFu : 0xC00007FFu;
-      if (comm && sub == 1 && (value & ~cob_mask)) { return 0x06090030; }
-      if (index == 0x1400 && sub == 1) { pending_rpdo_.reset(); }
-      if (mapping && sub > 0 && objects_[key(index, 0)] != 0) { return 0x06010000; }
-      if (mapping && sub == 0)
-      {
-        unsigned bits = 0;
-        if (value > 8) { return 0x06040042; }
-        for (unsigned i = 1; i <= value; ++i)
-        {
-          auto entry = objects_.find(key(index, i));
-          if (entry == objects_.end()) { return 0x06040041; }
-          const auto descriptor = entry->second;
-          const auto object = read(descriptor >> 16, (descriptor >> 8) & 0xFF);
-          const bool rpdo = index == 0x1600;
-          const bool writable = descriptor == EC_TRACTION_RPDO_CONTROLWORD_MAPPING ||
-                                descriptor == EC_TRACTION_RPDO_TARGET_VELOCITY_MAPPING;
-          if (rpdo ? !writable : (!object || object->second * 8 != (descriptor & 0xFF))) { return 0x06040041; }
-          bits += descriptor & 0xFF;
-        }
-        if (bits > 64) { return 0x06040042; }
-      }
-      objects_[key(index, sub)] = value; return 0;
-    }
     if (sub != 0) { return 0x06090011; }
     unsigned expected = 0;
-    if (traction_)
-    {
-      if (index == 0x6040) { expected = 2; }
-      else if (index == 0x6060) { expected = 1; }
-      else if (index == 0x60FF || index == 0x3200 || index == 0x607F || index == 0x6083 ||
-               index == 0x6084 || index == 0x60C5 || index == 0x60C6) { expected = 4; }
-    }
-    else
-    {
-      if (index == 0x3000 || index == 0x3004) { expected = 2; }
-      else if (index == 0x3003 || index == 0x3300 || index == 0x3500 || index == 0x3790 || index == 0x3200)
-      { expected = 4; }
-    }
+    if (index == 0x3000 || index == 0x3004 || index == 0x3003 || index == 0x3300 ||
+        index == 0x3500 || index == 0x3790 || index == 0x3200)
+    { expected = 4; }
     if (!expected) { return read(index, sub) ? 0x06010002 : 0x06020000; }
     if (size != expected) { return 0x06070010; }
     const auto signed_value = static_cast<int32_t>(value);
-    if (traction_ && index == 0x6040) { controlword(static_cast<uint16_t>(value)); }
-    else if (index == 0x3000) { if (value) { error_ = 0; error_code_ = 0; } }
-    else if (index == 0x3004) { setEnabled(value != 0 && !error_); }
-    else if (index == 0x3003 || index == 0x6060)
+    if (index == 0x3000)
     {
-      if ((traction_ && value != VELOCITY && value != CURRENT) ||
-          (!traction_ && value != POSITION && value != S_VELOCITY && value != CURRENT)) { return 0x06090030; }
+      if (value == 1) { error_ = 0; }
+      else if (value == 5 && mode_ == POSITION) { profile_rpm_ = pending_profile_rpm_; }
+    }
+    else if (index == 0x3004)
+    {
+      software_enable_requested_ = value != 0;
+      setEnabled(software_enable_requested_ && hardware_enable_ && !error_);
+    }
+    else if (index == 0x3003)
+    {
+      if (value != POSITION && value != VELOCITY && value != S_VELOCITY && value != CURRENT) { return 0x06090030; }
       if (mode_ != static_cast<DeviceMode>(value)) { setEnabled(false); }
       mode_ = static_cast<DeviceMode>(value);
     }
-    else if (index == 0x3300) { profile_rpm_ = enabled_ ? signed_value : 0; }
-    else if (index == 0x3790) { if (enabled_) { target_position_ = signed_value; } }
-    else if (index == 0x60FF || index == 0x3500) { velocity_ = enabled_ ? signed_value : 0; }
+    else if (index == 0x3300)
+    {
+      if (mode_ == POSITION) { pending_profile_rpm_ = signed_value; }
+      else if (mode_ == VELOCITY || !enabled_) { velocity_ = enabled_ ? signed_value : 0; }
+      else { return 0x06090030; }
+    }
+    else if (index == 0x3790) { if (enabled_) { target_position_ = signed_value; profile_rpm_ = pending_profile_rpm_; } }
+    else if (index == 0x3500) { velocity_ = enabled_ ? signed_value : 0; }
     else if (index == 0x3200)
     {
-      if (traction_ && (signed_value < -32768 || signed_value > 32767)) { return 0x06090030; }
       current_ = enabled_ ? signed_value : 0;
     }
-    else { objects_[key(index, sub)] = value; }
     return 0;
   }
-  std::vector<Frame> sync()
-  {
-    if (!operational_) { return {}; }
-    if (pending_rpdo_)
-    {
-      const auto frame = *pending_rpdo_; pending_rpdo_.reset();
-      controlword(static_cast<uint16_t>(shortFromFrame(frame, 0)));
-      velocity_ = enabled_ && mode_ == VELOCITY ? intFromFrame(frame, 2) : 0;
-    }
-    ++sync_count_;
-    std::vector<Frame> frames;
-    for (unsigned pdo = 0; pdo < 3; ++pdo)
-    {
-      const auto cob = objects_.find(key(0x1800 + pdo, 1));
-      const auto divider = objects_.find(key(0x1800 + pdo, 2));
-      const auto count = objects_.find(key(0x1A00 + pdo, 0));
-      if (cob == objects_.end() || cob->second & CANOPEN_PDO_COB_ID_INVALID_BIT ||
-          divider == objects_.end() || divider->second == 0 || divider->second > 240 ||
-          sync_count_ % divider->second != 0 || count == objects_.end() || count->second == 0) { continue; }
-      Frame frame; frame.id = cob->second & 0x7FF; unsigned offset = 0;
-      for (unsigned i = 1; i <= count->second; ++i)
-      {
-        const auto descriptor = objects_.at(key(0x1A00 + pdo, i));
-        const auto object = read(descriptor >> 16, (descriptor >> 8) & 0xFF);
-        if (!object || offset + object->second > 8) { offset = 0; break; }
-        for (unsigned byte = 0; byte < object->second; ++byte)
-        { frame.data[offset++] = (object->first >> (8 * byte)) & 0xFF; }
-      }
-      frame.dlc = offset;
-      if (offset) { frames.push_back(frame); }
-    }
-    return frames;
-  }
+
   unsigned node_;
-  bool traction_, operational_{false}, enabled_{false};
+  bool enabled_{false};
+  bool software_enable_requested_{false}, hardware_enable_{true};
+  bool traction_joint_;
   double resolution_, gearing_, position_{0};
-  int32_t target_position_{0}, profile_rpm_{0}, velocity_{0}, current_{0};
+  int32_t target_position_{0}, profile_rpm_{0}, pending_profile_rpm_{0}, velocity_{0}, current_{0};
   DeviceMode mode_{UNKNOWN};
-  uint8_t error_{0}; uint16_t error_code_{0}, statusword_{0x40};
-  uint64_t sync_count_{0};
-  std::map<unsigned, uint32_t> objects_;
-  std::optional<Frame> pending_rpdo_;
+  uint32_t error_{0};
 };

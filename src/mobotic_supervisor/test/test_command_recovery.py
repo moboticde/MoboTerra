@@ -89,9 +89,12 @@ class CommandRecoveryTest(unittest.TestCase):
         command.position = [0.7, -0.4, 0.0, 0.0]
         command.velocity = [1.0, 1.0, 2.0, 2.0]
         command.effort = []
+        if self.node.direct_traction_control_mode == 'current':
+            command.velocity[2:] = [0.0, 0.0]
+            command.effort = [0.0, 0.0, 2.0, 2.0]
         return command
 
-    def test_velocity_recovery_requires_new_original_source_command(self):
+    def test_velocity_feedback_loss_requires_b2_before_new_commands_can_move(self):
         for mode in (harness.MODES.MANUAL, harness.MODES.AUTONOMOUS):
             with self.subTest(mode=mode):
                 self.setUp()
@@ -107,8 +110,8 @@ class CommandRecoveryTest(unittest.TestCase):
                 node.wheel_status.modules[0].feedback_fresh = False
                 node._control()
                 self.assertEqual(node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
-                # Safety/battery still request enable; only motion is blocked.
-                self.assertTrue(node.module_command_publisher.messages[-1].enable)
+                self.assertFalse(node.module_command_publisher.messages[-1].enable)
+                self.assertTrue(node.operator_drives_disabled)
                 self.advance(0.02)
                 node._control()
                 self.assertEqual(node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
@@ -118,7 +121,8 @@ class CommandRecoveryTest(unittest.TestCase):
                 callback(self.velocity())
                 self.advance(0.02)
                 node._control()
-                self.assertGreater(node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
+                self.assertEqual(node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
+                self.assertFalse(node.module_command_publisher.messages[-1].enable)
 
     def test_direct_recovery_requires_new_joint_command_in_both_traction_modes(self):
         for traction_mode in ('velocity',):

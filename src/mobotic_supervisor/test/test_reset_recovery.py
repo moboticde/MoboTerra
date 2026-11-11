@@ -15,7 +15,8 @@ class ResetRecoveryTest(unittest.TestCase):
         self.node = self.fixture.node
         del self.node._source_gate
         node = self.node
-        node.safety_source = 'hardwired_sto'
+        node.safety_source = 'flexisoft'
+        node.require_flexisoft_telemetry = False
         node.require_operator_interlock = True
         node.required_health_sources = ['kinematics', 'odometry']
         node.health_timeout = .3
@@ -100,6 +101,48 @@ class ResetRecoveryTest(unittest.TestCase):
         self.assertFalse(self.platform.states[-1][2])  # Still no rearmed manual command.
         for final in self.node.final_command_publisher.messages:
             self.assertTrue(all(m.traction_velocity == 0 and m.steering_profile_velocity == 0 for m in final.modules))
+
+    def test_steering_alignment_waits_for_startup_and_post_alignment_standstill(self):
+        self.acknowledge()
+        for stamp in (11.2, 11.45):
+            self.inputs(stamp, enabled=True, motion=True, fault=0, ack=True)
+            for module in self.node.wheel_status.modules:
+                module.startup_pending = True
+                module.startup_complete = False
+            index = self.node.joint_state.name.index(self.node.expected_steering_joint_names[0])
+            self.node.joint_state.velocity[index] = 0.3
+            self.node._control()
+            self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
+            self.assertIsNotNone(self.node.reset_started_at)
+            self.assertFalse(self.fixture.publish_state().motion_permitted)
+            for final in self.node.final_command_publisher.messages:
+                self.assertTrue(all(m.traction_velocity == 0 for m in final.modules))
+        self.inputs(11.6, enabled=True, motion=True, fault=0, ack=True)
+        self.node._control()
+        self.assertIsNotNone(self.node.reset_started_at)
+        self.inputs(11.9, enabled=True, motion=True, fault=0, ack=True)
+        self.node._control()
+        self.assertIsNone(self.node.reset_started_at)
+        self.assertFalse(self.node.fault_codes)
+        self.assertIsNone(self.node.manual_command)
+
+    def test_new_alignment_failure_ends_recovery_and_requires_a_new_b2(self):
+        self.acknowledge()
+        self.inputs(11.2, enabled=True, motion=True, fault=0, ack=True)
+        for module in self.node.wheel_status.modules:
+            module.startup_pending = True
+            module.startup_complete = False
+        self.node._control()
+        self.inputs(11.3, enabled=False, motion=False, fault=0, ack=True)
+        for module in self.node.wheel_status.modules:
+            module.startup_complete = False
+            module.startup_failed = True
+        self.node._control()
+        self.assertIsNone(self.node.reset_started_at)
+        self.assertTrue(self.node.operator_drives_disabled)
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
+        self.assertIn('alignment failed', self.node.reset_result)
+        self.assertIn('new B2 press', self.node.reset_result)
 
     def test_b2_cannot_cancel_active_physical_startup(self):
         self.inputs(11, enabled=True, motion=True, fault=0)
@@ -247,7 +290,7 @@ class ResetRecoveryTest(unittest.TestCase):
             lambda n: setattr(n.wheel_status.modules[0].traction, 'status_stamp', harness.Time(10).to_msg()),
             lambda n: setattr(n.wheel_status.modules[0].traction, 'status_stamp', harness.Time(11.01).to_msg()),
             lambda n: setattr(n.wheel_status.modules[0].steering, 'name', 'wrong_joint'),
-            lambda n: setattr(n.wheel_status.modules[0], 'startup_complete', False),
+            lambda n: setattr(n.wheel_status.modules[0], 'startup_pending', True),
             lambda n: setattr(n.wheel_status.modules[0], 'initialized', False),
             lambda n: setattr(n.wheel_status.modules[0], 'startup_failed', True),
             lambda n: n.wheel_status.modules.pop(),
@@ -319,7 +362,11 @@ class ResetRecoveryTest(unittest.TestCase):
                     self.node.wheel_status.modules[0].reset_id = 0
                 self.node._control()
                 self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
-                self.assertIsNotNone(self.node.reset_started_at)
+                if bad_ack in ('empty', 'duplicate'):
+                    self.assertIsNone(self.node.reset_started_at)
+                    self.assertTrue(self.node.operator_drives_disabled)
+                else:
+                    self.assertIsNotNone(self.node.reset_started_at)
 
     def test_frozen_zero_samples_cannot_complete_post_reset_standstill(self):
         self.acknowledge()
@@ -336,7 +383,7 @@ class ResetRecoveryTest(unittest.TestCase):
         self.assertTrue(self.node.fault_codes)
 
     def test_interlock_loss_during_zero_enable_keeps_latch_and_requests_disable(self):
-        for field, value in (('controls_neutral', False), ('estop_pressed', True), ('connected', False)):
+        for field, value in (('estop_pressed', True), ('connected', False)):
             with self.subTest(field=field):
                 self.setUp()
                 self.acknowledge()
@@ -344,7 +391,26 @@ class ResetRecoveryTest(unittest.TestCase):
                 self.node._control()
                 self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
                 self.assertTrue(self.node.fault_codes)
-                self.assertIsNotNone(self.node.reset_started_at)
+                self.assertIsNone(self.node.reset_started_at)
+                self.assertTrue(self.node.operator_drives_disabled)
+                self.assertIn('waiting for a new B2 press', self.node.reset_result)
+
+    def test_stick_movement_during_recovery_is_ignored_until_fresh_rearm(self):
+        self.acknowledge()
+        self.node.manual_state.controls_neutral = False
+        self.node._control()
+        self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
+        self.assertIsNotNone(self.node.reset_started_at)
+        self.assertFalse(self.fixture.publish_state().motion_permitted)
+        self.inputs(11.2, enabled=True, motion=True, fault=0, ack=True)
+        self.node._control()
+        self.inputs(11.45, enabled=True, motion=True, fault=0, ack=True)
+        self.node._control()
+        self.assertIsNone(self.node.reset_started_at)
+        self.assertFalse(self.node.fault_codes)
+        self.assertIsNone(self.node.manual_command)
+        self.assertFalse(self.node._source_gate(self.platform.now)[0])
+        self.assertFalse(self.platform.states[-1][2])
 
     def test_missing_motion_data_times_out_and_cannot_leave_enable_active(self):
         self.acknowledge()

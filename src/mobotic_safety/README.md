@@ -24,7 +24,7 @@ restart and an outage, a second advancing sample is required. OSSD and field-set
 numbers remain explicitly unknown: output-path status does not prove the
 physical wiring, and a monitoring-case number is not a field-set number.
 
-Hardware uses `scanner_source: scanner` by default, including `hardwired_sto`
+Hardware uses `scanner_source: scanner` by default, including retained legacy safety implementations
 profiles, and never falls back to PLC data. Virtual bringup explicitly selects
 `scanner_source: safety_io` to use the mock platform's field states. Standalone
 safety launch expects the real scanner driver topics to be started separately.
@@ -34,21 +34,11 @@ ramps to an absolute 0.3 m/s cap; both clear remove the scanner speed cap.
 Missing or unknown scanner status blocks motion. See the
 [supervisor policy](../mobotic_supervisor/README.md).
 
-The two-module Siemens chassis selects `safety.source: hardwired_sto`. Integrated
-and safety-only launch omit the FlexiSoft TCP bridge while retaining both safety
-monitoring nodes. The monitor consumes the configured wheel modules' STO status;
-missing, partial, duplicate, stale or unknown feedback cannot confirm a clear STO.
-A known active STO on any configured module immediately reports inhibition.
-Individual scanner, E-stop and safety-enable inputs remain explicitly unknown
-in the safety-controller messages. Direct scanner telemetry supplies field
-monitoring independently. For this explicit two-module profile, the supervisor does not use PLC
-telemetry for readiness, faults, speed scaling or direct-mode selection. The
-physical Siemens/scanner/STO circuit operates independently; known active drive
-STO still inhibits software enable. Battery, operator, drive feedback/faults and
-current controller position-feedback checks remain. The driver currently exposes raw Elmo safety
-registers but does not yet commission per-module STO feedback. `hardwired_sto`
-is rejected for any layout other than exactly two modules. Four-module profiles
-require FlexiSoft and retain its communication and safety-state checks.
+The supported application configuration contains all four modules. FlexiSoft is
+the only supported safety source and retains its existing monitoring/interlock
+role. The legacy software STO-derived safety mode has been removed; real drive
+STO feedback checks and the two scanner paths remain in use. See the
+[four-module guide](../../docs/four_module_setup.md).
 
 `flexisoft_tcp_bridge` accepts fixed-size Ethernet telegrams and publishes the configured status byte on
 `flexisoft/status_byte`. `safety_monitor` decodes that byte into `safety/io_state` and a fail-safe `safety/state`.

@@ -10,7 +10,8 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/moboterra.launch.py']),
+        ('share/' + package_name + '/launch', [
+            'launch/moboterra.launch.py', 'launch/sdo_socket_can_bridge.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -20,6 +21,8 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
+            'guarded_launch = mobotic_bringup.shutdown_guard:main',
+            'manual_drive_control = mobotic_bringup.manual_drive_control:main',
             'check_readiness = mobotic_bringup.readiness:main',
             'mock_platform_state = mobotic_bringup.mock_platform_state:main',
             'platform_diagnostics = mobotic_bringup.platform_diagnostics:main',

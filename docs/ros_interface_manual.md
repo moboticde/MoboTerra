@@ -69,7 +69,7 @@ Types in the following table use ROS 2 `package/msg/Type` notation.
 | `vehicle/measured_velocity` | geometry_msgs/msg/TwistStamped | Kinematics; measured body velocity |
 | `vehicle/odom` | nav_msgs/msg/Odometry | Odometry; wheel-derived pose and twist |
 | `battery/state` | sensor_msgs/msg/BatteryState | Alias for configured primary pack (`battery1`); SOC as a fraction, not a two-pack aggregate |
-| `battery/<id>/state` | sensor_msgs/msg/BatteryState | Individual telemetry: `battery1` for two modules; `battery1` and `battery2` for four modules |
+| `battery/<id>/state` | sensor_msgs/msg/BatteryState | Individual telemetry: `battery1` and `battery2` for the four-module platform |
 | `battery/system_state` | mobotic_interfaces/msg/BatterySystemState | Battery monitor; aggregate pack readiness/faults |
 | `safety/state` | mobotic_interfaces/msg/SafetyState | Safety monitor; software motion permission and stop state |
 | `safety/io_state` | mobotic_interfaces/msg/SafetyIOState | Safety monitor; mapped I/O and known flags |
@@ -105,7 +105,8 @@ are not measured end-to-end latency or guaranteed stopping times.
 
 Only MANUAL (0), AUTONOMOUS (1) and KINEMATICOFF (2) are selectable. A mode change blocks candidates, stops through the outgoing path
 and checks fresh body and all-joint standstill. Default proof duration is 0.25 s;
-limits are 0.02 m/s body translation, 0.02 rad/s yaw and 0.1 rad/s per joint.
+limits are 0.02 m/s body translation, 0.02 rad/s yaw and 0.1 rad/s per steering joint. Traction uses the equivalent
+contact-speed threshold `0.1 * wheel_radius` m/s.
 A 10 s timeout latches ERROR. Fresh commands are required after a completed
 transition; a mode request never starts motion by itself.
 
@@ -115,7 +116,7 @@ mode during SAFETY/ERROR. ERROR takes precedence if both are present, while
 Read `error_active`, `reason_codes`, `motion_permitted`, `transition_in_progress`,
 `readiness_known`, `ready_to_drive` and `drives_enabled` as well.
 
-### Selecting a mode on the two-module PAIL chassis
+### Selecting a mode on the four-module PAIL chassis
 
 The supervisor starts with `selected_mode=MANUAL`, while `current_mode=UNKNOWN`
 until startup readiness is established. External readiness starts drive
@@ -176,12 +177,10 @@ or another mode request does not clear ERROR. Safety stops preserve the selected
 mode; after a non-latched protective stop clears, fresh commands and manual
 neutral rearm are required. Any accompanying latched fault still requires reset.
 
-On the Siemens two-module chassis, the physical scanner/controller/STO chain
-operates independently of ROS. The supervisor has no Siemens Ethernet input.
-It can indicate SAFETY from a known PAIL STOP or known drive STO; a LaserScan
-alone does not establish protective-field state. Evaluated scanner output paths
-are read separately over Ethernet; both field-status streams are motion
-prerequisites. Unknown physical STO telemetry does not prove the chain is clear.
+The physical safety chain operates independently of ROS. The four-module
+FlexiSoft telemetry role remains selected by the existing profile. Evaluated
+scanner fields retain their own readiness checks; LaserScan presence alone does
+not establish protective-field state or physical STO readiness.
 
 ### Reset recovery when disabled drives withhold motion telemetry
 
@@ -212,7 +211,7 @@ diagnostic warning is a latched system error.
 ## Operator inputs and recovery
 
 `OperatorState` contains `source_id`, `connected`, `command_active`,
-`deadman_pressed`, `deadman_state_known`, `estop_pressed`, `estop_state_known`,
+`deadman_pressed`, `deadman_state_known` (retained as false for compatibility), `estop_pressed`, `estop_state_known`,
 `controls_neutral`, `turbo_active` and `status_message`, with the acquisition
 stamp in `header`. Timer republication must not make an old input look new.
 
@@ -223,9 +222,7 @@ gamepad reports `estop_state_known=false`; REMdevice requires a verified PDO
 mapping before its physical controls can be relied on.
 
 After a protective stop clears, a fresh command is required. Manual control
-also requires neutral controls; a configured deadman must be released and then
-pressed again while neutral. The default USB profile has no deadman button
-assigned. System errors require a supervisor reset transaction in addition to
+also requires neutral controls and fresh input. System errors require a supervisor reset transaction in addition to
 cleared causes. Old motion is not replayed after reset or reconnection.
 
 ## Joint commands and actual feedback
@@ -234,21 +231,29 @@ The default four modules are `front_left`, `front_right`, `rear_left` and `rear_
 Their eight names end in `_steering` and `_traction`, for example
 `front_left_steering` and `front_left_traction`. Use message `name` values to
 associate arrays; do not assume a positional ordering from an earlier worksheet.
-The [two-module profile](two_module_setup.md) selects only `front_right` and
-`rear_left`, so its feedback and command contract contains four joints.
+The [four-module profile](four_module_setup.md) requires all eight joints.
 
 For actual `joint_states`, `position` contains steering angles and wheel rotation
-angles [rad], and `velocity` contains steering and traction rotational velocities
-[rad/s]. The driver requires coherent samples from all configured joints and
+angles [rad]. In this romb-compatible interface, `velocity` contains steering
+angular velocity [rad/s] and traction wheel-contact speed [m/s]. Traction position
+stays in radians for the robot description; its velocity field deliberately uses
+the romb contract rather than the usual JointState angular-velocity convention. The driver requires coherent samples from all configured joints and
 preserves acquisition time: physical samples use a bounded acquisition skew;
 virtual samples use the configured SYNC window. `effort` is empty; electrical motor
 current is not torque and is not placed in JointState.effort.
 
 In KINEMATICOFF, the external JointState candidate must contain every configured
-joint exactly once with finite position/velocity arrays and empty effort.
+joint exactly once with full finite position/velocity/effort arrays.
 Steering position is a target [rad]; steering velocity is a nonnegative profile
-speed [rad/s]; traction velocity is signed [rad/s]. Traction position entries
-are not traction-position targets. No public motor-current control is exposed.
+speed [rad/s]; steering effort is zero. Traction velocity is zero and traction
+effort is signed motor current [A], a project-specific use of the command
+message rather than mechanical torque. Traction position entries are ignored.
+The current limit comes from the selected profile. On miControl the supervisor
+switches traction to native current mode 2 / target `0x3200` only after measured
+standstill and waits for mode acknowledgement before accepting commands. Leaving
+KINEMATICOFF restores velocity mode. ELMO traction current is not yet verified,
+so those profiles reject mode 2. Warning/reduced-speed conditions inhibit current
+output; measured overspeed latches a reset-required driver fault.
 
 All velocity candidates require a valid current source stamp and the configured
 body frame, normally `base_link`. Empty/map/odom frame IDs, future/expired
@@ -296,7 +301,7 @@ and a 0.3 s deadline. Physical OSSD and field-set numbers remain unknown. The
 supervisor combines both scanners: red commands zero immediately; yellow caps commands
 at an absolute 0.3 m/s; both clear remove the scanner cap. Missing/unknown
 field status blocks motion. This applies to manual, autonomous velocity and
-direct wheel commands, including the two-module hardware-STO profile. Virtual
+direct wheel commands on the four-module platform. Virtual
 bringup explicitly uses mock safety I/O instead of hardware scanner messages.
 Protective stops and unavailable monitoring are distinguished. LaserScan
 presence does not establish a clear protective field or safety permission.
@@ -306,6 +311,8 @@ presence does not establish a clear protective field or safety permission.
 | Relative service | Type | Use |
 | --- | --- | --- |
 | `vehicle/set_mode` | mobotic_interfaces/srv/SetVehicleMode | Request MANUAL=0, AUTONOMOUS=1 or KINEMATICOFF=2 |
+| `wheel_modules/enable_drives` | std_srvs/srv/Trigger | B2 / example Logitech X role: initialize/enable; repeated requests leave pending or completed enable unchanged |
+| `wheel_modules/toggle_drives` | std_srvs/srv/Trigger | Explicit legacy toggle; not used by B2 |
 | `wheel_modules/clear_errors` | std_srvs/srv/Trigger | Supervisor-owned staged fault recovery; disabled-state admission and fresh standstill before completion |
 | `vehicle/reset_odometry` | std_srvs/srv/Trigger | Reset wheel odometry only with fresh measured standstill |
 | `internal/driver/initialize_all_drives` | std_srvs/srv/Trigger | Commissioning only; rejected while drives are enabled |
@@ -335,3 +342,20 @@ does not subscribe directly to kinematics joint candidates, all configured measu
 joints are coherent, current units/known flags are correct, and safety/fault
 recovery never replays stale motion. Hardware commissioning remains necessary
 after source integration and a ROS 2 Jazzy build/test run.
+
+
+Romb-compatible manual and wheel behaviour (2026-11-10): the existing axis
+mapping and button roles remain selected by the platform. Speed, crab and turn
+independently request body vx, vy and yaw velocity. The turn request is independent
+of the speed stick, including reverse and zero longitudinal input. Kinematics
+holds the previous steering direction below the speed epsilon and chooses reverse
+traction when it reduces steering travel. Continuous controller coordinates and
+a deterministic perpendicular tie preserve mirrored crab steering across nodes
+1/7 (left) and 3/5 (right), accounting for mounting yaw. B2 still aligns to the
+existing absolute controller zero; no encoder origin is rewritten.
+
+Traction command and feedback velocities, including final wheel records and
+`motion_limits.max_traction_velocity`, use m/s. The driver converts once using
+wheel radius and gearing to miControl rpm or Elmo increments/s. External consumers
+must migrate both commands and feedback together; relabelling old rad/s values
+would change physical speeds. Native `actuators.*` limits keep their CAN units.

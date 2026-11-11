@@ -51,7 +51,7 @@ class MessageFreshnessTest(unittest.TestCase):
                 if mode == harness.MODES.KINEMATICOFF:
                     stop = self.node.direct_command_publisher.messages[-1]
                     self.assertEqual(stop.velocity, [0.0] * 4)
-                    self.assertEqual(stop.effort, [])
+                    self.assertEqual(stop.effort, [0.0] * 4 if traction_mode == 'current' else [])
                 else:
                     self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
                 self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
@@ -115,7 +115,8 @@ class MessageFreshnessTest(unittest.TestCase):
         self.node._control()
         self.assertIsNone(self.node.autonomy_joint_command)
         self.assertFalse(self.node.direct_command_publisher.messages)  # Never guess a stale hold angle; local driver watchdog stops.
-        self.assertTrue(self.node.module_command_publisher.messages[-1].enable)
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
+        self.assertTrue(self.node.operator_drives_disabled)
 
     def test_timestamp_and_receipt_boundaries(self):
         now = harness.Time(10.0)

@@ -4,8 +4,9 @@
 #include <deque>
 #include <optional>
 
-// One SDO at a time per node. Every write is acknowledged then read back.
-class PdoConfiguration
+// One SDO at a time per node. Settings are acknowledged and read back;
+// action commands require acknowledgement only.
+class SdoConfiguration
 {
 public:
   using Clock = std::chrono::steady_clock;
@@ -19,8 +20,13 @@ public:
     if (waiting_ && now - sent_ > std::chrono::seconds(2)) { failed_ = true; }
     if (failed_ || waiting_ || queue_.empty()) { return std::nullopt; }
     auto frame = queue_.front();
-    if (frame.id == 0) { queue_.pop_front(); return frame; }
-    if (reading_) { frame.data[0] = READ_FROM_DEVICE; }
+    if (reading_)
+    {
+      frame.data[0] = READ_FROM_DEVICE;
+      // Upload requests have no data payload. Keep the expected write value
+      // in queue_ for comparison with the response, never in the request.
+      for (unsigned i = 4; i < 8; ++i) { frame.data[i] = 0; }
+    }
     waiting_ = true; sent_ = now; sent_source_stamp_ns_ = source_stamp_ns;
     return frame;
   }
@@ -39,9 +45,9 @@ public:
       // Their acknowledgement is sufficient; fresh operational feedback later
       // confirms the result. Configuration objects still require readback.
       const unsigned index = request.data[1] | (unsigned(request.data[2]) << 8);
-      const bool action = index == EC_CONTROLWORD || index == MICONTROL_DEVICE_STATE ||
+      const bool action = index == MICONTROL_DEVICE_STATE ||
           index == MICONTROL_CLEAR_ERROR_STATUS || index == STEERING_PROFILE_VELOCITY_INPUT ||
-          index == EC_TRACTION_VELOCITY_INPUT;
+          index == S_VELOCITY_INPUT || index == CURRENT_INPUT;
       waiting_ = false;
       if (action) { queue_.pop_front(); } else { reading_ = true; }
       return;

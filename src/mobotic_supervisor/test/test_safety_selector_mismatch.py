@@ -126,6 +126,8 @@ class SafetySelectorMismatchTest(unittest.TestCase):
         self.n.started_at = self.f.now  # Startup grace cannot grant motion.
         self.assertFalse(self.n._enable_gate(self.f.now)[0])
         self.assertTrue(self.n._toggle_drives_service(None, SimpleNamespace()).success)  # Disable stays available.
+        for module in self.n.wheel_status.modules:
+            module.enabled = False  # Observe the completed disable before retrying enable.
         self.assertFalse(self.n._toggle_drives_service(None, SimpleNamespace()).success)  # Enable is blocked.
         for mode in (h.MODES.AUTONOMOUS, h.MODES.KINEMATICOFF):
             self.assertFalse(self.n._request_mode(mode)[0])
@@ -156,7 +158,8 @@ class SafetySelectorMismatchTest(unittest.TestCase):
                 callback(old)
                 self.assertFalse(n._source_gate(self.f.now)[0])
                 callback(self.velocity())
-                self.assertTrue(n._source_gate(self.f.now)[0])
+                self.assertFalse(n._source_gate(self.f.now)[0])
+                self.assertTrue(n.operator_drives_disabled)
                 self.assertFalse(n.fault_codes)
                 self.assertFalse(n._system_conditions(self.f.now)[1])
 

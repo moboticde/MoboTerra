@@ -29,10 +29,9 @@ class ModeRoutingTest(unittest.TestCase):
         for key in keys:
             self.assertRegex(config, rf'(?m)^\s*{key}: {defaults[key]}(?:\s+#.*)?$')
         self.assertEqual(defaults['mode_switch_type'], 'toggle')
-        self.assertEqual(defaults['button_deadman'], -1)
         self.assertEqual(defaults['buttons_boost'], [9, 10])
         self.assertEqual((defaults['axis_speed'], defaults['axis_crab'], defaults['axis_steer']), (3, 2, 0))
-        for key in ('axis_speed', 'axis_crab', 'axis_steer', 'button_deadman'):
+        for key in ('axis_speed', 'axis_crab', 'axis_steer'):
             self.assertRegex(config, rf'(?m)^\s*{key}: {defaults[key]}(?:\s+#.*)?$')
         self.assertRegex(config, r'(?m)^\s*buttons_boost: \[9, 10\](?:\s+#.*)?$')
         for launch in ('mobotic_bringup/launch/moboterra.launch.py',
@@ -55,8 +54,8 @@ class ModeRoutingTest(unittest.TestCase):
         self.assertIn('"vehicle/mode"', source)
         self.assertIn('motion_source_gate_.permits(source', source)
         self.assertIn('this->enforceModeAuthority();', source)
-        self.assertIn('output.header = msg.header;',
-                      (PACKAGES / 'mobotic_kinematics/src/mobotic_kinematics.cpp').read_text())
+        self.assertIn('output.header = copy.deepcopy(msg.header)',
+                      (PACKAGES / 'mobotic_kinematics/mobotic_kinematics/romb/adapter.py').read_text())
 
 
 if __name__ == '__main__':

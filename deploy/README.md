@@ -1,5 +1,12 @@
 # MoboTerra Ubuntu deployment
 
+The current ROMB-only stack requires an external verified solver runtime. The
+Dockerfile currently copies source and checks but does not provision that runtime
+in its builder or runtime images. Container builds/startup are therefore not
+validated for the current stack until ROMB provisioning is added. The native
+four-module launcher uses the runtime already installed on its host. See
+[ROMB runtime requirements](../src/mobotic_kinematics/README.md).
+
 This deployment supports ARM64 or AMD64 Ubuntu 24.04 hosts, configures two
 serial-numbered USB-to-CAN adapters, and starts the ROS 2 Jazzy hardware stack.
 Operational faults keep the stack running in ERROR with motion inhibited.
@@ -19,9 +26,8 @@ owner.
 For copyable commands, isolated virtual testing, ROS inspection/services and
 rebuilding after code changes, use the [command reference](../docs/commands.md).
 
-For a robot with only front-right and rear-left powered steering/traction
-modules, use the [two-module setup guide](../docs/two_module_setup.md). Select the
-same profile for every component; physical commissioning restrictions still apply.
+Use the [four-module setup guide](../docs/four_module_setup.md). Select the
+same complete profile for every component; partial module layouts are rejected.
 
 ## Prerequisites
 
@@ -44,8 +50,7 @@ calibration state between robots, and do not infer persistence from the mount al
 - Two SocketCAN-compatible USB adapters with different `ID_SERIAL_SHORT` values.
 - Internet access while building ROS and apt dependencies.
 - CAN devices configured for the bitrates selected in `platform.yaml` (the
-  default profile uses 500 kbit/s on both buses; the two-module example uses
-  platform 250 kbit/s and battery 500 kbit/s).
+  source profiles use 500 kbit/s; the installed configuration remains authoritative).
 - The scanner/safety Ethernet interface configured for the addresses documented
   in the main project README; the installer deliberately does not modify host
   Ethernet or safety wiring.

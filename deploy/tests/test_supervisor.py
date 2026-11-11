@@ -25,20 +25,19 @@ class ConfigurationTest(unittest.TestCase):
             env = root / 'moboterra.env'
             env.write_text('PLATFORM_CAN_SERIAL=p\nBATTERY_CAN_SERIAL=b\nROS_DOMAIN_ID=42\n')
             profile = Configuration().platform
-            profile['can']['drives']['bitrate'] = 250000
             backend = MODULE.HostBackend(env, root / 'compose.yaml', FakeRunner())
             digests = []
-            for names in (['front_left', 'front_right', 'rear_left', 'rear_right'],
-                          ['front_right', 'rear_left']):
-                selected = dict(profile, modules=[m for m in profile['modules'] if m['name'] in names])
+            for bitrate in (250000, 500000):
+                profile['can']['drives']['bitrate'] = bitrate
+                selected = dict(profile, modules=list(profile['modules']))
                 (root / 'platform.yaml').write_text(json.dumps(selected))
                 config = backend.read_config()
-                self.assertEqual(config.bitrate, 250000)
+                self.assertEqual(config.bitrate, bitrate)
                 self.assertEqual(config.effective_battery_bitrate, 500000)
                 digests.append(config.platform_digest)
             self.assertNotEqual(*digests)
             env.write_text(env.read_text() + 'CAN_BITRATE=125000\n')
-            self.assertEqual(backend.read_config().bitrate, 250000)
+            self.assertEqual(backend.read_config().bitrate, 500000)
 
     def test_host_reads_battery_ack_mode_from_shared_profile(self):
         with tempfile.TemporaryDirectory() as directory:

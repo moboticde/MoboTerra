@@ -52,24 +52,31 @@ def _launch_setup(context):
     start_scanners = LaunchConfiguration('start_scanners')
     start_odometry = LaunchConfiguration('start_odometry')
 
+    manual_only = LaunchConfiguration('control_mode').perform(context) == 'manual_only'
+    if manual_only and start_manual_interface.perform(context) != 'true':
+        raise ValueError('manual_only requires start_manual_interface:=true')
+
     driver_config = cfg.parameters('driver')
     kinematics_config = cfg.parameters('kinematics')
     manual_config = cfg.parameters('manual')
     operator_source = cfg.platform.get('operator', {'source': 'usb'})['source']
     operator_can_interface = LaunchConfiguration('operator_can_interface').perform(context)
+    drive_can_interface = can_interface.perform(context)
+    if drive_can_interface == 'auto':
+        drive_can_interface = cfg.platform['can']['drives']['interface']
     virtual_operator = (LaunchConfiguration('stack_type').perform(context) == 'virtual'
                         and operator_source == 'remdevice')
     virtual_can_operator = virtual_operator and bool(operator_can_interface)
+    separate_hardware_operator = (
+        LaunchConfiguration('stack_type').perform(context) == 'hardware'
+        and operator_source == 'remdevice' and bool(operator_can_interface)
+        and operator_can_interface != drive_can_interface)
     safety_config = cfg.parameters('safety')
     flexisoft_enabled = cfg.platform['safety'].get('source', 'flexisoft') == 'flexisoft'
     battery_config = cfg.parameters('battery')
     supervisor_config = cfg.parameters('supervisor')
-    if virtual_operator:
-        manual_config['stationary_steering_enabled'] = True
-        manual_config['stationary_steering_geometry'] = json.dumps({key: kinematics_config[key] for key in (
-            'steering_joint_names', 'traction_joint_names', 'wheels_x', 'wheels_y',
-            'wheel_mount_angles', 'max_steering_velocity')})
-        supervisor_config['manual_stationary_steering_enabled'] = True
+    # The romb's turn axis requests body yaw at zero forward speed too.
+    # Use the same kinematics path in virtual and hardware operation.
     if LaunchConfiguration('start_odometry').perform(context) == 'true':
         supervisor_config['required_health_sources'] = list(dict.fromkeys(
             [*supervisor_config['required_health_sources'], 'kinematics', 'odometry']))
@@ -86,9 +93,9 @@ def _launch_setup(context):
                 AnyLaunchDescriptionSource(
                     PathJoinSubstitution(
                         [
-                            FindPackageShare('ros2_socketcan'),
+                            FindPackageShare('mobotic_bringup'),
                             'launch',
-                            'socket_can_bridge.launch.xml',
+                            'sdo_socket_can_bridge.launch.py',
                         ]
                     )
                 ),
@@ -98,9 +105,13 @@ def _launch_setup(context):
                     'to_can_bus_topic': 'can_tx',
                     # Preserve all data traffic and opt in to SocketCAN errors.
                     'filters': '0:0,#1FFFFFFF',
-                    'receiver_interval_sec': '0.01',
+                    # Maximum blocking receive wait, not a frame-rate limit.
+                    # Filtered streams can be quiet normally; component
+                    # watchdogs report actual stale data independently.
+                    'receiver_interval_sec': '0.1',
+                    'warn_on_receive_timeout': 'false',
                     'use_bus_time': 'true',
-                    'sender_timeout_sec': '0.05',
+                    'tx_max_queue_age_sec': str(min(0.05, driver_config['watchdog_timeout'] / 2)),
                 }.items(),
             ),
         ],
@@ -125,8 +136,9 @@ def _launch_setup(context):
                     'interface': battery_can_interface,
                     'from_can_bus_topic': 'can_rx',
                     'enable_can_fd': 'false',
-                    'filters': '0:0',
-                    'interval_sec': '0.01',
+                    'filters': cfg.battery_can_filters(),
+                    'interval_sec': '0.1',
+                    'warn_on_receive_timeout': 'false',
                     'use_bus_time': 'true',
                 }.items(),
             ),
@@ -185,15 +197,9 @@ def _launch_setup(context):
         output='screen',
     )
 
-    kinematics = Node(
-        package='mobotic_kinematics',
-        executable='mobotic_kinematics',
-        name='mobotic_kinematics',
-        namespace=robot_name,
-        parameters=[kinematics_config],
-        output='screen',
-        respawn=True,
-    )
+    from mobotic_kinematics.launching import kinematics_nodes
+    kinematics = kinematics_nodes(Node, robot_name, kinematics_config,
+        LaunchConfiguration('kinematics_backend').perform(context))
     odometry = Node(
         condition=IfCondition(start_odometry),
         package='mobotic_odometry', executable='mobotic_odometry', name='mobotic_odometry',
@@ -213,6 +219,24 @@ def _launch_setup(context):
         parameters=[supervisor_config],
         output='screen',
         respawn=True,
+    )
+
+    manual_drive_control = Node(
+        package='mobotic_bringup', executable='manual_drive_control',
+        name='manual_drive_control', namespace=robot_name, output='screen',
+        # Restart requires a new explicit B2 enable; never retain motion authority.
+        respawn=False,
+        parameters=[{
+            'steering_geometry': manual_config['steering_geometry'],
+            **{key: kinematics_config[key] for key in (
+                'module_names', 'steering_joint_names', 'traction_joint_names',
+                'output_frame_id', 'max_steering_velocity', 'max_traction_velocity')},
+            **{key: manual_config[key] for key in ('max_velocity_linear', 'max_velocity_angular')},
+            'manual_timeout': manual_config['joystick_timeout'],
+            'feedback_timeout': driver_config['motion_feedback_timeout'],
+            'candidate_timeout': min(0.1, driver_config['watchdog_timeout']),
+            'reset_timeout': max(20.0, driver_config['startup_timeout'] + 5.0),
+        }],
     )
 
     joystick = Node(
@@ -242,16 +266,20 @@ def _launch_setup(context):
                     'interface': operator_can_interface,
                     'from_can_bus_topic': 'can_rx',
                     'enable_can_fd': 'false', 'filters': '0:0,#1FFFFFFF',
-                    'interval_sec': '0.01', 'use_bus_time': 'true',
+                    'interval_sec': '0.1', 'use_bus_time': 'true',
+                    'warn_on_receive_timeout': 'false',
                 }.items(),
             ),
         ],
     )
-    # A dedicated receive-only socket keeps drive bursts out of the operator's
-    # ROS receive queue. Acquisition stamps and CAN-error reception are retained.
+    # PDOs have their own reader/history: diagnostic bursts must not evict
+    # joystick samples before the operator can assemble a fresh pair.
+    # A distinct hardware bus also needs its own NMT/SDO sender; the shared
+    # interface retains the existing single sender. Acquisition stamps and
+    # CAN-error reception are retained in both cases.
     receiver_node_id = cfg.platform['operator']['mapping']['node_id'] if operator_source == 'remdevice' else None
     operator_filters = ','.join(
-        f'{base + receiver_node_id:03X}:7FF' for base in (0x80, 0x180, 0x280, 0x580, 0x700)
+        f'{base + receiver_node_id:03X}:C00007FF' for base in (0x180, 0x280)
     ) + ',#1FFFFFFF' if receiver_node_id is not None else ''
     hardware_operator_socketcan = GroupAction(
         condition=_hardware_component_condition(
@@ -264,9 +292,43 @@ def _launch_setup(context):
                     FindPackageShare('ros2_socketcan'), 'launch', 'socket_can_receiver.launch.py',
                 ])),
                 launch_arguments={
-                    'interface': can_interface, 'from_can_bus_topic': 'can_rx',
+                    'interface': operator_can_interface or can_interface, 'from_can_bus_topic': 'can_rx',
                     'enable_can_fd': 'false', 'filters': operator_filters,
-                    'interval_sec': '0.01', 'use_bus_time': 'true',
+                    'interval_sec': '0.1', 'use_bus_time': 'true',
+                    'warn_on_receive_timeout': 'false',
+                }.items(),
+            ),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(PathJoinSubstitution([
+                    FindPackageShare('ros2_socketcan'), 'launch', 'socket_can_sender.launch.py',
+                ])),
+                condition=_hardware_component_condition(
+                    stack_type, start_manual_interface, str(separate_hardware_operator).lower()),
+                launch_arguments={
+                    'interface': operator_can_interface,
+                    'to_can_bus_topic': 'can_tx', 'enable_can_fd': 'false',
+                    'enable_frame_loopback': 'false', 'timeout_sec': '0.05',
+                }.items(),
+            ),
+        ],
+    )
+    hardware_operator_events_socketcan = GroupAction(
+        condition=_hardware_component_condition(
+            stack_type, start_manual_interface, str(operator_source == 'remdevice').lower()),
+        actions=[
+            PushRosNamespace(robot_name),
+            PushRosNamespace('operator_events'),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(PathJoinSubstitution([
+                    FindPackageShare('ros2_socketcan'), 'launch', 'socket_can_receiver.launch.py',
+                ])),
+                launch_arguments={
+                    'interface': operator_can_interface or can_interface, 'from_can_bus_topic': 'can_rx',
+                    'enable_can_fd': 'false', 'filters': ','.join(
+                        f'{base + receiver_node_id:03X}:C00007FF' for base in (0x80, 0x580, 0x700)
+                    ) + ',#1FFFFFFF' if receiver_node_id is not None else '',
+                    'interval_sec': '0.1', 'use_bus_time': 'true',
+                    'warn_on_receive_timeout': 'false',
                 }.items(),
             ),
         ],
@@ -278,8 +340,11 @@ def _launch_setup(context):
         name='operator',
         namespace=robot_name,
         parameters=[manual_config],
-        remappings=[('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx')]
-                   if virtual_operator else [('can_rx', 'operator_rx/can_rx')]
+        remappings=[('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx'),
+                    ('can_events', 'operator_can/can_events')]
+                   if virtual_operator else ([('can_rx', 'operator_rx/can_rx'),
+                                              ('can_events', 'operator_events/can_rx')]
+                       + ([('can_tx', 'operator_rx/can_tx')] if separate_hardware_operator else []))
                    if operator_source == 'remdevice' else [],
         output='screen',
         respawn=True,
@@ -374,18 +439,19 @@ def _launch_setup(context):
         virtual_driver,
         *virtual_drives,
         mock_platform_state,
-        kinematics,
+        *kinematics,
         odometry,
         joystick,
         operator_socketcan,
         hardware_operator_socketcan,
+        hardware_operator_events_socketcan,
         manual_control,
         *([flexisoft_bridge] if flexisoft_enabled else []),
         safety_monitor,
         battery_monitor,
         *scanners,
         diagnostics,
-        supervisor,
+        manual_drive_control if manual_only else supervisor,
         description,
         scanner_projection,
         scanner_adapter,
@@ -394,6 +460,11 @@ def _launch_setup(context):
 
 def generate_launch_description():
     arguments = common_arguments() + [
+        DeclareLaunchArgument('control_mode', default_value='supervised',
+                              choices=['supervised', 'manual_only'],
+                              description='Explicit manual-only test authority; independent hardware safety required'),
+        DeclareLaunchArgument('kinematics_backend', default_value='romb', choices=['romb'],
+                              description='Original customer ROMB kinematics'),
         DeclareLaunchArgument('host_state_path', default_value='',
                               description='Required host health state file for managed deployment'),
         DeclareLaunchArgument('start_description', default_value='true', choices=['true', 'false']),
@@ -438,7 +509,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'operator_can_interface',
             default_value='',
-            description='Optional receive-only physical CAN input for a PAIL operator in virtual mode; never connects simulated drive traffic to CAN',
+            description='PAIL CAN interface; hardware defaults to drive CAN when empty. A separate hardware interface gets dedicated receiver and sender topics. Virtual mode is always receive-only.',
         ),
         DeclareLaunchArgument(
             'start_manual_interface',

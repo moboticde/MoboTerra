@@ -123,6 +123,14 @@ def _record(value, keys, label, required=None):
         raise ConfigurationError(f'{label}: missing={missing}, unknown={unknown}')
 
 
+def controller_type(drive, role):
+    value = drive.get('controller', 'micontrol')
+    if not isinstance(value, str) or value.lower() != 'micontrol':
+        raise ConfigurationError('only miControl controllers are supported')
+    value = value.lower()
+    return value
+
+
 def validate_platform(platform):
     try:
         top = ('schema_version', 'robot_name', 'frames', 'can', 'geometry', 'actuators',
@@ -139,7 +147,9 @@ def validate_platform(platform):
                          'max_steering_velocity', 'min_traction_velocity', 'max_traction_velocity',
                          'min_current', 'max_current')
         for role in ('steering', 'traction'):
-            _record(platform['actuators'][role], actuator_keys, 'actuators.' + role)
+            _record(platform['actuators'][role], (*actuator_keys, 'controller'), 'actuators.' + role,
+                    required=actuator_keys)
+            controller_type(platform['actuators'][role], role)
         _record(platform['traction_profile'], ('max_velocity', 'acceleration', 'deceleration'), 'traction_profile')
         _record(platform['motion_limits'], ('max_velocity_linear', 'max_velocity_angular', 'max_acceleration_linear',
                 'max_acceleration_angular', 'max_steering_velocity', 'max_traction_velocity', 'max_traction_current'), 'motion_limits')
@@ -184,20 +194,21 @@ def validate_platform(platform):
             if can['battery']['listen_only']:
                 raise ConfigurationError('shared drive and battery CAN interface cannot be listen-only')
         modules = platform['modules']
-        if not isinstance(modules, list) or not 2 <= len(modules) <= len(MODULE_NAMES):
-            raise ConfigurationError('modules must contain two to four powered steering/traction modules')
+        if not isinstance(modules, list) or len(modules) != len(MODULE_NAMES):
+            raise ConfigurationError('platform requires exactly four powered steering/traction modules')
         names = [m['name'] for m in modules]
-        if names != [name for name in MODULE_NAMES if name in names]:
-            raise ConfigurationError(f'modules must be a unique subset ordered as {MODULE_NAMES}')
+        if names != list(MODULE_NAMES):
+            raise ConfigurationError(f'modules must contain all four names ordered as {MODULE_NAMES}')
         ids, joints = [master], []
         for module in modules:
             _record(module, ('name', 'cad_steering_xyz', 'mounting_yaw', 'steering', 'traction'), 'module')
             _vector(module['cad_steering_xyz'], 'CAD steering datum')
             _number(module['mounting_yaw'], 'mounting yaw')
             for role in ('steering', 'traction'):
-                _record(module[role], (*actuator_keys, 'joint', 'can_node_id'), module['name'] + '.' + role,
+                _record(module[role], (*actuator_keys, 'controller', 'joint', 'can_node_id'), module['name'] + '.' + role,
                         required=('joint', 'can_node_id'))
                 drive = {**platform['actuators'][role], **module[role]}
+                controller = controller_type(drive, role)
                 joint = _text(drive['joint'], 'joint name')
                 if not joint.endswith('_' + role):
                     raise ConfigurationError(f'{joint}: driver requires _{role} suffix')
@@ -221,9 +232,10 @@ def validate_platform(platform):
                         raise ConfigurationError(f'{joint}: controller bounds must fit signed 32-bit integers')
                 limits = platform['motion_limits']
                 if role == 'traction':
-                    ticks = limits['max_traction_velocity'] * drive['resolution'] * drive['gear_ratio'] / (2 * math.pi)
-                    ceiling = min(drive['max_traction_velocity'], -drive['min_traction_velocity'],
-                                  platform['traction_profile']['max_velocity'])
+                    # miControl velocity limits are motor rpm.
+                    scale = 60
+                    ticks = limits['max_traction_velocity'] / platform['geometry']['wheel_radius'] * scale * drive['gear_ratio'] / (2 * math.pi)
+                    ceiling = min(drive['max_traction_velocity'], -drive['min_traction_velocity'])
                     if ticks > ceiling or limits['max_traction_current'] * 1000 > min(drive['max_current'], -drive['min_current']):
                         raise ConfigurationError(f'{joint}: software traction limits exceed controller limits')
                 else:
@@ -234,7 +246,8 @@ def validate_platform(platform):
             raise ConfigurationError('CAN IDs and joint names must be unique')
         operator = platform.get('operator', {'source': 'usb'})
         _record(operator, ('source', 'mapping', 'usb_driver', 'usb_mapping_verified',
-                           'require_enable_interlock', 'require_neutral_rearm'),
+                           'require_enable_interlock', 'require_neutral_rearm',
+                           'receiver_can_overrun_advisory', 'receiver_auto_communication_reset'),
                 'operator', required=('source',))
         if operator.get('source') not in ('usb', 'remdevice'):
             raise ConfigurationError('operator.source must be usb or remdevice')
@@ -242,7 +255,8 @@ def validate_platform(platform):
             raise ConfigurationError('operator.usb_driver must be joy_node or game_controller_node')
         if 'usb_mapping_verified' in operator and type(operator['usb_mapping_verified']) is not bool:
             raise ConfigurationError('operator.usb_mapping_verified must be boolean')
-        for key in ('require_enable_interlock', 'require_neutral_rearm'):
+        for key in ('require_enable_interlock', 'require_neutral_rearm', 'receiver_can_overrun_advisory',
+                    'receiver_auto_communication_reset'):
             if key in operator and type(operator[key]) is not bool:
                 raise ConfigurationError(f'operator.{key} must be boolean')
         if operator['source'] == 'remdevice':
@@ -292,28 +306,24 @@ def validate_platform(platform):
         override = operator.get('mapping', {}).get('buttons', {}).get('scanner_override')
         if override and (operator['source'] != 'remdevice' or not operator['mapping']['verified']):
             raise ConfigurationError('scanner override requires verified REMdevice controls')
-        if safety_source not in ('flexisoft', 'hardwired_sto'):
-            raise ConfigurationError('safety.source must be flexisoft or hardwired_sto')
+        if safety_source != 'flexisoft':
+            raise ConfigurationError('safety.source must be flexisoft')
         mask_names = ('front_protective_ossd_mask', 'rear_protective_ossd_mask',
                       'emergency_stop_mask', 'safety_override_mask', 'rear_warning_mask',
                       'front_warning_mask', 'safety_enable_mask', 'sto_mask')
         flexisoft_keys = ('bind_address', 'port', 'telegram_size', 'status_byte_offset', *mask_names)
-        if safety_source == 'hardwired_sto':
-            if len(modules) != 2:
-                raise ConfigurationError('hardwired_sto requires exactly two wheel modules; four modules require FlexiSoft')
-            _record(safety, ('source',), 'safety')
-            masks = []
-        else:
-            _record(safety, ('source', *flexisoft_keys), 'safety', required=flexisoft_keys)
-            _ip(safety['bind_address'], 'FlexiSoft bind address')
-            _number(safety['port'], 'TCP port', integer=True)
-            if not 1 <= _id(safety['port'], 65535, 'TCP port'):
-                raise ConfigurationError('TCP port must be nonzero')
-            size = _number(safety['telegram_size'], 'telegram size', integer=True, positive=True)
-            offset = _number(safety['status_byte_offset'], 'status offset', integer=True)
-            if not 0 <= offset < size:
-                raise ConfigurationError('status offset must be inside telegram')
-            masks = [_id(_number(safety[key], key, integer=True), 255, key) for key in mask_names]
+        _record(safety, ('source', 'telemetry_required', *flexisoft_keys), 'safety', required=flexisoft_keys)
+        if type(safety.get('telemetry_required', True)) is not bool:
+            raise ConfigurationError('safety.telemetry_required must be boolean')
+        _ip(safety['bind_address'], 'FlexiSoft bind address')
+        _number(safety['port'], 'TCP port', integer=True)
+        if not 1 <= _id(safety['port'], 65535, 'TCP port'):
+            raise ConfigurationError('TCP port must be nonzero')
+        size = _number(safety['telegram_size'], 'telegram size', integer=True, positive=True)
+        offset = _number(safety['status_byte_offset'], 'status offset', integer=True)
+        if not 0 <= offset < size:
+            raise ConfigurationError('status offset must be inside telegram')
+        masks = [_id(_number(safety[key], key, integer=True), 255, key) for key in mask_names]
         occupied = 0
         for mask in masks:
             if occupied & mask:
@@ -389,10 +399,8 @@ class Configuration:
         p = self.platform
         modules = p['modules']
         drives = [(role, {**p['actuators'][role], **m[role]}) for m in modules for role in ('steering', 'traction')]
-        driver = {'can_node_id': str(p['can']['master_node_id']),
-                  'traction_max_profile_velocity': p['traction_profile']['max_velocity'],
-                  'traction_profile_accel': p['traction_profile']['acceleration'],
-                  'traction_profile_decel': p['traction_profile']['deceleration']}
+        driver = {'can_node_id': str(p['can']['master_node_id'])}
+        driver['drives.controller_types'] = [controller_type(d, role) for role, d in drives]
         for key, field in (('names', 'joint'), ('can_node_ids', 'can_node_id'), ('modes', 'mode'),
                            ('resolutions', 'resolution'), ('gear_ratios', 'gear_ratio'),
                            ('min_steering_velocities', 'min_steering_velocity'),
@@ -411,7 +419,8 @@ class Configuration:
         vehicle_limits = {key: float(limits[key]) for key in ('max_velocity_linear', 'max_velocity_angular',
                                                             'max_acceleration_linear', 'max_acceleration_angular')}
         joint_limits = {key: float(limits[key]) for key in ('max_steering_velocity', 'max_traction_velocity', 'max_traction_current')}
-        driver.update({key: joint_limits[key] for key in ('max_steering_velocity', 'max_traction_velocity')})
+        driver.update({key: joint_limits[key] for key in ('max_steering_velocity', 'max_traction_velocity', 'max_traction_current')})
+        driver['wheel_radius'] = float(p['geometry']['wheel_radius'])
         kinematics = {'module_names': names, 'steering_joint_names': steering, 'traction_joint_names': traction,
                       'wheels_x': [float(m['cad_steering_xyz'][0]) for m in modules],
                       'wheels_y': [float(m['cad_steering_xyz'][1]) for m in modules],
@@ -420,15 +429,25 @@ class Configuration:
                       'traction_control_mode': 'velocity', 'output_frame_id': frame, **joint_limits}
         supervisor = {'expected_module_names': names, 'expected_steering_joint_names': steering,
                       'expected_traction_joint_names': traction, 'direct_steering_encoder_resolutions': resolutions,
-                      'direct_traction_control_mode': 'velocity', 'output_frame_id': frame, **vehicle_limits}
+                      'direct_traction_control_mode': 'current', 'output_frame_id': frame, **vehicle_limits}
+        supervisor['kinematicoff_current_supported'] = all(
+            controller_type(d, role) == 'micontrol' for role, d in drives if role == 'traction')
         supervisor['safety_source'] = p['safety'].get('source', 'flexisoft')
+        supervisor['require_flexisoft_telemetry'] = p['safety'].get('telemetry_required', True)
         supervisor['wheel_radius'] = float(p['geometry']['wheel_radius'])
         operator = p.get('operator', {'source': 'usb'})
         supervisor['require_operator_interlock'] = operator.get(
             'require_enable_interlock', operator['source'] == 'remdevice')
         supervisor['operator_scanner_override_enabled'] = bool(
             operator.get('mapping', {}).get('buttons', {}).get('scanner_override'))
-        manual = {'frame_id': frame,
+        steering_geometry_data = {key: kinematics[key] for key in (
+            'wheels_x', 'wheels_y', 'steering_joint_names', 'traction_joint_names',
+            'wheel_mount_angles', 'max_steering_velocity')}
+        steering_geometry_data['steering_position_tolerances'] = [
+            2.0 * math.pi / resolution for resolution in resolutions]
+        steering_geometry = json.dumps(steering_geometry_data)
+        supervisor['manual_steering_geometry'] = steering_geometry
+        manual = {'steering_geometry': steering_geometry, 'frame_id': frame,
                   'require_neutral_rearm': operator.get('require_neutral_rearm', True),
                   **vehicle_limits}
         if operator['source'] == 'usb':
@@ -436,6 +455,8 @@ class Configuration:
                 'usb_mapping_verified', operator.get('usb_driver', 'game_controller_node') == 'game_controller_node')
         if operator['source'] == 'remdevice':
             manual['remdevice_mapping'] = json.dumps(operator['mapping'], sort_keys=True)
+            manual['receiver_can_overrun_advisory'] = operator.get('receiver_can_overrun_advisory', False)
+            manual['receiver_auto_communication_reset'] = operator.get('receiver_auto_communication_reset', False)
         supervisor.update({'max_direct_' + key.removeprefix('max_'): value for key, value in joint_limits.items()})
         participants = p['battery']['participants']
         battery = {'primary_battery_id': p['battery']['primary_id']}
@@ -445,10 +466,20 @@ class Configuration:
             battery['batteries.' + key] = [str(b[field]) for b in participants]
         return {'driver': driver, 'kinematics': kinematics, 'supervisor': supervisor,
                 'manual': manual, 'battery': battery,
-                'safety': ({'source': 'hardwired_sto', 'expected_module_names': names}
-                           if p['safety'].get('source') == 'hardwired_sto' else
-                           {key: copy.deepcopy(value) for key, value in p['safety'].items() if key != 'source'}),
+                'safety': {key: copy.deepcopy(value) for key, value in p['safety'].items()
+                           if key not in ('source', 'telemetry_required')},
                 'odometry': {'base_frame_id': frame, 'odom_frame_id': p['frames']['odom']}}
+
+    def battery_can_filters(self):
+        """Select configured J1939 telemetry before shared-bus ROS romb."""
+        bindings = {(int(str(pack[field]), 0) << 8) | int(str(pack['source_address']), 0)
+                    for pack in self.platform['battery']['participants']
+                    for field in ('status_pgn', 'soc_pgn', 'voltage_pgn')}
+        # Match PGN/source at every J1939 priority and explicitly require the
+        # extended-frame flag. Retain both charging guards.
+        filters = [f'{binding:08X}:83FFFFFF' for binding in sorted(bindings)]
+        filters.extend(('18FF10F3:9FFFFFFF', '0CFFBC49:9FFFFFFF'))
+        return ','.join(filters)
 
     def parameters(self, component):
         parameters = copy.deepcopy(self._parameters[component])
@@ -549,16 +580,14 @@ class Configuration:
             raise ConfigurationError('mode_switch_type must be toggle or position')
         if {manual['mode_switch_manual_value'], manual['mode_switch_autonomous_value']} != {0, 1}:
             raise ConfigurationError('mode switch values must be distinct digital values 0 and 1')
-        if manual['button_deadman'] < -1 or manual['button_mode_switch'] < -1:
+        if manual['button_mode_switch'] < -1:
             raise ConfigurationError('disabled button indices must be -1')
         boosts = manual['buttons_boost']
         if not boosts or len(set(boosts)) != len(boosts) or any(i < 0 for i in boosts):
             raise ConfigurationError('boost button indices must be nonempty, unique and nonnegative')
         if any(manual[k] < 0 for k in ('axis_speed', 'axis_crab', 'axis_steer')):
             raise ConfigurationError('axis indices must be nonnegative')
-        if manual['button_deadman'] >= 0 and manual['button_deadman'] in boosts:
-            raise ConfigurationError('deadman and boost cannot overlap')
-        if manual['button_mode_switch'] >= 0 and manual['button_mode_switch'] in [manual['button_deadman'], *boosts]:
+        if manual['button_mode_switch'] >= 0 and manual['button_mode_switch'] in boosts:
             raise ConfigurationError('mode switch and driving buttons cannot overlap')
         for key in ('scale_linear', 'scale_angular'):
             if not 0 <= manual[key] <= 1:
@@ -566,6 +595,8 @@ class Configuration:
         supervisor = self._parameters['supervisor']
         if supervisor['initial_mode'] not in ('manual', 'autonomous', 'kinematicoff'):
             raise ConfigurationError('invalid initial_mode')
+        if supervisor['initial_mode'] == 'kinematicoff' and not supervisor['kinematicoff_current_supported']:
+            raise ConfigurationError('KINEMATICOFF current mode is verified only for miControl traction')
         if supervisor['warning_speed_limit'] <= 0:
             raise ConfigurationError('warning_speed_limit must be positive (m/s)')
         for key in ('override_speed_scale',):
@@ -584,16 +615,26 @@ class Configuration:
         if self._parameters['driver']['telemetry_pdo_sync_divider'] not in range(1, 241):
             raise ConfigurationError('telemetry_pdo_sync_divider must be an integer in 1..240')
         driver = self._parameters['driver']
+        if (driver['steering_alignment_velocity'] <= 0 or
+                driver['steering_alignment_timeout'] <= 0 or
+                (driver['steering_align_on_enable'] and driver['steering_alignment_timeout'] >= driver['startup_timeout'])):
+            raise ConfigurationError('steering alignment requires bounded velocity and a timeout below startup_timeout')
+        # Homing has its own speed; normal joystick speed is not its ceiling.
+        if driver['steering_align_on_enable']:
+            for name, mode, gear, rpm in zip(driver['drives.names'], driver['drives.modes'],
+                                            driver['drives.gear_ratios'], driver['drives.max_steering_velocities']):
+                if mode == 'position' and driver['steering_alignment_velocity'] * gear * 60 / (2*math.pi) > rpm:
+                    raise ConfigurationError(f'{name}: steering alignment exceeds native motor RPM limit')
         if driver['feedback_request_period'] >= driver['status_feedback_timeout']:
             raise ConfigurationError('feedback_request_period must be less than status_feedback_timeout')
         if driver['fault_feedback_timeout'] <= driver['diagnostic_sdo_period']:
             raise ConfigurationError('fault_feedback_timeout must exceed diagnostic_sdo_period')
         if supervisor['control_period'] >= min(driver['watchdog_timeout'], driver['supervisor_timeout']):
             raise ConfigurationError('supervisor control_period must fit inside driver command and management timeouts')
-        if not driver['traction_pdo_enabled'] or not driver['telemetry_pdo_enabled']:
-            raise ConfigurationError('the synchronized feedback profile requires both motion PDO paths')
-        if not 0 < driver['sample_skew_budget'] < driver['traction_pdo_period']:
-            raise ConfigurationError('sample_skew_budget must be positive and less than the SYNC period')
+        if driver['traction_pdo_enabled'] or driver['telemetry_pdo_enabled']:
+            raise ConfigurationError('miControl driver supports SDO transport only; PDO options must be false')
+        if not 0 < driver['sample_skew_budget'] <= driver['motion_feedback_timeout']:
+            raise ConfigurationError('sample_skew_budget must fit inside the motion feedback timeout')
         if not 0 < driver['physical_sample_skew_budget'] <= driver['motion_feedback_timeout']:
             raise ConfigurationError('physical_sample_skew_budget must fit inside the motion feedback timeout')
 
@@ -603,6 +644,7 @@ class Configuration:
             for role in ('steering', 'traction'):
                 drive = {**self.platform['actuators'][role], **module[role]}
                 result.append((drive['joint'], {'can_node_id': str(drive['can_node_id']), 'drive_type': role,
+                                               'controller_type': controller_type(drive, role),
                                                'encoder_resolution': float(drive['resolution']),
                                                'gear_ratio': float(drive['gear_ratio'])}))
         return result

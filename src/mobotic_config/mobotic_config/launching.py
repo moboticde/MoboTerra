@@ -67,7 +67,6 @@ def deployment_actions(context, cfg):
 
 _NODES = {
     'driver': ('mobotic_driver', 'mobotic_driver', 'mobotic_driver'),
-    'kinematics': ('mobotic_kinematics', 'mobotic_kinematics', 'mobotic_kinematics'),
     'supervisor': ('mobotic_supervisor', 'mobotic_supervisor', 'mobotic_supervisor'),
     'odometry': ('mobotic_odometry', 'mobotic_odometry', 'mobotic_odometry'),
     'manual': ('mobotic_manual_control', 'manual_control', 'operator'),
@@ -83,9 +82,7 @@ def _standalone_setup(context, component):
         return actions + [Node(package='mobotic_safety', executable=executable, name=executable,
                                namespace=namespace, parameters=[cfg.parameters('safety')],
                                output='screen', respawn=True, respawn_delay=1.0)
-                          for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter')
-                          if executable != 'flexisoft_tcp_bridge' or
-                          cfg.platform['safety'].get('source', 'flexisoft') == 'flexisoft']
+                          for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter')]
     parameters = cfg.parameters(component)
     if component == 'driver':
         legacy = {}
@@ -114,7 +111,8 @@ def _standalone_setup(context, component):
             IncludeLaunchDescription(AnyLaunchDescriptionSource(PathJoinSubstitution([
                 FindPackageShare('ros2_socketcan'), 'launch', 'socket_can_receiver.launch.py'])),
                 launch_arguments={'interface': interface, 'from_can_bus_topic': 'can_rx',
-                                  'enable_can_fd': 'false', 'filters': '0:0', 'interval_sec': '0.01',
+                                  'enable_can_fd': 'false', 'filters': cfg.battery_can_filters(), 'interval_sec': '0.1',
+                                  'warn_on_receive_timeout': 'false',
                                   'use_bus_time': 'true'}.items())]))
     package, executable, name = _NODES[component]
     if component == 'manual' and cfg.platform.get('operator', {}).get('source', 'usb') == 'remdevice':

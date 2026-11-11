@@ -1,6 +1,7 @@
 """Shared profile regression, rejection and launch-adapter checks, without ROS."""
 import copy
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,11 +16,130 @@ import xml.etree.ElementTree as ET
 from mobotic_config.configuration import Configuration, ConfigurationError, read_yaml, validate_platform, config_path, ros_parameters, main
 from mobotic_config.description import render_description
 from launch_harness import PACKAGES, factory, resolve, environment
+from platform_fixtures import four_module_platform
 
 
 class ConfigurationTest(unittest.TestCase):
     def setUp(self):
         self.cfg = Configuration()
+        self.fixture_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.fixture_directory.cleanup)
+        self.verified_path = Path(self.fixture_directory.name) / 'four-modules.yaml'
+        self.verified_path.write_text(yaml.safe_dump(four_module_platform()))
+
+    def test_removed_hold_button_policy_is_rejected(self):
+        for index in (-1, 8):
+            with self.subTest(index=index), self.assertRaisesRegex(ConfigurationError, 'unknown override'):
+                self.cfg.apply_overrides('manual', {'button_deadman': index})
+
+    def test_controller_selection_defaults_overrides_and_virtual_nodes(self):
+        platform = copy.deepcopy(self.cfg.platform)
+        for module in platform['modules']:
+            module['traction'].pop('controller', None)
+        platform['actuators']['traction']['controller'] = 'miControl'
+        platform['actuators']['traction']['min_traction_velocity'] = -1700
+        platform['actuators']['traction']['max_traction_velocity'] = 1700
+        platform['modules'][1]['traction'].update(controller='miControl')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'platform.yaml'
+            path.write_text(yaml.safe_dump(platform))
+            cfg = Configuration(path)
+            expected = ['micontrol'] * 8
+            self.assertEqual(cfg.parameters('driver')['drives.controller_types'], expected)
+            self.assertEqual([p['controller_type'] for _, p in cfg.virtual_drives()], expected)
+            self.assertEqual(cfg.parameters('driver')['drives.modes'], ['position', 'velocity'] * 4)
+
+    def test_steering_alignment_policy_bounds(self):
+        self.cfg.apply_overrides('driver', {'steering_align_on_enable': True,
+                                           'steering_alignment_velocity': 0.3,
+                                           'steering_alignment_timeout': 10.0})
+        self.cfg._validate_policy()
+        for key, value in (('steering_alignment_velocity', 0), ('steering_alignment_velocity', 100),
+                           ('steering_alignment_timeout', 0), ('steering_alignment_timeout', 15)):
+            cfg = Configuration()
+            cfg.apply_overrides('driver', {'steering_align_on_enable': True, key: value})
+            with self.assertRaises(ConfigurationError):
+                cfg._validate_policy()
+
+    def test_installed_micontrol_steering_uses_user_units_not_encoder_counts(self):
+        directory = Path(__file__).resolve().parents[1] / 'config'
+        for profile in ('platform.yaml', 'platform-four-micontrol.yaml'):
+            with self.subTest(profile=profile):
+                cfg = Configuration(directory / profile)
+                driver = cfg.parameters('driver')
+                resolutions = dict(zip(driver['drives.names'], driver['drives.resolutions']))
+                steering = cfg.parameters('supervisor')['expected_steering_joint_names']
+                traction = cfg.parameters('supervisor')['expected_traction_joint_names']
+                self.assertEqual([resolutions[n] for n in steering], [121.0] * 4)
+                self.assertEqual([resolutions[n] for n in traction], [4096.0] * 4)
+                for name in steering:
+                    self.assertEqual(round((math.pi/2)*resolutions[name]/(2*math.pi)), 30)
+                    self.assertAlmostEqual(30*(2*math.pi)/resolutions[name]*180/math.pi, 89.2561983471)
+                geometry = json.loads(cfg.parameters('manual')['steering_geometry'])
+                self.assertEqual(geometry['steering_position_tolerances'], [2*math.pi/121] * 4)
+                virtual = dict(cfg.virtual_drives())
+                for name in steering:
+                    self.assertEqual(virtual[name]['encoder_resolution'], resolutions[name])
+
+    def test_homing_can_run_twice_as_fast_as_manual_steering(self):
+        platform = copy.deepcopy(self.cfg.platform)
+        platform['motion_limits']['max_steering_velocity'] = 0.3
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / 'slow-manual.yaml'
+        path.write_text(yaml.safe_dump(platform))
+        cfg = Configuration(path)
+        cfg.apply_overrides('driver', {'steering_align_on_enable': True,
+                                      'steering_alignment_velocity': 0.6})
+        cfg._validate_policy()
+        self.assertEqual(cfg.parameters('driver')['max_steering_velocity'], 0.3)
+        self.assertEqual(cfg.parameters('driver')['steering_alignment_velocity'], 0.6)
+        geometry = json.loads(cfg.parameters('manual')['steering_geometry'])
+        self.assertEqual(geometry['max_steering_velocity'], 0.3)
+
+    def test_controller_validation_and_native_velocity_limits(self):
+        for bad in ('elmo', 'ELMO', 'unknown', '', None, 1):
+            platform = copy.deepcopy(self.cfg.platform)
+            platform['modules'][0]['traction']['controller'] = bad
+            with self.assertRaises(ConfigurationError):
+                validate_platform(platform)
+        platform = copy.deepcopy(self.cfg.platform)
+        platform['modules'][0]['steering']['controller'] = 'ELMO'
+        with self.assertRaises(ConfigurationError):
+            validate_platform(platform)
+        platform = copy.deepcopy(self.cfg.platform)
+        platform['modules'][0]['traction'].update(controller='miControl',
+            min_traction_velocity=-100, max_traction_velocity=100)
+        with self.assertRaisesRegex(ConfigurationError, 'traction limits'):
+            validate_platform(platform)
+
+    def test_prepared_four_module_micontrol_profile(self):
+        path = Path(__file__).resolve().parents[1] / 'config/platform-four-micontrol.yaml'
+        cfg = Configuration(path)
+        self.assertEqual(len(cfg.platform['modules']), 4)
+        self.assertEqual(cfg.parameters('driver')['drives.controller_types'], ['micontrol'] * 8)
+        self.assertEqual(cfg.parameters('driver')['drives.max_traction_velocities'][1::2], [1700] * 4)
+        self.assertEqual(cfg.parameters('supervisor')['direct_traction_control_mode'], 'current')
+        self.assertTrue(cfg.parameters('supervisor')['kinematicoff_current_supported'])
+        self.assertEqual(cfg.parameters('driver')['max_traction_current'], 4.0)
+
+    def test_micontrol_current_mode_is_available(self):
+        cfg = Configuration()
+        self.assertTrue(cfg.parameters('supervisor')['kinematicoff_current_supported'])
+        cfg.apply_overrides('supervisor', {'initial_mode': 'kinematicoff'})
+        cfg._validate_policy()
+
+    def test_profiles_without_controller_option_use_micontrol(self):
+        platform = copy.deepcopy(self.cfg.platform)
+        for role in ('steering', 'traction'):
+            platform['actuators'][role].pop('controller', None)
+            for module in platform['modules']:
+                module[role].pop('controller', None)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'legacy.yaml'
+            path.write_text(yaml.safe_dump(platform))
+            self.assertEqual(Configuration(path).parameters('driver')['drives.controller_types'],
+                             ['micontrol'] * 8)
 
     def test_every_previous_parameter_is_preserved(self):
         baseline = json.loads(Path(__file__).with_name('baseline_parameters.json').read_text())
@@ -29,15 +149,48 @@ class ConfigurationTest(unittest.TestCase):
         baseline['supervisor']['require_operator_interlock'] = True
         baseline['supervisor']['operator_scanner_override_enabled'] = False
         baseline['manual']['require_neutral_rearm'] = True
+        baseline['manual']['receiver_can_overrun_advisory'] = False
+        baseline['manual']['receiver_auto_communication_reset'] = False
         baseline['supervisor']['safety_source'] = 'flexisoft'
+        baseline['supervisor']['require_flexisoft_telemetry'] = False
         baseline['supervisor'].pop('warning_speed_scale')
         baseline['supervisor']['warning_speed_limit'] = 0.3
         baseline['supervisor']['wheel_radius'] = 0.325
-        baseline['driver']['physical_sample_skew_budget'] = 0.05
+        # Sixteen motion reads span at least 75 ms with the shared 5 ms gap.
+        baseline['driver']['physical_sample_skew_budget'] = 0.1
         baseline['driver']['startup_timeout'] = 15.0
+        baseline['driver'].update(steering_align_on_enable=False, steering_alignment_velocity=0.6,
+                                  steering_alignment_timeout=12.5)
+        baseline['driver']['drives.controller_types'] = ['micontrol'] * 8
+        # Installed steering objects use motor-revolution user units. Traction
+        # retains its independent raw encoder scale.
+        baseline['driver']['drives.resolutions'] = [121, 4096] * 4
+        baseline['supervisor']['direct_steering_encoder_resolutions'] = [121] * 4
+        baseline['driver']['traction_pdo_enabled'] = False
+        baseline['driver']['telemetry_pdo_enabled'] = False
+        for key in ('traction_max_profile_velocity', 'traction_profile_accel', 'traction_profile_decel'):
+            baseline['driver'].pop(key)
+        baseline['driver']['drives.min_traction_velocities'] = [-5000, -1700] * 4
+        baseline['driver']['drives.max_traction_velocities'] = [5000, 1700] * 4
+        baseline['driver']['max_traction_current'] = 4.0
+        baseline['supervisor']['direct_traction_control_mode'] = 'current'
+        baseline['supervisor']['kinematicoff_current_supported'] = True
         baseline['supervisor']['reset_timeout'] = 20.0
         baseline['supervisor']['health_input_timeout'] = 0.5
         baseline['manual'].update(axis_speed_sign=1, axis_crab_sign=1, axis_steer_sign=1)
+        # ROS traction commands and feedback now use contact m/s. Native CAN
+        # limits keep their rpm/increments/s values.
+        for component in ('driver', 'kinematics'):
+            baseline[component]['max_traction_velocity'] = 3.614
+        baseline['supervisor']['max_direct_traction_velocity'] = 3.614
+        baseline['driver']['wheel_radius'] = .325
+        geometry_data = {key: self.cfg.parameters('kinematics')[key] for key in (
+            'wheels_x', 'wheels_y', 'steering_joint_names', 'traction_joint_names',
+            'wheel_mount_angles', 'max_steering_velocity')}
+        geometry_data['steering_position_tolerances'] = [2.0 * math.pi / 121] * 4
+        geometry = json.dumps(geometry_data)
+        baseline['manual']['steering_geometry'] = geometry
+        baseline['supervisor']['manual_steering_geometry'] = geometry
         for component, values in baseline.items():
             self.assertEqual(self.cfg.parameters(component), values, component)
 
@@ -50,6 +203,29 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(cfg.parameters('diagnostics')['odometry_timeout'], .65)
             self.assertEqual(cfg.parameters('supervisor')['health_timeout'], .3)
             self.assertEqual(cfg.parameters('supervisor')['velocity_feedback_timeout'], .3)
+
+    def test_battery_filters_preserve_telemetry_priorities_and_charging_guards(self):
+        filters = []
+        for entry in self.cfg.battery_can_filters().split(','):
+            identifier, mask = entry.split(':')
+            self.assertEqual((len(identifier), len(mask)), (8, 8))
+            # ros2_socketcan's eight-digit form sets the extended-frame flag.
+            self.assertTrue(int(mask, 16) & 0x80000000)
+            filters.append((int(identifier, 16) | 0x80000000, int(mask, 16)))
+
+        def accepts(identifier):
+            return any(identifier & mask == expected & mask for expected, mask in filters)
+
+        for pack in self.cfg.platform['battery']['participants']:
+            for field in ('status_pgn', 'soc_pgn', 'voltage_pgn'):
+                binding = (int(str(pack[field]), 0) << 8) | int(str(pack['source_address']), 0)
+                for priority in range(8):
+                    self.assertTrue(accepts(0x80000000 | (priority << 26) | binding))
+                self.assertFalse(accepts(binding & 0x7FF))
+        for identifier in (0x18FF10F3, 0x0CFFBC49):
+            self.assertTrue(accepts(0x80000000 | identifier))
+        for identifier in (0x181, 0x581, 0x18A, 0x28A, 0x70B, 0x80000000 | 0x18FF00A5):
+            self.assertFalse(accepts(identifier))
 
     def test_virtual_driver_scaling_comes_from_same_records(self):
         p = self.cfg.parameters('driver')
@@ -66,30 +242,17 @@ class ConfigurationTest(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 validate_platform(p)
 
-    def test_scanner_selector_supports_both_layouts_with_verified_controls(self):
-        p = copy.deepcopy(self.cfg.platform)
-        p['operator']['mapping'] = {
-            'verified': True, 'node_id': 10,
-            'axes': {role: {'channel': channel, 'zero': 0, 'full_scale': 255, 'invert': False}
-                     for role, channel in (('speed', 3), ('steer', 2), ('crab', 4))},
-            'buttons': {'mode': {'signal': 'U5', 'active_high': False},
-                        'boost': {'signal': 'SP3', 'active_high': True},
-                        'reset': {'signal': 'SP4', 'active_high': True}, 'deadman': None,
-                        'scanner_override': {'signal': 'D5', 'active_high': True}}}
-        p['can']['master_node_id'] = '0x0B'
-        validate_platform(p)  # Four modules retain FlexiSoft.
-        p['operator']['mapping']['verified'] = False
-        with self.assertRaises(ConfigurationError):
-            validate_platform(p)
-        p['operator']['mapping']['verified'] = True
-        p['modules'] = [m for m in p['modules'] if m['name'] in ('front_right', 'rear_left')]
-        p['safety'] = {'source': 'hardwired_sto'}
-        validate_platform(p)
+    def test_four_module_scanner_selector_requires_verified_controls(self):
+        profile = four_module_platform()
+        validate_platform(profile)
+        profile['operator']['mapping']['verified'] = False
+        with self.assertRaisesRegex(ConfigurationError, 'verified'):
+            validate_platform(profile)
 
     def test_battery_count_matches_each_supplied_wheel_module_option(self):
         profiles = (
             (self.cfg.path, 4, ['battery1', 'battery2']),
-            (self.cfg.path.with_name('platform-front-right-rear-left.yaml'), 2, ['battery1']),
+            (self.cfg.path.with_name('platform-four-micontrol.yaml'), 4, ['battery1', 'battery2']),
         )
         for path, module_count, identifiers in profiles:
             with self.subTest(path=path):
@@ -106,7 +269,7 @@ class ConfigurationTest(unittest.TestCase):
     def test_integrated_and_standalone_battery_launch_follow_selected_pack_count(self):
         for path, identifiers in (
                 (self.cfg.path, ['battery1', 'battery2']),
-                (self.cfg.path.with_name('platform-front-right-rear-left.yaml'), ['battery1'])):
+                (self.cfg.path.with_name('platform-four-micontrol.yaml'), ['battery1', 'battery2'])):
             with self.subTest(path=path):
                 overrides = {'platform_config': str(path)}
                 integrated, _ = resolve(
@@ -129,8 +292,8 @@ class ConfigurationTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, 'unique'):
             validate_platform(profile)
 
-    def test_confirmed_two_module_pail_assignments_and_distinct_master(self):
-        cfg = Configuration(self.cfg.path.with_name('platform-front-right-rear-left.yaml'))
+    def test_confirmed_four_module_pail_assignments_and_distinct_master(self):
+        cfg = Configuration(self.verified_path)
         mapping = cfg.platform['operator']['mapping']
         self.assertTrue(mapping['verified'])
         self.assertEqual(mapping['node_id'], 10)
@@ -155,58 +318,21 @@ class ConfigurationTest(unittest.TestCase):
             with self.subTest(component=component, override=override), self.assertRaises(ConfigurationError):
                 cfg._validate_policy()
 
-    def test_two_module_profile_propagates_without_omitted_drives(self):
-        path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
-        cfg = Configuration(path)
-        names = ['front_right', 'rear_left']
-        joints = [name + '_' + role for name in names for role in ('steering', 'traction')]
-        driver = cfg.parameters('driver')
-        self.assertEqual(driver['modules.names'], names)
-        self.assertEqual(driver['drives.names'], joints)
-        self.assertEqual(driver['drives.can_node_ids'], ['0x03', '0x04', '0x07', '0x08'])
+    def test_four_module_profile_propagates_all_eight_drives(self):
+        cfg = Configuration(self.cfg.path.with_name('platform-four-micontrol.yaml'))
+        names = ['front_left', 'front_right', 'rear_left', 'rear_right']
+        joints = [n + '_' + role for n in names for role in ('steering', 'traction')]
+        self.assertEqual(cfg.parameters('driver')['modules.names'], names)
+        self.assertEqual(cfg.parameters('driver')['drives.names'], joints)
+        self.assertEqual(cfg.parameters('driver')['drives.can_node_ids'], ['0x01','0x02','0x03','0x04','0x07','0x08','0x05','0x06'])
         self.assertEqual(cfg.parameters('kinematics')['module_names'], names)
-        self.assertEqual(cfg.parameters('kinematics')['wheels_x'], [0.845, -0.845])
-        self.assertEqual(cfg.parameters('kinematics')['wheels_y'], [-0.495, 0.495])
         self.assertEqual(cfg.parameters('supervisor')['expected_module_names'], names)
-        self.assertEqual([joint for joint, _ in cfg.virtual_drives()], joints)
-        original = copy.deepcopy(self.cfg.platform)
-        original['modules'] = [m for m in original['modules'] if m['name'] in names]
-        original['can']['drives']['bitrate'] = 250000
-        original['can']['master_node_id'] = '0x0B'
-        original['scanners']['host_ip'] = '10.60.20.186'
-        original['scanners']['units'][0]['sensor_ip'] = '10.60.20.52'
-        original['scanners']['units'][1]['sensor_ip'] = '10.60.20.53'
-        original['operator'] = copy.deepcopy(cfg.platform['operator'])
-        original['safety'] = {'source': 'hardwired_sto'}
-        original['battery']['participants'] = original['battery']['participants'][:1]
-        original['commissioning_pending'] = [item.replace(
-            'Confirm FlexiSoft/ELMO independent STO and enable bit mapping.',
-            'Verify Siemens hardwired STO chain and fresh per-module drive STO feedback.')
-            for item in original['commissioning_pending']]
-        original['commissioning_pending'] = [item.replace(
-            'Capture PAIL controls and verify axis calibration, RP1/B1/B2/STOP and radio-loss behavior.',
-            'Verify PAIL STOP/radio-loss and neutral/rearm behavior on the installed robot.')
-            for item in original['commissioning_pending']]
-        self.assertEqual(cfg.platform, original)
-        for stack in ('hardware', 'virtual'):
-            actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
-                                 {'platform_config': str(path), 'stack_type': stack})
-            node = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_driver')
-            self.assertEqual(node.kwargs['parameters'][0]['drives.names'], joints)
-            simulated = [a.kwargs['parameters'][0]['can_node_id'] for a in actions
-                         if a.kind == 'Node' and a.kwargs['executable'] == 'virtual_mobotic_drive']
-            self.assertEqual(simulated, ['0x03', '0x04', '0x07', '0x08'])
+        self.assertEqual([name for name, _ in cfg.virtual_drives()], joints)
         robot = ET.fromstring(render_description(cfg))
-        moving = {j.get('name') for j in robot.findall('joint') if j.get('type') != 'fixed'}
-        self.assertEqual(moving, set(joints))
-        links = {link.get('name') for link in robot.findall('link')}
-        self.assertNotIn('front_left_wheel', links)
-        self.assertNotIn('rear_right_wheel', links)
-        self.assertIn('front_left_scan', links)
-        self.assertIn('rear_right_scan', links)
+        self.assertEqual({j.get('name') for j in robot.findall('joint') if j.get('type') != 'fixed'}, set(joints))
 
     def test_hardware_scanner_flag_omits_adapter_but_virtual_keeps_its_adapter(self):
-        path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
+        path = self.verified_path
         for stack, enabled, expected in (('hardware', 'false', False), ('hardware', 'true', True),
                                          ('virtual', 'false', True), ('virtual', 'true', True)):
             with self.subTest(stack=stack, enabled=enabled):
@@ -219,34 +345,15 @@ class ConfigurationTest(unittest.TestCase):
                                   a.kwargs['executable'] == 'mobotic_supervisor')
                 self.assertTrue(supervisor.kwargs['parameters'][0]['operator_scanner_override_enabled'])
 
-    def test_hardwired_sto_source_has_no_gateway_settings_and_keeps_monitor(self):
-        path = self.cfg.path.with_name('platform-front-right-rear-left.yaml')
-        cfg = Configuration(path)
-        self.assertEqual(cfg.parameters('supervisor')['safety_source'], 'hardwired_sto')
-        self.assertEqual(cfg.diagnostic_parameters()['safety_source'], 'hardwired_sto')
-        self.assertEqual(cfg.parameters('safety')['expected_module_names'], ['front_right', 'rear_left'])
-        for source in ('mobotic_bringup/launch/moboterra.launch.py', 'mobotic_safety/launch/safety.launch.py'):
-            actions, _ = resolve(factory(PACKAGES / source)(), {'platform_config': str(path)})
-            executables = [a.kwargs['executable'] for a in actions if a.kind == 'Node']
-            self.assertNotIn('flexisoft_tcp_bridge', executables)
-            self.assertIn('safety_monitor', executables)
-            self.assertIn('scanner_safety_adapter', executables)
-        for safety in ({'source': 'none'}, {'source': 'hardwired_sto', 'port': 9100}):
-            profile = copy.deepcopy(cfg.platform)
-            profile['safety'] = safety
-            with self.assertRaises(ConfigurationError):
-                validate_platform(profile)
-
-    def test_four_modules_cannot_select_no_plc_telemetry_mode(self):
+    def test_retired_safety_source_is_rejected(self):
         profile = copy.deepcopy(self.cfg.platform)
-        self.assertEqual(len(profile['modules']), 4)
         profile['safety'] = {'source': 'hardwired_sto'}
-        with self.assertRaisesRegex(ConfigurationError, 'exactly two'):
+        with self.assertRaisesRegex(ConfigurationError, '(?i)flexisoft'):
             validate_platform(profile)
 
     def test_four_module_rp2_without_scanners_keeps_plc_and_verified_mapping(self):
         profile = copy.deepcopy(self.cfg.platform)
-        reference = read_yaml(self.cfg.path.with_name('platform-front-right-rear-left.yaml'))
+        reference = read_yaml(self.verified_path)
         profile['operator'] = copy.deepcopy(reference['operator'])
         profile['can']['master_node_id'] = '0x0B'
         with tempfile.TemporaryDirectory() as directory:
@@ -272,66 +379,104 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_four_module_launch_retains_flexisoft(self):
         self.assertEqual(self.cfg.parameters('supervisor')['safety_source'], 'flexisoft')
+        self.assertFalse(self.cfg.parameters('supervisor')['require_flexisoft_telemetry'])
         self.assertEqual(self.cfg.diagnostic_parameters()['safety_source'], 'flexisoft')
         for source in ('mobotic_bringup/launch/moboterra.launch.py', 'mobotic_safety/launch/safety.launch.py'):
             actions, _ = resolve(factory(PACKAGES / source)(), {'platform_config': str(self.cfg.path)})
             executables = [a.kwargs['executable'] for a in actions if a.kind == 'Node']
             self.assertIn('flexisoft_tcp_bridge', executables)
 
-    def test_module_subsets_reject_missing_duplicate_unknown_and_coincident_axes(self):
-        modules = self.cfg.platform['modules']
-        for selection in ([], modules[:1], [modules[1], modules[1]], modules[1:3][::-1]):
-            p = copy.deepcopy(self.cfg.platform)
-            p['modules'] = copy.deepcopy(selection)
-            with self.subTest(selection=[m['name'] for m in selection]), self.assertRaises(ConfigurationError):
-                validate_platform(p)
-        for mutation in ('unknown', 'coincident', 'frame_collision'):
-            p = copy.deepcopy(self.cfg.platform)
-            p['modules'] = p['modules'][1:3]
-            if mutation == 'unknown': p['modules'][0]['name'] = 'unknown'
-            if mutation == 'coincident': p['modules'][1]['cad_steering_xyz'] = p['modules'][0]['cad_steering_xyz'][:]
-            if mutation == 'frame_collision': p['frames']['base'] = 'front_right_wheel'
-            with self.subTest(mutation=mutation), self.assertRaises(ConfigurationError):
-                validate_platform(p)
-
-    def test_ordered_three_module_subset_is_supported(self):
-        p = copy.deepcopy(self.cfg.platform)
-        p['modules'] = p['modules'][:3]
-        validate_platform(p)
-
-    def test_each_two_module_combination_and_four_module_layout_use_the_same_launch(self):
-        from itertools import combinations
-        modules = self.cfg.platform['modules']
-        selections = list(combinations(modules, 2)) + [tuple(modules)]
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'platform.yaml'
-            for selection in selections:
-                profile = copy.deepcopy(self.cfg.platform)
-                profile['modules'] = list(selection)
+    def test_flexisoft_telemetry_role_is_validated_and_derived_only_for_supervisor(self):
+        for selected in (True, False, None):
+            profile = copy.deepcopy(self.cfg.platform)
+            if selected is None:
+                profile['safety'].pop('telemetry_required')
+            else:
+                profile['safety']['telemetry_required'] = selected
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'platform.yaml'
                 path.write_text(yaml.safe_dump(profile))
                 cfg = Configuration(path)
-                expected = cfg.parameters('driver')['drives.names']
+                self.assertEqual(cfg.parameters('supervisor')['require_flexisoft_telemetry'],
+                                 selected if selected is not None else True)
+                self.assertNotIn('telemetry_required', cfg.parameters('safety'))
                 actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
-                                     {'platform_config': str(path), 'stack_type': 'virtual'})
-                self.assertEqual(len([a for a in actions if a.kind == 'Node'
-                                      and a.kwargs['executable'] == 'virtual_mobotic_drive']), len(expected))
-                robot = ET.fromstring(render_description(cfg))
-                self.assertEqual({j.get('name') for j in robot.findall('joint') if j.get('type') != 'fixed'},
-                                 set(expected))
-                standalone, _ = resolve(environment()['virtual_launch'](), {'platform_config': str(path)})
-                node = next(a for a in standalone if a.kind == 'Node')
-                self.assertEqual(node.kwargs['parameters'][0]['can_node_id'], selection[0]['steering']['can_node_id'])
+                                     {'platform_config': str(path)})
+                supervisor = next(a for a in actions if a.kind == 'Node' and
+                                  a.kwargs['executable'] == 'mobotic_supervisor')
+                self.assertEqual(supervisor.kwargs['parameters'][0]['require_flexisoft_telemetry'],
+                                 cfg.parameters('supervisor')['require_flexisoft_telemetry'])
+                for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter'):
+                    self.assertTrue(any(a.kind == 'Node' and a.kwargs['executable'] == executable
+                                        for a in actions))
+        for invalid in ('false', 0, 1, None):
+            profile = copy.deepcopy(self.cfg.platform)
+            profile['safety']['telemetry_required'] = invalid
+            with self.assertRaisesRegex(ConfigurationError, 'telemetry_required must be boolean'):
+                validate_platform(profile)
 
-    def test_synchronized_profile_rejects_missing_pdos_and_invalid_skew(self):
-        for overrides in ({'traction_pdo_enabled': False}, {'telemetry_pdo_enabled': False},
-                          {'sample_skew_budget': 0}, {'sample_skew_budget': 0.02}):
+    def test_four_module_names_geometry_and_frames_are_validated(self):
+        for mutation, error in (
+                ('duplicate', 'all four names'), ('reordered', 'all four names'),
+                ('unknown', 'all four names'), ('invalid_axis', 'CAD steering datum'),
+                ('frame_collision', 'conflict with generated links')):
+            profile = copy.deepcopy(self.cfg.platform)
+            if mutation == 'duplicate':
+                profile['modules'][1]['name'] = profile['modules'][0]['name']
+            elif mutation == 'reordered':
+                profile['modules'].reverse()
+            elif mutation == 'unknown':
+                profile['modules'][0]['name'] = 'unknown'
+            elif mutation == 'invalid_axis':
+                profile['modules'][0]['cad_steering_xyz'][0] = float('nan')
+            else:
+                profile['frames']['base'] = 'front_right_wheel'
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ConfigurationError, error):
+                validate_platform(profile)
+
+    def test_partial_module_layouts_are_rejected(self):
+        for count in (0, 1, 2, 3):
+            profile = copy.deepcopy(self.cfg.platform)
+            profile['modules'] = profile['modules'][:count]
+            with self.subTest(count=count), self.assertRaisesRegex(ConfigurationError, 'four'):
+                validate_platform(profile)
+
+    def test_four_module_layout_uses_all_eight_virtual_drives(self):
+        expected = self.cfg.parameters('driver')['drives.names']
+        actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                             {'platform_config': str(self.cfg.path), 'stack_type': 'virtual'})
+        simulated = [action for action in actions if action.kind == 'Node'
+                     and action.kwargs['executable'] == 'virtual_mobotic_drive']
+        self.assertEqual(len(simulated), 8)
+        self.assertEqual(len(expected), 8)
+        robot = ET.fromstring(render_description(self.cfg))
+        self.assertEqual({joint.get('name') for joint in robot.findall('joint') if joint.get('type') != 'fixed'},
+                         set(expected))
+        standalone, _ = resolve(environment()['virtual_launch'](), {'platform_config': str(self.cfg.path)})
+        node = next(action for action in standalone if action.kind == 'Node')
+        self.assertEqual(node.kwargs['parameters'][0]['can_node_id'],
+                         self.cfg.platform['modules'][0]['steering']['can_node_id'])
+
+    def test_sdo_profile_rejects_pdo_requests_and_invalid_skew(self):
+        for overrides in ({'traction_pdo_enabled': True}, {'telemetry_pdo_enabled': True},
+                          {'sample_skew_budget': 0}, {'sample_skew_budget': 0.31}):
             cfg = Configuration()
             cfg.apply_overrides('driver', overrides)
             with self.subTest(overrides=overrides), self.assertRaises(ConfigurationError):
                 cfg._validate_policy()
         for mode in ('autonomous', 'kinematicoff'):
-            cfg = Configuration()
+            cfg = Configuration(Path(__file__).resolve().parents[1] / 'config/platform-four-micontrol.yaml')
             cfg.apply_overrides('supervisor', {'initial_mode': mode})
+            cfg._validate_policy()
+
+    def test_physical_sdo_only_profile_preserves_feedback_guards(self):
+        cfg = Configuration(Path(__file__).resolve().parents[1] / 'config/platform-four-micontrol.yaml')
+        cfg.apply_overrides('driver', {'traction_pdo_enabled': False, 'telemetry_pdo_enabled': False})
+        cfg._validate_policy()
+        self.assertFalse(cfg.parameters('driver')['traction_pdo_enabled'])
+        self.assertFalse(cfg.parameters('driver')['telemetry_pdo_enabled'])
+        cfg.apply_overrides('driver', {'physical_sample_skew_budget': 0.31})
+        with self.assertRaises(ConfigurationError):
             cfg._validate_policy()
 
     def test_invalid_physical_profiles_fail(self):
@@ -424,7 +569,7 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual(context['robot_name'], 'moboterra')
         self.assertEqual((context['can_interface'], context['battery_can_interface']), ('can0', 'can1'))
         env = environment()
-        executable = {'driver': 'mobotic_driver', 'kinematics': 'mobotic_kinematics',
+        executable = {'driver': 'mobotic_driver',
                       'manual': 'remdevice_control', 'supervisor': 'mobotic_supervisor',
                       'battery': 'vanguard_battery_monitor', 'odometry': 'mobotic_odometry'}
         for component, name in executable.items():
@@ -435,6 +580,16 @@ class ConfigurationTest(unittest.TestCase):
             if component == 'supervisor':
                 expected['required_health_sources'] = ['kinematics', 'odometry']
             self.assertEqual(expected, integrated.kwargs['parameters'][0])
+
+    def test_integrated_kinematics_uses_original_romb_and_adapter(self):
+        from mobotic_kinematics.launching import kinematics_nodes
+        actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')())
+        expected = kinematics_nodes(lambda **kw: kw, 'moboterra', self.cfg.parameters('kinematics'))
+        for node in expected:
+            actual = next(a.kwargs for a in actions if a.kind == 'Node' and
+                          a.kwargs['executable'] == node['executable'])
+            self.assertEqual(actual['package'], 'mobotic_kinematics')
+            self.assertEqual(actual['parameters'], node['parameters'])
 
     def test_can_operator_and_usb_fallback_select_one_standalone_provider(self):
         env = environment()
@@ -479,11 +634,26 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_usb_driver_and_verification_types_are_validated(self):
         for change in (dict(usb_driver='unknown'), dict(usb_mapping_verified='true'),
-                       dict(require_enable_interlock='false'), dict(require_neutral_rearm=1)):
+                       dict(require_enable_interlock='false'), dict(require_neutral_rearm=1),
+                       dict(receiver_can_overrun_advisory='true'),
+                       dict(receiver_auto_communication_reset='false')):
             p = copy.deepcopy(self.cfg.platform)
             p['operator'].update(change)
             with self.assertRaises(ConfigurationError):
                 validate_platform(p)
+
+    def test_pail_overrun_advisory_is_opt_in_and_reaches_the_operator(self):
+        cfg = Configuration(self.verified_path)
+        self.assertFalse(cfg.parameters('manual')['receiver_can_overrun_advisory'])
+        self.assertFalse(cfg.parameters('manual')['receiver_auto_communication_reset'])
+        p = copy.deepcopy(cfg.platform)
+        p['operator']['receiver_can_overrun_advisory'] = True
+        p['operator']['receiver_auto_communication_reset'] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'pail.json'
+            path.write_text(json.dumps(p))
+            self.assertTrue(Configuration(path).parameters('manual')['receiver_can_overrun_advisory'])
+            self.assertTrue(Configuration(path).parameters('manual')['receiver_auto_communication_reset'])
 
     def test_namespace_root_and_endpoint_overrides(self):
         desc = factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')()
@@ -513,7 +683,7 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_yaml_files_have_one_owner_and_no_physical_duplicates(self):
         files = list(PACKAGES.rglob('*.yaml'))
-        expected = {'platform.yaml', 'platform-front-right-rear-left.yaml'}
+        expected = {'platform.yaml', 'platform-four-micontrol.yaml'}
         expected.update(Path(config_path(component)).name for component in self.cfg._parameters)
         self.assertEqual({path.name for path in files}, expected)
         self.assertTrue(all(path.parent == PACKAGES / 'mobotic_config/config' for path in files))

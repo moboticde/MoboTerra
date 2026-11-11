@@ -21,6 +21,8 @@ def configuration_report(cfg):
         'drive_can': platform['can']['drives'], 'battery_can': platform['can']['battery'],
         'modules': [module['name'] for module in platform['modules']],
         'safety_source': platform['safety'].get('source', 'flexisoft'),
+        'flexisoft_telemetry_required': (platform['safety'].get('source', 'flexisoft') == 'flexisoft'
+                                       and cfg.parameters('supervisor')['require_flexisoft_telemetry']),
         'blockers': blockers, 'warnings': [], 'live_checked': False, 'software_ready': None,
         'hardware_verified': False,
         'commissioning_pending': platform.get('commissioning_pending', []),

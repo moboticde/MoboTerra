@@ -28,7 +28,7 @@ class InterfaceUpdateTest(unittest.TestCase):
         del self.node._emit_final
         self.node.mode_state_publisher = harness.Publisher()
         self.node.requested_mode = self.node.selected_mode
-        self.node._source_gate = lambda now: (True, 'ready')
+        self.node._source_gate = lambda now, **kwargs: (True, 'ready')
         self.node.reset_timeout = 5.0
 
     def publish_state(self, permitted=True):

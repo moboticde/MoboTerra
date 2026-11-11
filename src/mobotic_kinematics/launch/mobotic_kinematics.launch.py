@@ -1,6 +1,6 @@
-"""Launch kinematics using the shared, validated platform profile."""
-from mobotic_config.launching import standalone_launch
+"""Launch original ROMB kinematics with the shared platform profile."""
 
 
 def generate_launch_description():
-    return standalone_launch('kinematics')
+    from mobotic_kinematics.launching import generate_launch_description as launch_kinematics
+    return launch_kinematics()

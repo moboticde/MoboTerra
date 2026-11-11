@@ -1,6 +1,6 @@
 # Authoritative physical/platform data. Units are metres, radians, seconds,
-# encoder counts/revolution, traction motor increments/s and increments/s^2,
-# steering motor rpm and current mA (software limits below use rad/s and A).
+# native position units/revolution, motor rpm and current mA
+# (software limits below use rad/s, m/s and A).
 # Values preserve the existing profile; this file is NOT commissioning evidence.
 schema_version: 1
 robot_name: moboterra
@@ -22,7 +22,9 @@ geometry:
   # CAD Z=0 is the floor. base_link is at wheel axle height (wheel_radius).
 actuators:
   steering:
-    resolution: 4096
+    # Installed 0x3762/0x3790 user units, not raw 0x3772 encoder increments.
+    # One steering output revolution is 121 motor revolutions/user units.
+    resolution: 121
     gear_ratio: 121.0
     mode: position
     min_steering_velocity: -5000
@@ -37,13 +39,13 @@ actuators:
     mode: velocity
     min_steering_velocity: -1700
     max_steering_velocity: 1700
-    min_traction_velocity: -116053
-    max_traction_velocity: 116053
+    min_traction_velocity: -1700
+    max_traction_velocity: 1700
     min_current: -4000
     max_current: 4000
 traction_profile:
-  # Preserved controller settings: ~1 m/s^2 with nominal gearing/radius.
-  # Recheck these raw-controller units when changing mechanical scaling.
+  # Historical metadata retained for configuration-file compatibility.
+  # miControl ramps remain installed in the controller; the driver does not write these.
   max_velocity: 116053
   acceleration: 32093
   deceleration: 32093
@@ -53,7 +55,7 @@ motion_limits:
   max_acceleration_linear: 0.5
   max_acceleration_angular: 0.52
   max_steering_velocity: 4.32
-  max_traction_velocity: 11.12
+  max_traction_velocity: 3.614 # wheel-contact m/s
   max_traction_current: 4.0
 modules:
   - name: front_left
@@ -99,6 +101,9 @@ scanners:
       cad_xyz: [-1.207482061, -0.860892491, 0.249261344]
       yaw: -2.356194490192345
 safety:
+  # Ethernet feedback is for observation. The physical FlexiSoft -> ELMO STO
+  # circuit handles hardware stops independently of ROS.
+  telemetry_required: false
   bind_address: '0.0.0.0'
   port: 9100
   telegram_size: 15

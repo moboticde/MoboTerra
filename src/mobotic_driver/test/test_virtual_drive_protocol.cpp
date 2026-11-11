@@ -1,4 +1,5 @@
 #include <mobotic_driver/virtual_drive_protocol.hpp>
+#include <mobotic_driver/traction_position.hpp>
 #include <functional>
 #include <iostream>
 
@@ -28,14 +29,7 @@ void write(VirtualDriveProtocol& drive, unsigned node, unsigned index, unsigned 
 MoboticDriveCanCommunication backend(unsigned node, bool traction)
 { return MoboticDriveCanCommunication("test", node, traction ? VELOCITY : POSITION, 4096,
     traction ? 16.0 : 121.0, {{MIN_STEERING_POSITION, -1e10}, {MAX_STEERING_POSITION, 1e10}}); }
-void configure(VirtualDriveProtocol& drive, const std::vector<Frame>& requests)
-{
-  for (const auto& request : requests)
-  {
-    const auto frames = drive.handle(request);
-    if (request.id != 0) { check(frames.size() == 1 && frames[0].data[0] == WRITE_REPLY, "production configuration must succeed"); }
-  }
-}
+
 void enable(VirtualDriveProtocol& drive, unsigned node, bool traction)
 {
   auto driver = backend(node, traction);
@@ -76,121 +70,147 @@ void steeringMotion()
   drive.advance(0.5);
   check(read(drive, 1, 0x3A04, 1) == -1210, "reverse steering velocity must be signed");
   const auto position = read(drive, 1, 0x3762);
-  write(drive, 1, 0x3300, 0, 4, 0); drive.advance(1.0);
-  check(read(drive, 1, 0x3762) == position && read(drive, 1, 0x3A04, 1) == 0, "zero profile speed must hold position");
+  write(drive, 1, 0x3300, 0, 4, 0); drive.advance(0.1);
+  check(read(drive, 1, 0x3762) != position, "a profile write alone must not change an active move");
+  const auto stopped_position = read(drive, 1, 0x3762);
+  write(drive, 1, 0x3000, 0, 4, 5); drive.advance(1.0);
+  check(read(drive, 1, 0x3762) == stopped_position && read(drive, 1, 0x3A04, 1) == 0, "zero profile speed must hold position");
+}
+void heldSteeringInInstalledUserUnits()
+{
+  constexpr int units_per_turn = 121;
+  constexpr double profile_rad_s = 0.3;
+  for (const int home_turns : {-2, 0, 3})
+  {
+    for (const int direction : {-1, 1})
+    {
+      const int home = home_turns * units_per_turn;
+      VirtualDriveProtocol controller(1, false, units_per_turn, 121.0, "micontrol");
+      controller.setInitialPosition(home);
+      MoboticDriveCanCommunication driver("front_left_steering", 1, POSITION, units_per_turn, 121.0,
+          {{MIN_STEERING_POSITION, -1e10}, {MAX_STEERING_POSITION, 1e10},
+           {MIN_STEERING_VELOCITY, -5000}, {MAX_STEERING_VELOCITY, 5000}}, "micontrol");
+      reply(controller, driver.setDeviceModeRequest(POSITION));
+      for (const auto& frame : driver.changeDeviceStateRequests(ENABLE)) { reply(controller, frame); }
+      const double angle = home_turns * 2 * M_PI + direction * M_PI / 2;
+      const int target = driver.getTarget(ABSOLUTE_POSITION_INPUT, angle);
+      check(target == home + direction * 30, "quarter turn must use 30 native user units, never 1024 encoder increments");
+      const int rpm = driver.getTarget(STEERING_PROFILE_VELOCITY_INPUT, profile_rad_s);
+      for (unsigned tick = 0; tick < 1000; ++tick)
+      {
+        // Repeated held commands are absolute moves to the same native target.
+        reply(controller, driver.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT, rpm));
+        reply(controller, driver.setTargetRequest(ABSOLUTE_POSITION_INPUT, target));
+        controller.advance(0.02);
+        const int actual = read(controller, 1, POSITION_FEEDBACK);
+        check(std::abs(actual - home) <= 30, "held steering must never accumulate extra turns");
+      }
+      check(read(controller, 1, POSITION_FEEDBACK) == target, "held steering reaches its absolute target");
+      check(read(controller, 1, MICONTROL_VELOCITY_FEEDBACK, 1) == 0, "held steering remains stationary after arrival");
+      driver.update(reply(controller, driver.readFeedbackRequest(POSITION_FEEDBACK)));
+      check(std::abs(ticksToAngle(driver.feedback(POSITION_FEEDBACK), units_per_turn) - angle) < 2*M_PI/units_per_turn,
+            "position feedback and target use the same native user-unit scale");
+
+      // Neutral must also stop an unfinished move, using the production Update.
+      reply(controller, driver.setTargetRequest(ABSOLUTE_POSITION_INPUT, home));
+      controller.advance(0.2);
+      reply(controller, driver.setTargetRequest(STEERING_PROFILE_VELOCITY_INPUT, 0));
+      reply(controller, driver.steeringProfileUpdateRequest());
+      const int stopped = read(controller, 1, POSITION_FEEDBACK);
+      controller.advance(10.0);
+      check(read(controller, 1, POSITION_FEEDBACK) == stopped, "neutral holds the current angle without recentering");
+      check(read(controller, 1, MICONTROL_VELOCITY_FEEDBACK, 1) == 0, "neutral latches zero profile speed");
+    }
+  }
+}
+void micontrolTractionPositionScaling()
+{
+  VirtualDriveProtocol drive(2, true, 4096, 16, "micontrol");
+  MoboticDriveCanCommunication decoder("front_right_traction", 2, VELOCITY, 4096, 16,
+      {}, "micontrol");
+  write(drive, 2, 0x3003, 0, 4, 3);
+  write(drive, 2, 0x3004, 0, 4, 1);
+  write(drive, 2, 0x3300, 0, 4, 60);  // One motor revolution/second.
+  drive.advance(0.25);
+  const auto frame = reply(drive, decoder.readFeedbackRequest(POSITION_FEEDBACK));
+  decoder.update(frame);
+  check(decoder.feedback(POSITION_FEEDBACK) == 1024,
+        "miControl traction position is motor encoder counts");
+  TractionPosition position;
+  check(position.update(0, 2000) && position.update(1024, 2000), "motor counts unwrap");
+  const double angle = position.radians(decoder.positionCountsPerOutputRevolution(), 1.0);
+  check(std::abs(angle - M_PI / 32.0) < 1e-9, "traction position includes 16:1 reduction");
+  decoder.update(reply(drive, decoder.readFeedbackRequest(VELOCITY_FEEDBACK)));
+  check(std::abs(angle / 0.25 - decoder.velocityFeedbackRadPerSec()) < 1e-9,
+        "position derivative and motor-rpm velocity agree");
+  // Saved first-failure sample: node 4, 80 -> -107 in 156 ms. With the
+  // physical 0.3 m/s / 0.325 m limit, the old unscaled guard allowed 182.5 counts.
+  const double bound = (0.3 / 0.325) * decoder.positionCountsPerOutputRevolution()
+      / (2 * M_PI) * 0.3 + 2;
+  TractionPosition recorded;
+  check(recorded.update(80, bound) && recorded.update(-107, bound),
+        "recorded normal reverse movement must preserve position continuity");
+  check(!recorded.update(1000000, bound), "true encoder discontinuities remain blocked");
 }
 void tractionSdo()
 {
   VirtualDriveProtocol drive(2, true); enable(drive, 2, true);
-  write(drive, 2, 0x60FF, 0, 4, static_cast<uint32_t>(-123456));
-  auto frame = reply(drive, request(2, 0x606C));
-  check(frame.data[0] == READ_REPLY_4B && intFromFrame(frame, 4) == -123456, "signed traction SDO velocity");
+  write(drive, 2, 0x3300, 0, 4, static_cast<uint32_t>(-1234));
+  auto frame = reply(drive, request(2, 0x3A04, 1));
+  check(frame.data[0] == READ_REPLY_4B && intFromFrame(frame, 4) == -1234, "signed motor-rpm traction feedback");
   write(drive, 2, 0x3200, 0, 4, static_cast<uint32_t>(-2345));
-  frame = reply(drive, request(2, 0x6078));
-  check(frame.data[0] == READ_REPLY_2B && signedIntFromSdoReadReply(frame, 4) == -2345, "traction current uses signed two bytes");
-  write(drive, 2, 0x6040, 0, 2, 0);
-  check(read(drive, 2, 0x606C) == 0 && read(drive, 2, 0x6078) == 0, "disabled feedback remains available and zero");
-}
-void tractionPdo()
-{
-  auto driver = backend(2, true); VirtualDriveProtocol drive(2, true);
-  configure(drive, driver.tractionPdoConfigurationRequests(1));
-  reply(drive, driver.setDeviceModeRequest(VELOCITY));
-  driver.setTractionPdoControlword(0xF); driver.setTractionPdoTarget(-76543);
-  drive.handle(driver.tractionPdoCommandFrame());
-  check(!drive.enabled() && read(drive, 2, 0x606C) == 0, "RPDO must wait for SYNC");
-  const auto frames = drive.handle(MoboticDriveCanCommunication::syncFrame());
-  check(frames.size() == 3 && frames[0].id == 0x182 && frames[0].dlc == 7 &&
-        frames[2].id == 0x382 && frames[2].dlc == 4, "ELMO velocity/status + position PDO layouts");
-  check(shortFromFrame(frames[0], 0) == 0x27 && frames[0].data[2] == VELOCITY &&
-        intFromFrame(frames[0], 3) == -76543, "ELMO PDO contents");
-  driver.update(frames[0]); driver.update(frames[1]);
-  check(driver.enabled() && driver.currentMode() == VELOCITY && driver.feedback(VELOCITY_FEEDBACK) == -76543,
-        "production decoder accepts virtual PDOs");
-  driver.setTractionPdoTarget(0); drive.handle(driver.tractionPdoCommandFrame());
-  drive.handle(MoboticDriveCanCommunication::syncFrame());
-  check(read(drive, 2, 0x606C) == 0, "watchdog-style zero RPDO stops traction");
-  driver.setTractionPdoTarget(999); drive.handle(driver.tractionPdoCommandFrame());
-  reply(drive, driver.changeDeviceStateRequest(DISABLE));
-  drive.handle(MoboticDriveCanCommunication::syncFrame());
-  check(!drive.enabled() && read(drive, 2, 0x606C) == 0, "disable must discard pending RPDO so SYNC cannot revive motion");
-}
-void steeringPdos()
-{
-  auto driver = backend(1, false); VirtualDriveProtocol drive(1, false);
-  configure(drive, driver.steeringTelemetryPdoConfigurationRequests(2)); enable(drive, 1, false);
-  write(drive, 1, 0x3300, 0, 4, 1210); write(drive, 1, 0x3790, 0, 4, 1000); drive.advance(0.5);
-  check(drive.handle(MoboticDriveCanCommunication::syncFrame()).empty(), "SYNC divider respected");
-  const auto frames = drive.handle(MoboticDriveCanCommunication::syncFrame());
-  check(frames.size() == 3 && frames[0].dlc == 8 && frames[1].dlc == 8 && frames[2].dlc == 8, "steering telemetry PDO layouts");
-  check(intFromFrame(frames[0], 0) == 341 && intFromFrame(frames[0], 4) == 1210, "steering motion PDO contents");
-  for (const auto& frame : frames) { driver.update(frame); }
-  check(driver.feedback(POSITION_FEEDBACK) == 341 && driver.feedback(VELOCITY_FEEDBACK) == 1210,
-        "production decoder accepts steering PDOs");
-}
+  frame = reply(drive, request(2, 0x3262, 1));
+  check(frame.data[0] == READ_REPLY_4B && intFromFrame(frame, 4) == -2345, "signed four-byte current telemetry");
+  check(read(drive, 2, 0x3262) == 2345, "legacy current channel reports magnitude in mA");
+  write(drive, 2, 0x3004, 0, 4, 0);
+  check(read(drive, 2, 0x3A04, 1) == 0 && read(drive, 2, 0x3262) == 0, "disabled motion and current remain zero");
+  }
+
 void faultsAndSafetyUnknown()
 {
-  VirtualDriveProtocol traction(2, true); enable(traction, 2, true); traction.setFault(1, 0x1234);
-  check(!traction.enabled() && read(traction, 2, 0x603F) == 0x1234, "fault inhibits enable and is readable");
-  write(traction, 2, 0x6040, 0, 2, 0xF); check(!traction.enabled(), "fault cannot be bypassed by enable");
-  write(traction, 2, 0x6040, 0, 2, 0x80); enable(traction, 2, true);
-  check(read(traction, 2, 0x1001) == 0 && read(traction, 2, 0x603F) == 0, "reset clears fault register/code");
-  for (auto index : {0x2086, 0x60FD})
-  { check(reply(traction, request(2, index)).data[0] == ABORT_REPLY, "unknown safety telemetry must not be healthy fabricated data"); }
-  VirtualDriveProtocol steering(1, false); steering.setFault(2, 0);
-  write(steering, 1, 0x3000, 0, 2, 1); enable(steering, 1, false);
-}
+  VirtualDriveProtocol drive(2, true); enable(drive, 2, true); drive.setFault(1);
+  check(!drive.enabled() && read(drive, 2, 0x3001) == 1, "fault inhibits enable and remains readable");
+  write(drive, 2, 0x3004, 0, 4, 1);
+  check(!drive.enabled(), "software enable cannot bypass a fault");
+  write(drive, 2, 0x3000, 0, 4, 1); enable(drive, 2, true);
+  check(read(drive, 2, 0x3001) == 0 && drive.enabled(), "explicit reset permits a new enable");
+  for (auto index : {0x2086, 0x60FD, 0x6040, 0x606C, 0x1400, 0x1A00})
+  { check(reply(drive, request(2, index)).data[0] == ABORT_REPLY, "unsupported objects cannot fabricate healthy telemetry"); }
+  }
 void disableNoResume()
 {
   for (bool traction : {false, true})
   {
     const unsigned node = traction ? 2 : 1; VirtualDriveProtocol drive(node, traction); enable(drive, node, traction);
-    write(drive, node, traction ? 0x60FF : 0x3300, 0, 4, 1210);
+    write(drive, node, 0x3300, 0, 4, 1210);
     if (!traction) { write(drive, node, 0x3790, 0, 4, 1000); drive.advance(0.5); }
     auto driver = backend(node, traction); reply(drive, driver.changeDeviceStateRequest(DISABLE));
-    reply(drive, driver.setTargetRequest(traction ? EC_TRACTION_VELOCITY_INPUT : ABSOLUTE_POSITION_INPUT, 500));
+    reply(drive, driver.setTargetRequest(traction ? VELOCITY_INPUT : ABSOLUTE_POSITION_INPUT, 500));
     enable(drive, node, traction); const auto before = traction ? 0 : read(drive, node, 0x3762); drive.advance(1);
-    check(read(drive, node, traction ? 0x606C : 0x3A04, traction ? 0 : 1) == 0, "re-enable must not revive old target");
+    check(read(drive, node, 0x3A04, 1) == 0, "re-enable must not revive old target");
     if (!traction) { check(read(drive, node, 0x3762) == before, "re-enable must hold actual steering position"); }
   }
 }
 void malformedAndIsolation()
 {
   VirtualDriveProtocol drive(2, true);
-  for (auto frame : {request(3, 0x6040, 0, 2, 15), request(2, 0x6040, 0, 2, 15)})
+  for (auto frame : {request(3, 0x3004, 0, 4, 1), request(2, 0x3004, 0, 4, 1)})
   {
     if (frame.id == 0x602) { frame.dlc = 7; }
     check(drive.handle(frame).empty() && !drive.enabled(), "wrong node/truncated frame ignored");
   }
   for (unsigned flag = 0; flag < 3; ++flag)
   {
-    auto frame = request(2, 0x6040, 0, 2, 15);
+    auto frame = request(2, 0x3004, 0, 4, 1);
     frame.is_error = flag == 0; frame.is_extended = flag == 1; frame.is_rtr = flag == 2;
     check(drive.handle(frame).empty() && !drive.enabled(), "flagged frame must not mutate drive");
   }
-  check(reply(drive, request(2, 0x6040, 0, 4, 15)).data[0] == ABORT_REPLY, "wrong write width aborted");
+  check(reply(drive, request(2, 0x3004, 0, 2, 1)).data[0] == ABORT_REPLY, "wrong write width aborted");
   check(reply(drive, request(2, 0x3004, 0, 2, 1)).data[0] == ABORT_REPLY, "wrong controller protocol aborted");
-  check(reply(drive, request(2, 0x6041, 0, 2, 1)).data[0] == ABORT_REPLY, "read-only write aborted");
-  check(reply(drive, request(2, 0x606C, 1)).data[0] == ABORT_REPLY, "wrong subindex aborted");
+  check(reply(drive, request(2, 0x3002, 0, 4, 1)).data[0] == ABORT_REPLY, "read-only write aborted");
+  check(reply(drive, request(2, 0x3A04, 0)).data[0] == ABORT_REPLY, "wrong subindex aborted");
 }
-void mappingAndNmt()
-{
-  auto driver = backend(2, true); VirtualDriveProtocol drive(2, true);
-  configure(drive, driver.tractionPdoConfigurationRequests(1)); enable(drive, 2, true);
-  check(reply(drive, request(2, 0x1400, 1, 4, 0x40000202)).data[0] == ABORT_REPLY,
-        "RTR prohibition is reserved on RPDO COB-IDs");
-  check(reply(drive, request(2, 0x1800, 1, 4, 0x20000182)).data[0] == ABORT_REPLY,
-        "unsupported extended TPDO identifiers remain rejected");
-  check(reply(drive, request(2, 0x1A00, 1, 4, 0xDEAD0020)).data[0] == ABORT_REPLY, "live mapping edits rejected");
-  write(drive, 2, 0x1A00, 0, 1, 0); write(drive, 2, 0x1A00, 1, 4, 0xDEAD0020);
-  check(reply(drive, request(2, 0x1A00, 0, 1, 1)).data[0] == ABORT_REPLY, "unknown mapping activation rejected");
-  drive.handle(createNmtFrame(0x80, 3)); check(drive.enabled(), "other node NMT ignored");
-  drive.handle(createNmtFrame(0x80, 0));
-  check(!drive.enabled() && drive.handle(createSyncFrame()).empty(), "broadcast preop stops PDO/motion");
-  configure(drive, driver.tractionPdoConfigurationRequests(1));
-  drive.handle(createNmtFrame(0x81, 2));
-  check(drive.handle(createSyncFrame()).empty(), "NMT reset clears mapping and stops PDO");
-}
+
 void configurationValidation()
 {
   for (unsigned id : {0u, 128u})
@@ -210,14 +230,13 @@ void allEightDriveReadiness()
   {
     const bool traction = node % 2 == 0;
     auto driver = backend(node, traction); VirtualDriveProtocol drive(node, traction);
-    configure(drive, traction ? driver.tractionPdoConfigurationRequests(1) : driver.steeringTelemetryPdoConfigurationRequests(1));
     enable(drive, node, traction);
     for (const auto& request : {driver.readDeviceStateRequest(), driver.readErrorRegisterRequest(),
-         driver.readErrorCodeRequest(), driver.readFeedbackRequest(CURRENT_FEEDBACK),
+         driver.readFeedbackRequest(CURRENT_FEEDBACK),
          driver.readFeedbackRequest(VELOCITY_FEEDBACK), driver.readFeedbackRequest(POSITION_FEEDBACK)})
     { driver.update(reply(drive, request)); }
-    check(driver.feedbackFreshness().ready(!traction, 0.3, 0.3, 2.5), "every virtual drive must provide production required feedback fields");
-    check(driver.enabled() && !driver.hasError() && driver.getErrorCode() == 0, "each virtual unit is enabled and fault-free");
+    check(driver.feedbackFreshness().ready(0.3, 0.3, 2.5), "every virtual drive must provide production required feedback fields");
+    check(driver.enabled() && !driver.hasError(), "each virtual unit is enabled and fault-free");
   }
 }
 void currentModeProtocol()
@@ -234,21 +253,23 @@ void currentModeProtocol()
       reply(drive, driver.setDeviceModeRequest(CURRENT));
       for (const auto& frame : driver.changeDeviceStateRequests(ENABLE)) { reply(drive, frame); }
     }
-    else { write(drive, node, 0x3003, 0, 4, CURRENT); write(drive, node, 0x3004, 0, 2, 1); }
+    else { write(drive, node, 0x3003, 0, 4, CURRENT); write(drive, node, 0x3004, 0, 4, 1); }
     write(drive, node, 0x3200, 0, 4, static_cast<uint32_t>(-1000));
-    const auto frame = reply(drive, request(node, traction ? 0x6078 : 0x3262, traction ? 0 : 1));
+    const auto frame = reply(drive, request(node, 0x3262, 1));
     check(signedIntFromSdoReadReply(frame, 4) == -1000, "repository current command convention must have signed feedback");
-    check(read(drive, node, traction ? 0x606C : 0x3A04, traction ? 0 : 1) == 0, "current mode must not invent velocity dynamics");
+    check(read(drive, node, 0x3A04, 1) == 0, "current mode must not invent velocity dynamics");
   }
 }
 int main()
 {
   const std::vector<std::pair<const char*, std::function<void()>>> cases{
     {"production initialization and enable/disable", initialization}, {"rate-limited steering motion", steeringMotion},
-    {"ELMO SDO velocity/current widths", tractionSdo}, {"production RPDO/SYNC/TPDO roundtrip", tractionPdo},
-    {"steering telemetry and SYNC divider", steeringPdos}, {"fault reset and unknown safety registers", faultsAndSafetyUnknown},
+    {"held steering and neutral stop at installed 121-unit scale", heldSteeringInInstalledUserUnits},
+    {"miControl traction position and velocity scaling", micontrolTractionPositionScaling},
+    {"miControl SDO velocity/current widths", tractionSdo},
+    {"fault reset and unknown safety registers", faultsAndSafetyUnknown},
     {"disable/re-enable does not revive targets", disableNoResume}, {"malformed frames and controller isolation", malformedAndIsolation},
-    {"PDO mapping validation and NMT", mappingAndNmt}, {"configuration validation", configurationValidation},
+    {"configuration validation", configurationValidation},
     {"all eight drives satisfy production feedback readiness", allEightDriveReadiness},
     {"current-mode protocol convention without invented dynamics", currentModeProtocol},
   };

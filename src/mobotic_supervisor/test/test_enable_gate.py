@@ -110,6 +110,7 @@ class EnableGateTest(unittest.TestCase):
         self.now = Time(10.0)
         self.node = Supervisor()
         node = self.node
+        node.get_logger = lambda: SimpleNamespace(info=lambda _: None, warning=lambda _: None)
         node.safety_source = 'flexisoft'
         node.safety_timeout = 0.3
         node.warning_speed_limit = 0.3
@@ -159,11 +160,19 @@ class EnableGateTest(unittest.TestCase):
         node.control_period = 0.02
         node.reset_id = 0
         node.reset_started_at = None
+        # These fixtures model an already B2-authorized platform. Initial
+        # startup and fault recovery waits are covered in test_operator_recovery.
+        node.operator_drives_disabled = False
         node.fault_codes = set()
         node.standstill_since = None
         node.get_clock = lambda: SimpleNamespace(now=lambda: self.now)
         node.module_command_publisher = Publisher()
         node.selected_mode = MODES.MANUAL
+        # Legacy velocity-direct fixtures remain available for source/stop tests;
+        # production configuration selects current, covered by its own tests.
+        node.direct_traction_control_mode = 'velocity'
+        node.max_direct_traction_current = 4.0
+        node.kinematicoff_current_supported = True
         node.transition_in_progress = False
         node.transition_timeout = 10.0
         node.transition_timed_out = False
@@ -175,17 +184,11 @@ class EnableGateTest(unittest.TestCase):
         node.last_output = [0.0, 0.0, 0.0]
         node.motion_inputs_ready = False
         node.command_accept_after = None
-        node._source_gate = lambda now: (False, 'deadman released')
+        node._source_gate = lambda now, **kwargs: (False, 'operator source inactive')
         node._publish_velocity = lambda *args, **kwargs: None
         node._publish_direct_stop = lambda *args: None
         node._publish_mode_state = lambda *args: None
 
-    def test_two_module_hardwired_profile_has_no_plc_telemetry_prerequisite(self):
-        node = self.node
-        node.safety_source = 'hardwired_sto'
-        node.safety_state = node.safety_io_state = None
-        node.safety_received = node.safety_io_received = None
-        self.assertTrue(node._enable_gate(self.now)[0])
 
     def test_soc_boundary_and_invalid_values(self):
         for soc, expected in [
@@ -268,7 +271,7 @@ class EnableGateTest(unittest.TestCase):
         self.assertTrue(all(message.reset_id == 0 for message in messages))
         self.assertEqual(messages[-1].header.stamp, self.now.to_msg())
 
-    def test_control_disables_then_recovers_with_readiness(self):
+    def test_control_disables_and_waits_for_b2_after_readiness_returns(self):
         self.node.battery_received = None
         self.node._control()
         self.node.battery_received = self.now
@@ -277,8 +280,9 @@ class EnableGateTest(unittest.TestCase):
         self.node._control()
         self.assertEqual(
             [msg.enable for msg in self.node.module_command_publisher.messages],
-            [False, True, True],
+            [False, False, False],
         )
+        self.assertTrue(self.node.operator_drives_disabled)
 
     def test_control_disables_during_mode_transition(self):
         self.node.transition_in_progress = True

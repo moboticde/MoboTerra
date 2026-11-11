@@ -1,6 +1,8 @@
 # ROS 2 / colcon outputs
 build/
 install/
+build-controller-types/
+install-controller-types/
 log/
 
 # Python-generated files

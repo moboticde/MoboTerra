@@ -36,29 +36,12 @@ can_msgs::msg::Frame reply(const MoboticDriveCanCommunication& drive, unsigned i
   return stamped(frame, source);
 }
 
-can_msgs::msg::Frame tractionPdo(const MoboticDriveCanCommunication& drive,
-    int status, DeviceMode mode, int velocity, int64_t source)
-{
-  auto frame = createHeartbeatFrame(drive.rawCanNodeID());
-  frame.id = drive.tractionTpdoCobId(); frame.dlc = 7;
-  shortToFrame(frame, 0, static_cast<short>(status)); frame.data[2] = mode;
-  intToFrame(frame, 3, velocity);
-  return stamped(frame, source);
-}
-
 void refresh(MoboticDriveCanCommunication& drive, int64_t source, Clock::time_point at)
 {
-  const bool steering = drive.isSteeringController();
-  drive.update(reply(drive, steering ? MICONTROL_DEVICE_STATE : EC_STATUSWORD, 0,
-                     steering ? 1 : 0x27, source), at);
-  drive.update(reply(drive, steering ? MICONTROL_ERROR_REGISTER : EC_ERROR_REGISTER, 0, 0, source), at);
-  drive.update(reply(drive, steering ? MICONTROL_VELOCITY_FEEDBACK : EC_TRACTION_VELOCITY_FEEDBACK,
-                     steering ? 1 : 0, 0, source), at);
-  if (steering) { drive.update(reply(drive, POSITION_FEEDBACK, 0, 0, source), at); }
-  else {
-    drive.update(reply(drive, EC_TRACTION_POSITION_FEEDBACK, 0, 0, source), at);
-    drive.update(reply(drive, EC_ERROR_CODE, 0, 0, source), at);
-  }
+  drive.update(reply(drive, MICONTROL_STATUS_REGISTER, 0, 1, source), at);
+  drive.update(reply(drive, MICONTROL_ERROR_REGISTER, 0, 0, source), at);
+  drive.update(reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 0, source), at);
+  drive.update(reply(drive, POSITION_FEEDBACK, 0, 0, source), at);
 }
 
 void exactSourceOrdering()
@@ -92,7 +75,7 @@ void faultsCannotBeClearedByReplay()
   for (const bool steering : {false, true})
   {
     auto drive = makeDrive(steering);
-    const auto index = steering ? MICONTROL_ERROR_REGISTER : EC_ERROR_REGISTER;
+    const auto index = MICONTROL_ERROR_REGISTER;
     drive.update(reply(drive, index, 0, 9, source_start + 2), start);
     const auto generation = drive.feedbackFreshness().generation(FeedbackFreshness::ERROR_REGISTER);
     for (const auto source : {source_start + 1, source_start + 2})
@@ -105,13 +88,7 @@ void faultsCannotBeClearedByReplay()
     drive.update(reply(drive, index, 0, 0, source_start + 3), start + std::chrono::milliseconds(20));
     check(!drive.hasError(), "genuinely newer healthy register may clear fault indication");
   }
-  auto drive = makeDrive(false);
-  drive.update(reply(drive, EC_ERROR_CODE, 0, 0x1234, source_start + 2, READ_REPLY_2B), start);
-  drive.update(reply(drive, EC_ERROR_CODE, 0, 0, source_start + 1, READ_REPLY_2B), start + std::chrono::milliseconds(1));
-  drive.update(reply(drive, EC_ERROR_CODE, 0, 0, source_start + 2, READ_REPLY_2B), start + std::chrono::milliseconds(2));
-  check(drive.getErrorCode() == 0x1234, "older/duplicate error code cannot erase fault");
-  drive.update(reply(drive, EC_ERROR_CODE, 0, 0, source_start + 3, READ_REPLY_2B), start + std::chrono::milliseconds(3));
-  check(drive.getErrorCode() == 0, "newer error code restores healthy indication");
+
 }
 
 void motionCannotBeOverwritten()
@@ -125,7 +102,7 @@ void motionCannotBeOverwritten()
     drive.update(reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 999, source), start + std::chrono::milliseconds(100));
   }
   check(drive.feedback(POSITION_FEEDBACK) == 123 && drive.feedback(VELOCITY_FEEDBACK) == 45, "motion values preserve latest acquisition");
-  check(!drive.feedbackFreshness().motionFresh(true, 0.3, start + std::chrono::milliseconds(301)), "replayed motion cannot remain fresh");
+  check(!drive.feedbackFreshness().motionFresh(0.3, start + std::chrono::milliseconds(301)), "replayed motion cannot remain fresh");
 }
 
 void disabledStatusCannotBeReenabled()
@@ -133,8 +110,8 @@ void disabledStatusCannotBeReenabled()
   for (const bool steering : {false, true})
   {
     auto drive = makeDrive(steering);
-    const auto index = steering ? MICONTROL_DEVICE_STATE : EC_STATUSWORD;
-    const auto enabled_value = steering ? 1 : 0x27;
+    const auto index = MICONTROL_STATUS_REGISTER;
+    const auto enabled_value = 1;
     drive.update(reply(drive, index, 0, enabled_value, source_start + 1), start);
     check(drive.enabled(), "setup enabled status");
     drive.update(reply(drive, index, 0, 0, source_start + 2), start + std::chrono::milliseconds(1));
@@ -157,85 +134,13 @@ void controlModeIsOrdered()
   check(drive.currentMode() == POSITION && drive.initialized(), "duplicate mode cannot undo newer initialization");
 }
 
-void tractionPdoMergesPerField()
-{
-  auto drive = makeDrive(false);
-  drive.update(reply(drive, EC_STATUSWORD, 0, 0, source_start + 4), start);
-  drive.update(reply(drive, EC_TRACTION_MODE_DISPLAY, 0, CURRENT, source_start + 4, READ_REPLY_1B), start);
-  drive.update(reply(drive, EC_TRACTION_VELOCITY_FEEDBACK, 0, 10, source_start + 1), start);
-  auto pdo = tractionPdo(drive, 0x27, VELOCITY, 20, source_start + 2);
-  drive.update(pdo, start + std::chrono::milliseconds(1));
-  check(!drive.enabled() && drive.currentMode() == CURRENT && !drive.initialized(), "older PDO status/mode cannot defeat newer SDO fields");
-  check(drive.feedback(VELOCITY_FEEDBACK) == 20, "same PDO's genuinely newer velocity must still be accepted");
-  intToFrame(pdo, 3, 999);
-  drive.update(pdo, start + std::chrono::milliseconds(2));
-  check(drive.feedback(VELOCITY_FEEDBACK) == 20, "duplicate PDO velocity ignored");
-  drive.update(tractionPdo(drive, 0x27, VELOCITY, 30, source_start + 5), start + std::chrono::milliseconds(3));
-  check(drive.enabled() && drive.currentMode() == VELOCITY && drive.initialized(), "newer PDO updates status/mode");
-  check(drive.feedback(VELOCITY_FEEDBACK) == 30, "newer PDO updates velocity");
-}
-
-void steeringPdoMergesPerField()
-{
-  auto drive = makeDrive(true);
-  drive.update(reply(drive, POSITION_FEEDBACK, 0, 444, source_start + 4), start);
-  drive.update(reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 10, source_start + 1), start);
-  auto pdo = createHeartbeatFrame(drive.rawCanNodeID());
-  pdo.id = drive.tractionTpdoCobId(); pdo.dlc = 8;
-  intToFrame(pdo, 0, 222); intToFrame(pdo, 4, 20);
-  pdo = stamped(pdo, source_start + 2);
-  drive.update(pdo, start + std::chrono::milliseconds(1));
-  check(drive.feedback(POSITION_FEEDBACK) == 444 && drive.feedback(VELOCITY_FEEDBACK) == 20, "steering PDO preserves newer position but accepts newer velocity");
-  intToFrame(pdo, 0, 999); intToFrame(pdo, 4, 999);
-  drive.update(pdo, start + std::chrono::milliseconds(2));
-  check(drive.feedback(POSITION_FEEDBACK) == 444 && drive.feedback(VELOCITY_FEEDBACK) == 20, "replay cannot alter either steering field");
-}
-
-void currentPdoAndSdoShareOrdering()
-{
-  for (const bool steering : {false, true})
-  {
-    auto drive = makeDrive(steering);
-    auto pdo = createHeartbeatFrame(drive.rawCanNodeID());
-    pdo.id = drive.telemetryTpdo2CobId(); pdo.dlc = steering ? 8 : 2;
-    if (steering) { intToFrame(pdo, 4, 44); }
-    else { shortToFrame(pdo, 0, 44); }
-    drive.update(reply(drive, steering ? MICONTROL_CURRENT_FEEDBACK : EC_TRACTION_CURRENT_FEEDBACK,
-                       steering ? 1 : 0, 77, source_start + 4, steering ? READ_REPLY_4B : READ_REPLY_2B), start);
-    drive.update(stamped(pdo, source_start + 3), start + std::chrono::milliseconds(1));
-    drive.update(stamped(pdo, source_start + 4), start + std::chrono::milliseconds(2));
-    check(drive.feedback(CURRENT_FEEDBACK) == 77, "older/duplicate PDO cannot overwrite SDO current");
-    drive.update(stamped(pdo, source_start + 5), start + std::chrono::milliseconds(3));
-    check(drive.feedback(CURRENT_FEEDBACK) == 44, "newer PDO current accepted");
-  }
-}
-
-void rawReadAndAbortOrdering()
-{
-  auto drive = makeDrive(false);
-  for (const auto index : {0x2086u, 0x60FDu})
-  {
-    RawRegisterTelemetry sample;
-    check(sample.update(reply(drive, index, 0, 200, source_start + 2), start), "raw register read accepted");
-    check(!sample.update(reply(drive, index, 0, 0, source_start + 1, ABORT_REPLY), start + std::chrono::milliseconds(1)), "older abort ignored");
-    check(sample.available && sample.value == 200, "older abort cannot invalidate newer raw read");
-    check(sample.update(reply(drive, index, 0, 0, source_start + 3, ABORT_REPLY), start + std::chrono::milliseconds(2)), "newer abort accepted");
-    check(!sample.available, "newer abort invalidates availability");
-    check(!sample.update(reply(drive, index, 0, 999, source_start + 2), start + std::chrono::milliseconds(3)), "older read cannot undo newer abort");
-    check(!sample.available && sample.ordering.generation() == 2, "replay cannot restore raw availability or renew age");
-    check(sample.update(reply(drive, index, 0, 400, source_start + 4, READ_REPLY_2B), start + std::chrono::milliseconds(4)), "newer read recovers");
-    check(sample.available && sample.value == 400, "new raw value exported");
-    check(!sample.update(reply(drive, index, 0, 0, source_start + 5, WRITE_REPLY), start + std::chrono::milliseconds(5)), "write acknowledgement cannot refresh raw telemetry");
-  }
-}
-
 void delayedSamplesKeepTheirAge()
 {
   auto drive = makeDrive(true);
   const auto acquired_at = start - std::chrono::milliseconds(290);
   refresh(drive, source_start, acquired_at);
-  check(drive.feedbackFreshness().ready(true, 0.3, 0.3, 2.5, start + std::chrono::milliseconds(9)), "delayed motion initially usable");
-  check(!drive.feedbackFreshness().ready(true, 0.3, 0.3, 2.5, start + std::chrono::milliseconds(11)), "delayed motion has only remaining source-age budget");
+  check(drive.feedbackFreshness().ready(0.3, 0.3, 2.5, start + std::chrono::milliseconds(9)), "delayed motion initially usable");
+  check(!drive.feedbackFreshness().ready(0.3, 0.3, 2.5, start + std::chrono::milliseconds(11)), "delayed motion has only remaining source-age budget");
   drive.update(reply(drive, POSITION_FEEDBACK, 0, 999, source_start), start + std::chrono::milliseconds(20));
   check(!drive.feedbackFreshness().fresh(FeedbackFreshness::POSITION, 0.3, start + std::chrono::milliseconds(20)), "duplicate with changed conversion time cannot renew acquisition age");
 }
@@ -290,12 +195,12 @@ void requiredFeedbackStillControlsReadiness()
   for (const bool steering : {false, true})
   {
     auto drive = makeDrive(steering);
-    check(!drive.feedbackFreshness().ready(steering, 0.3, 0.3, 2.5, start), "missing data prevents startup");
+    check(!drive.feedbackFreshness().ready(0.3, 0.3, 2.5, start), "missing data prevents startup");
     refresh(drive, source_start, start);
-    check(drive.feedbackFreshness().ready(steering, 0.3, 0.3, 2.5, start), "all fresh fields permit readiness");
-    check(!drive.feedbackFreshness().ready(steering, 0.3, 0.3, 2.5, start + std::chrono::milliseconds(301)), "cached enabled state cannot hide motion loss");
+    check(drive.feedbackFreshness().ready(0.3, 0.3, 2.5, start), "all fresh fields permit readiness");
+    check(!drive.feedbackFreshness().ready(0.3, 0.3, 2.5, start + std::chrono::milliseconds(301)), "cached enabled state cannot hide motion loss");
     drive.update(stamped(createHeartbeatFrame(drive.rawCanNodeID()), source_start + 1), start + std::chrono::milliseconds(400));
-    check(!drive.feedbackFreshness().ready(steering, 0.3, 0.3, 2.5, start + std::chrono::milliseconds(400)), "heartbeat cannot restore motion freshness");
+    check(!drive.feedbackFreshness().ready(0.3, 0.3, 2.5, start + std::chrono::milliseconds(400)), "heartbeat cannot restore motion freshness");
   }
 }
 } // namespace
@@ -305,14 +210,10 @@ int main()
   const std::vector<std::pair<const char*, std::function<void()>>> cases{
       {"exact source ordering and conversion jitter", exactSourceOrdering},
       {"unstamped compatibility and retained watermark", unstampedFallback},
-      {"fault register/code replay protection", faultsCannotBeClearedByReplay},
+      {"fault register replay protection", faultsCannotBeClearedByReplay},
       {"steering position/velocity ordering", motionCannotBeOverwritten},
       {"disabled status replay protection", disabledStatusCannotBeReenabled},
       {"control mode and initialization ordering", controlModeIsOrdered},
-      {"traction PDO/SDO per-field merge", tractionPdoMergesPerField},
-      {"steering PDO/SDO per-field merge", steeringPdoMergesPerField},
-      {"current PDO/SDO ordering", currentPdoAndSdoShareOrdering},
-      {"raw STO/digital input read/abort ordering", rawReadAndAbortOrdering},
       {"delayed feedback expiration", delayedSamplesKeepTheirAge},
       {"consumption/reset retains replay protection", resetDoesNotEraseWatermarks},
       {"independent field/drive watermarks", differentFieldsAndDrivesAreIndependent},

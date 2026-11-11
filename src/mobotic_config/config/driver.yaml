@@ -5,14 +5,18 @@
     can_heartbeat_period: 0.01
     watchdog_timeout: 0.1
     startup_timeout: 15.0
+    steering_align_on_enable: false
+    steering_alignment_velocity: 0.6
+    steering_alignment_timeout: 12.5
     supervisor_timeout: 0.3
     motion_feedback_timeout: 0.3
     status_feedback_timeout: 0.3
     fault_feedback_timeout: 2.5
     diagnostic_sdo_period: 1
-    traction_pdo_enabled: true
-    telemetry_pdo_enabled: true
+    # Compatibility keys for existing overrides; PDO transport is unsupported.
+    traction_pdo_enabled: false
+    telemetry_pdo_enabled: false
     telemetry_pdo_sync_divider: 1
     traction_pdo_period: 0.02
     sample_skew_budget: 0.005
-    physical_sample_skew_budget: 0.05
+    physical_sample_skew_budget: 0.1

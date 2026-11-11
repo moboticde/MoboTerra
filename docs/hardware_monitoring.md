@@ -44,12 +44,11 @@ Autonomy can subscribe to the laser scans; no autonomy implementation was added.
 Scanner transforms and CAD-envelope corner frames are integrated through the
 shared description; physical extrinsic calibration remains a commissioning task.
 
-The **two-module profile requires one fixed pack** (`battery1`); the
-**four-module profile requires two** (`battery1`, `battery2`). The packs connect
+The **four-module profile requires two fixed packs** (`battery1`, `battery2`). The packs connect
 directly to the 500-kbit/s battery CAN bus, with no separate Parallel Battery
 Controller. The old controller/battery3/battery4 requirements are removed.
 Every configured pack must independently send status, SOC and electrical
-telegrams; the single-pack option does not wait for a second pack.
+telegrams; both configured participants contribute to readiness.
 `battery/<id>/state` exposes each configured pack's measurements;
 `battery/state` aliases pack 1, and `battery/system_state` gates the supervisor
 using every configured pack's health/HV/freshness and the minimum SOC.
@@ -299,7 +298,7 @@ SDO and PDO feedback paths and test the fault-read timeout separately.
 Also stop the autonomy command publisher before restoring feedback: recovery must
 remain stopped until a new post-recovery command arrives. Repeat for autonomous
 velocity and direct joint modes; replaying a pre-recovery command must not move.
-Test delayed command delivery too: with the default 250 ms timeout, inject a
+Test delayed command romb too: with the default 250 ms timeout, inject a
 command stamped 240 ms before receipt. It must stop after the remaining 10 ms
 (on the next control cycle), not stay valid for another 250 ms. Repeat for manual
 velocity and both autonomy paths. Delayed safety/battery readiness must likewise
@@ -353,8 +352,7 @@ Joystick tests cover Back-button edges, held/reconnected inputs, authoritative
 mode feedback, terminal-only direct selection, unused face buttons, independent
 crab translation, steering signs, timestamp validity and mapping overlap.
 No-hold driving tests verify both shoulder boost inputs, non-stacking boost,
-unused left-stick vertical input, inactive invalid layouts and optional-deadman
-behavior. Supervisor tests verify that no-hold manual motion still requires a
+unused left-stick vertical input, inactive invalid layouts and neutral rearm. Supervisor tests verify that no-hold manual motion still requires a
 fresh connected/active source and all hardware readiness checks.
 Bringup uses `joy/game_controller_node` standardized SDL ordering for the temporary
 F310/F710 USB profile; the raw `joy_node` index ordering is not interchangeable.
@@ -406,7 +404,7 @@ dependents before checking the ROS graph or hardware behavior.
 Kinematics now requires complete joint feedback fresh by both original timestamp
 and steady receipt age (`joint_feedback_timeout: 0.3`). Invalid newer feedback
 blocks commands; duplicate/older samples cannot renew the cache. On a secured
-setup, interrupt only the delivery of `joint_states` to kinematics while other
+setup, interrupt only the romb of `joint_states` to kinematics while other
 driver telemetry continues. Kinematics must stop publishing joint setpoints and
 the driver's configured motion watchdog must stop its previous targets. Restore
 genuinely newer complete feedback, then verify normal command processing. Repeat
@@ -469,7 +467,7 @@ node/platform diagnostics must age stale. Restore feedback: the first new sample
 must hold the previous pose, increase uncertainty and establish a new integration
 baseline, without guessing missing motion. The node reports persistent WARN for
 this uncertainty. Duplicate/older samples must not publish or refresh the estimate.
-Test paused ROS time, delayed delivery, a backward clock jump and source loss
+Test paused ROS time, delayed romb, a backward clock jump and source loss
 without disabling the independent hardware stop chain.
 
 The node is intentionally not automatically respawned: a restart or approved

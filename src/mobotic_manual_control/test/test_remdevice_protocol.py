@@ -92,6 +92,39 @@ class FreshnessTest(unittest.TestCase):
         self.assertIsNone(self.rx.snapshot(self.now + 251_000_000))
         self.assertEqual(self.rx.reason, 'PDO timeout')
 
+    def test_operational_evidence_survives_input_expiry_without_refreshing_controls(self):
+        self.assertIsNone(self.rx.nmt_state)
+        self.pair()
+        self.assertEqual((self.rx.nmt_state, self.rx.nmt_stamp_ns), (5, self.now))
+        self.send(self.rx.heartbeat_id, [5], dt=251_000_000)
+        self.assertEqual(self.rx.nmt_state, 5)
+        self.assertIsNone(self.rx.snapshot(self.now))
+        self.assertFalse(self.rx.samples)
+
+    def test_queued_preoperational_heartbeat_cannot_discard_newer_operational_pdos(self):
+        old = self.now
+        self.now += 10_000_000
+        self.pair()
+        operational_stamp = self.rx.nmt_stamp_ns
+        self.send(self.rx.heartbeat_id, [127], dt=1_000_000, stamp=old)
+        self.assertEqual((self.rx.nmt_state, self.rx.nmt_stamp_ns), (5, operational_stamp))
+        self.assertIsNotNone(self.rx.snapshot(self.now))
+        self.send(self.rx.heartbeat_id, [0], dt=1_000_000)
+        self.assertEqual(self.rx.nmt_state, 0)
+        self.assertIsNone(self.rx.snapshot(self.now))
+        self.send(self.rx.analog_id, dt=1_000_000)
+        self.assertEqual(self.rx.nmt_state, 5)
+        self.assertIsNone(self.rx.snapshot(self.now))
+
+    def test_clock_rollback_does_not_imply_receiver_reset(self):
+        self.pair()
+        self.now -= 1_000_000_000
+        self.assertIsNone(self.rx.snapshot(self.now))
+        self.assertEqual(self.rx.nmt_state, 5)
+        self.assertIsNone(self.rx.nmt_stamp_ns)
+        self.send(self.rx.heartbeat_id, [0])
+        self.assertEqual(self.rx.nmt_state, 0)
+
     def test_missing_one_pdo_requires_new_pair_after_timeout(self):
         self.pair()
         self.send(dt=251_000_000)
@@ -146,6 +179,44 @@ class FreshnessTest(unittest.TestCase):
         self.pair()
         self.send(self.rx.heartbeat_id, [5], dt=1_000_000)
         self.assertIsNotNone(self.rx.snapshot(self.now))
+
+    def test_advisory_overrun_preserves_fresh_pair_without_renewing_its_age(self):
+        self.rx.can_overrun_advisory = True
+        self.pair()
+        original_stamp = self.rx.snapshot(self.now).stamp_ns
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0], dt=1_000_000)
+        self.assertTrue(self.rx.overrun_is_advisory())
+        self.assertFalse(self.rx.has_blocking_error())
+        self.assertEqual(self.rx.snapshot(self.now).stamp_ns, original_stamp)
+        self.send(self.rx.emergency_id, [0] * 8, dt=1_000_000)
+        self.assertEqual(self.rx.snapshot(self.now).stamp_ns, original_stamp)
+        self.assertIsNone(self.rx.snapshot(original_stamp + 251_000_000))
+
+    def test_advisory_overrun_cannot_renew_a_missing_analog_pdo(self):
+        self.rx.can_overrun_advisory = True
+        self.pair()
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
+        for _ in range(6):
+            self.send(data=[1, 0, 0, 0, 0, 0, 0, 0x28], dt=50_000_000)
+            self.assertIsNone(self.rx.snapshot(self.now, consume=True))
+
+    def test_collision_and_additional_error_classes_still_block_in_advisory_mode(self):
+        for code, register in ((0x8150, 0x11), (0x6000, 1), (0x2320, 1),
+                               (0x8110, 0x15), (0x8110, 0), (0, 0x11)):
+            with self.subTest(code=code, register=register):
+                self.setUp()
+                self.rx.can_overrun_advisory = True
+                self.pair()
+                self.send(self.rx.emergency_id, [code & 255, code >> 8, register, 0, 0, 0, 0, 0])
+                self.assertTrue(self.rx.has_blocking_error())
+                self.assertIsNone(self.rx.snapshot(self.now))
+
+    def test_hardware_bus_error_still_invalidates_an_advisory_pair(self):
+        self.rx.can_overrun_advisory = True
+        self.pair()
+        self.send(self.rx.emergency_id, [0x10, 0x81, 0x11, 0, 0, 0, 0, 0])
+        self.send(0x20000040, is_error=True)
+        self.assertIsNone(self.rx.snapshot(self.now))
 
     def test_emcy_latches_until_explicit_error_reset(self):
         self.pair()

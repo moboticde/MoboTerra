@@ -105,7 +105,7 @@ int main()
     check(ordered.permits(Source::SupervisorDirect, 10 * SECOND + 500'000'000,
                           10 * SECOND + 500'000'000, .3, recovered_at), "new recovery command accepted");
     check(!ordered.fresh(10 * SECOND + 710'000'000, .3,
-                         recovered_at + std::chrono::milliseconds(210)), "delivery age backdated to source time");
+                         recovered_at + std::chrono::milliseconds(210)), "romb age backdated to source time");
     std::cout << "PASS: recovery epoch and original-age lease\n";
   }
   catch (const std::exception& error)

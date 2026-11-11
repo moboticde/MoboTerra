@@ -22,20 +22,15 @@ can_msgs::msg::Frame reply(const MoboticDriveCanCommunication& drive, unsigned i
 
 void refresh(MoboticDriveCanCommunication& drive, Clock::time_point at)
 {
-  const bool steering = drive.isSteeringController();
-  drive.update(reply(drive, steering ? MICONTROL_DEVICE_STATE : EC_STATUSWORD, 0,
-                     steering ? 1 : 0x27), at);
-  drive.update(reply(drive, steering ? MICONTROL_ERROR_REGISTER : EC_ERROR_REGISTER, 0, 0), at);
-  drive.update(reply(drive, steering ? MICONTROL_VELOCITY_FEEDBACK : EC_TRACTION_VELOCITY_FEEDBACK,
-                     steering ? 1 : 0, 0), at);
-  if (steering) { drive.update(reply(drive, POSITION_FEEDBACK, 0, 0), at); }
-  else { drive.update(reply(drive, EC_ERROR_CODE, 0, 0), at);
-         drive.update(reply(drive, EC_TRACTION_POSITION_FEEDBACK, 0, 0), at); }
+  drive.update(reply(drive, MICONTROL_STATUS_REGISTER, 0, 1), at);
+  drive.update(reply(drive, MICONTROL_ERROR_REGISTER, 0, 0), at);
+  drive.update(reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 0), at);
+  drive.update(reply(drive, POSITION_FEEDBACK, 0, 0), at);
 }
 
 bool ready(const MoboticDriveCanCommunication& drive, Clock::time_point at)
 {
-  return drive.feedbackFreshness().ready(drive.isSteeringController(), 0.3, 0.3, 2.5, at);
+  return drive.feedbackFreshness().ready(0.3, 0.3, 2.5, at);
 }
 }
 
@@ -43,7 +38,7 @@ TEST(FeedbackFreshness, MissingFeedbackBlocksStartup)
 {
   auto drive = makeDrive(true);
   EXPECT_FALSE(ready(drive, start));
-  drive.update(reply(drive, MICONTROL_DEVICE_STATE, 0, 1), start);
+  drive.update(reply(drive, MICONTROL_STATUS_REGISTER, 0, 1), start);
   EXPECT_TRUE(drive.enabled());
   EXPECT_FALSE(ready(drive, start));
   refresh(drive, start);
@@ -67,8 +62,7 @@ TEST(FeedbackFreshness, HeartbeatsCurrentAndUnrelatedSdosDoNotRenewMotion)
   const auto motion_generation = drive.feedbackFreshness().generation(FeedbackFreshness::VELOCITY);
   drive.update(createHeartbeatFrame(drive.rawCanNodeID()), later);
   drive.update(reply(drive, 0x2086, 0, 1), later);
-  auto current = createHeartbeatFrame(drive.rawCanNodeID());
-  current.id = drive.telemetryTpdo2CobId(); current.dlc = 2;
+  auto current = reply(drive, CURRENT_FEEDBACK, 0, 0);
   drive.update(current, later);
   EXPECT_FALSE(ready(drive, later));
   EXPECT_EQ(drive.feedbackFreshness().generation(FeedbackFreshness::VELOCITY), motion_generation);
@@ -80,34 +74,32 @@ TEST(FeedbackFreshness, VelocityAloneDoesNotRenewSteeringPosition)
   auto drive = makeDrive(true);
   refresh(drive, start);
   const auto later = start + std::chrono::milliseconds(400);
-  drive.update(reply(drive, MICONTROL_DEVICE_STATE, 0, 1), later);
+  drive.update(reply(drive, MICONTROL_STATUS_REGISTER, 0, 1), later);
   drive.update(reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 0), later);
   EXPECT_FALSE(ready(drive, later));
   drive.update(reply(drive, POSITION_FEEDBACK, 0, 0), later);
   EXPECT_TRUE(ready(drive, later));
 }
 
-TEST(FeedbackFreshness, PdoMotionDoesNotHideExpiredFaultTelemetry)
+TEST(FeedbackFreshness, PdoTrafficCannotRenewSdoFeedback)
 {
-  auto drive = makeDrive(false);
-  refresh(drive, start);
-  const auto later = start + std::chrono::seconds(3);
-  auto pdo = createHeartbeatFrame(drive.rawCanNodeID());
-  pdo.id = drive.tractionTpdoCobId(); pdo.dlc = 7;
-  shortToFrame(pdo, 0, 0x27); pdo.data[2] = VELOCITY;
-  drive.update(pdo, later);
-  EXPECT_FALSE(drive.feedbackFreshness().motionFresh(false, 0.3, later));
-  auto position_pdo = pdo;
-  position_pdo.id = drive.telemetryTpdo3CobId(); position_pdo.dlc = 4;
-  intToFrame(position_pdo, 0, 0);
-  drive.update(position_pdo, later);
-  EXPECT_TRUE(drive.feedbackFreshness().motionFresh(false, 0.3, later));
-  EXPECT_FALSE(ready(drive, later));
-  drive.update(reply(drive, EC_ERROR_REGISTER, 0, 0, READ_REPLY_1B), later);
-  EXPECT_FALSE(ready(drive, later));
-  drive.update(reply(drive, EC_ERROR_CODE, 0, 0, READ_REPLY_2B), later);
-  EXPECT_TRUE(ready(drive, later));
-}
+  for (const bool steering : {false, true})
+  {
+    auto drive = makeDrive(steering);
+    refresh(drive, start);
+    const auto later = start + std::chrono::seconds(3);
+    for (const unsigned offset : {0x180u, 0x280u, 0x380u, 0x480u})
+    {
+      auto frame = createHeartbeatFrame(drive.rawCanNodeID());
+      frame.id = offset + drive.rawCanNodeID(); frame.dlc = 8;
+      drive.update(frame, later);
+    }
+    EXPECT_FALSE(drive.feedbackFreshness().motionFresh(0.3, later));
+    EXPECT_FALSE(ready(drive, later));
+    refresh(drive, later);
+    EXPECT_TRUE(ready(drive, later));
+  }
+  }
 
 TEST(FeedbackFreshness, MalformedAndWrongResponsesCannotRefresh)
 {
@@ -129,9 +121,9 @@ TEST(FeedbackFreshness, MalformedAndWrongResponsesCannotRefresh)
     EXPECT_FALSE(drive.feedbackFreshness().fresh(FeedbackFreshness::VELOCITY, 0.3, later));
   }
   auto short_pdo = reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 0);
-  short_pdo.id = drive.tractionTpdoCobId(); short_pdo.dlc = 7;
+  short_pdo.id = 0x180 + drive.rawCanNodeID(); short_pdo.dlc = 7;
   drive.update(short_pdo, later);
-  EXPECT_FALSE(drive.feedbackFreshness().motionFresh(true, 0.3, later));
+  EXPECT_FALSE(drive.feedbackFreshness().motionFresh(0.3, later));
 }
 
 TEST(FeedbackFreshness, RecoveredDriveNeedsAllRequiredFields)
@@ -143,7 +135,7 @@ TEST(FeedbackFreshness, RecoveredDriveNeedsAllRequiredFields)
   refresh(front, later);
   EXPECT_TRUE(ready(front, later));
   EXPECT_FALSE(ready(rear, later));
-  rear.update(reply(rear, EC_STATUSWORD, 0, 0x27), later);
+  rear.update(reply(rear, MICONTROL_STATUS_REGISTER, 0, 1), later);
   EXPECT_FALSE(ready(rear, later));
   refresh(rear, later);
   EXPECT_TRUE(ready(front, later) && ready(rear, later));

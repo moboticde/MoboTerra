@@ -7,7 +7,7 @@ bool status_word_known
 uint8 control_mode
 bool control_mode_known
 int32 native_control_mode
-# Native state register: MiControl 3004 or Elmo 6041; not physical STO/brake.
+# Actual native status: MiControl DEV_Status 3002 or Elmo 6041; not STO/brake.
 int32 device_state
 bool device_state_known
 int32 error_register

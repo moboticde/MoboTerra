@@ -21,13 +21,64 @@ namespace = {'generate_launch_description': resolved_factory(SOURCE)}
 
 
 class SocketCanLaunchTest(unittest.TestCase):
+    def test_manual_only_replaces_authority_and_keeps_driver_watchdogs(self):
+        actions, _ = resolve(factory(SOURCE)(), {'control_mode': 'manual_only'})
+        nodes = [a for a in actions if a.kind == 'Node']
+        self.assertFalse(any(a.kwargs.get('executable') == 'mobotic_supervisor' for a in nodes))
+        controller = next(a for a in nodes if a.kwargs.get('executable') == 'manual_drive_control')
+        self.assertFalse(controller.kwargs['respawn'])
+        drivers = [a for a in nodes if a.kwargs.get('executable') == 'mobotic_driver']
+        self.assertEqual(drivers[0].kwargs['parameters'][0]['supervisor_timeout'], 0.3)
+        with self.assertRaisesRegex(ValueError, 'requires start_manual_interface'):
+            resolve(factory(SOURCE)(), {'control_mode': 'manual_only', 'start_manual_interface': 'false'})
+
+    def test_sdo_only_driver_profile_supports_hardware_and_virtual(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            overlay = Path(directory) / 'driver-sdo.yaml'
+            overlay.write_text('/**:\n  ros__parameters:\n    traction_pdo_enabled: false\n    telemetry_pdo_enabled: false\n')
+            overrides = {'driver_parameters_file': str(overlay), 'stack_type': 'hardware'}
+            actions, _ = resolve(factory(SOURCE)(), overrides)
+            driver = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_driver')
+            self.assertFalse(driver.kwargs['parameters'][0]['traction_pdo_enabled'])
+            self.assertFalse(driver.kwargs['parameters'][0]['telemetry_pdo_enabled'])
+            group = next(a for a in actions if a.kind == 'GroupAction' and any(
+                child.kind == 'IncludeLaunchDescription' and child.args[0].args[0].args[0][-1]
+                == 'sdo_socket_can_bridge.launch.py' for child in a.kwargs['actions']))
+            includes = [a for a in group.kwargs['actions'] if a.kind == 'IncludeLaunchDescription']
+            self.assertEqual(len(includes), 1)
+            self.assertEqual(dict(includes[0].kwargs['launch_arguments'])['tx_max_queue_age_sec'], '0.05')
+            virtual, _ = resolve(factory(SOURCE)(), {**overrides, 'stack_type': 'virtual'})
+            virtual_driver = next(a for a in virtual if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_driver')
+            self.assertFalse(virtual_driver.kwargs['parameters'][0]['traction_pdo_enabled'])
+            self.assertFalse(virtual_driver.kwargs['parameters'][0]['telemetry_pdo_enabled'])
+
+    def test_sdo_bridge_has_exactly_one_shared_sender_and_preserves_receiver(self):
+        actions, _ = resolve(factory(SOURCE.with_name('sdo_socket_can_bridge.launch.py'))())
+        nodes = [a for a in actions if a.kind == 'Node']
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0].kwargs['executable'], 'paced_socket_can_sender')
+        includes = [a for a in actions if a.kind == 'IncludeLaunchDescription']
+        self.assertEqual(len(includes), 1)
+        self.assertEqual(includes[0].args[0].args[0].args[0][-1], 'socket_can_receiver.launch.py')
+        self.assertEqual(dict(includes[0].kwargs['launch_arguments'])['use_bus_time'].args, ('use_bus_time',))
+
+    def test_interface_override_cannot_create_two_senders_on_the_same_bus(self):
+        group, _, operator, context = self.hardware_operator_receiver(
+            {'can_interface': 'can1', 'operator_can_interface': 'can1', 'battery_can_interface': 'can2'})
+        sender = next(a for a in group.kwargs['actions'] if a.kind == 'IncludeLaunchDescription' and
+                      a.args[0].args[0].args[0][-1] == 'socket_can_sender.launch.py')
+        self.assertFalse(sender.kwargs['condition'].perform(context))
+        self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx'),
+                                                       ('can_events', 'operator_events/can_rx')])
+
     def test_stationary_pail_steering_is_enabled_only_for_virtual_can_operator(self):
         for stack in ('hardware', 'virtual'):
             actions, _ = resolve(factory(SOURCE)(), {'stack_type': stack})
             operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
             supervisor = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_supervisor')
-            self.assertEqual(operator.kwargs['parameters'][0].get('stationary_steering_enabled', False), stack == 'virtual')
-            self.assertEqual(supervisor.kwargs['parameters'][0].get('manual_stationary_steering_enabled', False), stack == 'virtual')
+            self.assertEqual(operator.kwargs['parameters'][0].get('stationary_steering_enabled', False), False)
+            self.assertEqual(supervisor.kwargs['parameters'][0].get('manual_stationary_steering_enabled', False), False)
 
     def hardware_operator_receiver(self, overrides=None):
         actions, context = resolve(factory(SOURCE)(), overrides)
@@ -46,9 +97,24 @@ class SocketCanLaunchTest(unittest.TestCase):
         self.assertNotIn('to_can_bus_topic', arguments)
         import json
         node = json.loads(operator.kwargs['parameters'][0]['remdevice_mapping'])['node_id']
-        expected = {f'{base + node:03X}:7FF' for base in (0x80, 0x180, 0x280, 0x580, 0x700)}
+        expected = {f'{base + node:03X}:C00007FF' for base in (0x180, 0x280)}
         self.assertEqual(set(arguments['filters'].split(',')), expected | {'#1FFFFFFF'})
-        self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx')])
+        self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx'),
+                                                       ('can_events', 'operator_events/can_rx')])
+        actions, context = resolve(factory(SOURCE)())
+        events = next(a for a in actions if a.kind == 'GroupAction' and any(
+            child.kind == 'PushRosNamespace' and child.args == ('operator_events',)
+            for child in a.kwargs['actions']))
+        self.assertTrue(events.kwargs['condition'].perform(context))
+        includes = [a for a in events.kwargs['actions'] if a.kind == 'IncludeLaunchDescription']
+        self.assertEqual(len(includes), 1)
+        self.assertEqual(includes[0].args[0].args[0].args[0][-1], 'socket_can_receiver.launch.py')
+        event_args = dict(includes[0].kwargs['launch_arguments'])
+        self.assertEqual(event_args['interface'].perform(context), 'can0')
+        self.assertEqual(event_args['use_bus_time'], 'true')
+        expected_events = {f'{base + node:03X}:C00007FF' for base in (0x80, 0x580, 0x700)}
+        self.assertEqual(set(event_args['filters'].split(',')), expected_events | {'#1FFFFFFF'})
+        self.assertTrue(expected.isdisjoint(expected_events))
 
     def test_legacy_usb_profile_does_not_require_a_can_mapping_or_receiver(self):
         import json, tempfile
@@ -62,6 +128,34 @@ class SocketCanLaunchTest(unittest.TestCase):
             self.assertFalse(group.kwargs['condition'].perform(context))
             self.assertEqual(operator.kwargs['executable'], 'manual_control')
             self.assertEqual(operator.kwargs['remappings'], [])
+
+    def test_separate_hardware_pail_interface_has_dedicated_transmit_and_receive_topics(self):
+        group, arguments, operator, context = self.hardware_operator_receiver(
+            {'can_interface': 'can0', 'operator_can_interface': 'can1'})
+        self.assertEqual(arguments['interface'], 'can1')
+        includes = [child for child in group.kwargs['actions'] if child.kind == 'IncludeLaunchDescription']
+        sender = next(child for child in includes
+                      if child.args[0].args[0].args[0][-1] == 'socket_can_sender.launch.py')
+        self.assertTrue(sender.kwargs['condition'].perform(context))
+        self.assertEqual(dict(sender.kwargs['launch_arguments'])['interface'], 'can1')
+        self.assertEqual(dict(sender.kwargs['launch_arguments'])['to_can_bus_topic'], 'can_tx')
+        self.assertEqual(operator.kwargs['remappings'], [
+            ('can_rx', 'operator_rx/can_rx'), ('can_events', 'operator_events/can_rx'),
+            ('can_tx', 'operator_rx/can_tx')])
+        actions, _ = resolve(factory(SOURCE)(), {'operator_can_interface': 'can1'})
+        driver = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'mobotic_driver')
+        self.assertNotIn(('can_tx', 'operator_rx/can_tx'), driver.kwargs.get('remappings', []))
+
+    def test_shared_hardware_pail_interface_does_not_add_another_sender(self):
+        for interface in ('', 'can0'):
+            group, _, operator, context = self.hardware_operator_receiver(
+                {'can_interface': 'can0', 'operator_can_interface': interface})
+            sender = next(child for child in group.kwargs['actions']
+                          if child.kind == 'IncludeLaunchDescription' and
+                          child.args[0].args[0].args[0][-1] == 'socket_can_sender.launch.py')
+            self.assertFalse(sender.kwargs['condition'].perform(context))
+            self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx'),
+                                                           ('can_events', 'operator_events/can_rx')])
 
     def test_projection_preserves_all_scanner_streams_and_evaluated_output_checks(self):
         actions, context = resolve(factory(SOURCE)())
@@ -83,12 +177,18 @@ class SocketCanLaunchTest(unittest.TestCase):
         for overrides in ({'stack_type': 'virtual'}, {'start_manual_interface': 'false'}):
             group, _, _, context = self.hardware_operator_receiver(overrides)
             self.assertFalse(group.kwargs['condition'].perform(context))
+            actions, _ = resolve(factory(SOURCE)(), overrides)
+            events = next(a for a in actions if a.kind == 'GroupAction' and any(
+                child.kind == 'PushRosNamespace' and child.args == ('operator_events',)
+                for child in a.kwargs['actions']))
+            self.assertFalse(events.kwargs['condition'].perform(context))
 
     def test_virtual_pail_topics_stay_isolated_without_a_physical_receiver(self):
         actions, context = resolve(factory(SOURCE)(), {'stack_type': 'virtual', 'operator_can_interface': ''})
         operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
         self.assertEqual(operator.kwargs['remappings'], [
-            ('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx')])
+            ('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx'),
+            ('can_events', 'operator_can/can_events')])
         receiver = next(a for a in actions if a.kind == 'GroupAction' and any(
             child.kind == 'PushRosNamespace' and child.args == ('operator_can',)
             for child in a.kwargs['actions']))
@@ -134,6 +234,22 @@ class SocketCanLaunchTest(unittest.TestCase):
                        if child.kind == 'IncludeLaunchDescription')
         return group, include, dict(include.kwargs['launch_arguments'])
 
+    def test_can_receive_wait_and_idle_warning_policy_are_consistent(self):
+        self.assertEqual(self.arguments['receiver_interval_sec'], '0.1')
+        self.assertEqual(self.arguments['warn_on_receive_timeout'], 'false')
+        _, _, battery = self.battery_receiver()
+        self.assertEqual(battery['interval_sec'], '0.1')
+        self.assertEqual(battery['warn_on_receive_timeout'], 'false')
+        for name in ('operator_can', 'operator_rx', 'operator_events'):
+            group = next(action for action in self.actions if action.kind == 'GroupAction'
+                         and any(child.kind == 'PushRosNamespace' and child.args == (name,)
+                                 for child in action.kwargs['actions']))
+            include = next(child for child in group.kwargs['actions']
+                           if child.kind == 'IncludeLaunchDescription')
+            arguments = dict(include.kwargs['launch_arguments'])
+            self.assertEqual(arguments['interval_sec'], '0.1')
+            self.assertEqual(arguments['warn_on_receive_timeout'], 'false')
+
     def test_default_drive_and_battery_interfaces_are_separate(self):
         arguments = {action.args[0]: action.kwargs for action in self.actions
                      if action.kind == 'DeclareLaunchArgument'}
@@ -175,13 +291,15 @@ class SocketCanLaunchTest(unittest.TestCase):
         self.assertNotIn('to_can_bus_topic', arguments)
         operator = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'operator')
         self.assertEqual(operator.kwargs['remappings'], [
-            ('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx')])
+            ('can_rx', 'operator_can/can_rx'), ('can_tx', 'operator_can/can_tx'),
+            ('can_events', 'operator_can/can_events')])
         for action in actions:
             if action.kind == 'Node' and action.kwargs.get('executable') == 'virtual_mobotic_drive':
                 self.assertEqual(action.kwargs['remappings'], [('can_rx', 'can_tx'), ('can_tx', 'can_rx')])
         hardware, _ = resolve(factory(SOURCE)(), {'operator_can_interface': 'can0'})
         operator = next(a for a in hardware if a.kind == 'Node' and a.kwargs['name'] == 'operator')
-        self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx')])
+        self.assertEqual(operator.kwargs['remappings'], [('can_rx', 'operator_rx/can_rx'),
+                                                       ('can_events', 'operator_events/can_rx')])
 
     def test_battery_transport_is_receiver_only_with_acquisition_timestamps(self):
         group, include, arguments = self.battery_receiver()
@@ -190,7 +308,8 @@ class SocketCanLaunchTest(unittest.TestCase):
         self.assertEqual(arguments['from_can_bus_topic'], 'can_rx')
         self.assertEqual(arguments['enable_can_fd'], 'false')
         self.assertEqual(arguments['use_bus_time'], 'true')
-        self.assertEqual(arguments['filters'], '0:0')
+        from mobotic_config.configuration import Configuration
+        self.assertEqual(arguments['filters'], Configuration().battery_can_filters())
         self.assertNotIn('to_can_bus_topic', arguments)
         pushes = [action for action in group.kwargs['actions'] if action.kind == 'PushRosNamespace']
         self.assertEqual(pushes[0].args[0].args, ('robot_name',))
@@ -232,7 +351,11 @@ class SocketCanLaunchTest(unittest.TestCase):
         transport = dict(include.kwargs['launch_arguments'])
         self.assertEqual(transport['interface'], 'can1')
         self.assertEqual(transport['use_bus_time'], 'true')
+        self.assertEqual(transport['interval_sec'], '0.1')
+        self.assertEqual(transport['warn_on_receive_timeout'], 'false')
         self.assertEqual(transport['from_can_bus_topic'], 'can_rx')
+        from mobotic_config.configuration import Configuration
+        self.assertEqual(transport['filters'], Configuration().battery_can_filters())
         pushes = [action for action in group.kwargs['actions'] if action.kind == 'PushRosNamespace']
         self.assertEqual(pushes[0].args[0].args, ('robot_name',))
         self.assertEqual(pushes[1].args, ('battery_can',))
@@ -285,14 +408,14 @@ class SocketCanLaunchTest(unittest.TestCase):
             parameters = node.kwargs['parameters'][0]
             traction = node.kwargs['name'].endswith('_traction')
             self.assertEqual(parameters['drive_type'], 'traction' if traction else 'steering')
-            self.assertEqual(parameters['encoder_resolution'], 4096.0)
+            self.assertEqual(parameters['encoder_resolution'], 4096.0 if traction else 121.0)
             self.assertEqual(parameters['gear_ratio'], 16.0 if traction else 121.0)
             self.assertEqual(node.kwargs['remappings'], [('can_rx', 'can_tx'), ('can_tx', 'can_rx')])
             condition = node.kwargs['condition']
             self.assertFalse(condition.perform({'stack_type': 'hardware'}))
             self.assertTrue(condition.perform({'stack_type': 'virtual'}))
 
-    def test_virtual_driver_keeps_the_production_pdo_configuration_and_lease_timeout(self):
+    def test_virtual_driver_keeps_the_production_sdo_configuration_and_lease_timeout(self):
         nodes = [action for action in namespace['generate_launch_description']().args[0]
                  if action.kind == 'Node' and action.kwargs.get('executable') == 'mobotic_driver']
         self.assertEqual(len(nodes), 2)

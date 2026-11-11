@@ -50,9 +50,31 @@ void roundingAndMultiturn()
   check(steering.getTarget(ABSOLUTE_POSITION_INPUT, 20.0 * PI) == 40960, "multi-turn position must not be wrapped or clipped");
 }
 
+void nearestHome()
+{
+  for (const auto& item : {std::make_pair(0, 0), {20, 0}, {-20, 0},
+       {4076, 4096}, {4116, 4096}, {-4076, -4096}, {-4116, -4096},
+       {12308, 12288}, {-12308, -12288}, {2048, 0}, {-2048, 0},
+       {2049, 4096}, {-2049, -4096}, {6144, 4096}, {-6144, -4096}})
+  {
+    const auto target = nearestSteeringHome(item.first, 4096);
+    check(target && *target == item.second, "nearest full-turn home, including deterministic ties");
+    check(std::abs(double(*target) - item.first) <= 2048, "home never requires more than half a turn");
+  }
+  check(nearestSteeringHome(MIN_TICKS, 4096).value() == std::numeric_limits<int32_t>::min(), "representable endpoint home accepted");
+  check(!nearestSteeringHome(MAX_TICKS, 4096), "nearest home beyond wire range must reject instead of unwinding");
+  check(!nearestSteeringHome(MIN_TICKS, 4104), "lower nearest-home overflow rejected");
+  for (const double period : {0., -1., .5, 4096.5, MAX_TICKS + 1.,
+       std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+  { check(!nearestSteeringHome(0, period), "invalid full-turn scale rejected"); }
+  check(!nearestSteeringHome(std::numeric_limits<double>::quiet_NaN(), 4096), "invalid current position rejected");
+  check(!nearestSteeringHome(MAX_TICKS + 1, 4096), "out-of-range current position rejected");
+  check(nearestSteeringHome(8172, 8192).value() == 8192, "configured resolution supplies the full-turn scale");
+}
+
 void encoderResolutionAndWireRoundtrip()
 {
-  for (const double resolution : {1.0, 4096.0, 8192.0, 1'000'000.0})
+  for (const double resolution : {1.0, 121.0, 4096.0, 8192.0, 1'000'000.0})
   {
     auto steering = drive(resolution);
     for (const double ticks : {MIN_TICKS, MAX_TICKS, -12345.0, 12345.0})
@@ -119,6 +141,7 @@ int main()
 {
   const std::vector<std::pair<const char*, std::function<void()>>> cases{
       {"signed wire and half-tick boundaries", signedWireBoundaries},
+      {"nearest full-turn home", nearestHome},
       {"rounding and unchanged multi-turn commands", roundingAndMultiturn},
       {"encoder resolutions and signed CAN roundtrip", encoderResolutionAndWireRoundtrip},
       {"non-finite, huge and intermediate-overflow inputs", invalidFloatingInputs},

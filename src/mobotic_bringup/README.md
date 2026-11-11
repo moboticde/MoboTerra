@@ -3,7 +3,7 @@
 Integrated launch for the current MoboTerra stack, with two supervised motion paths:
 
 - Velocity: operator/external autonomy -> supervisor -> kinematics -> supervisor -> driver.
-- External joint commands: autonomy -> supervisor -> driver (`KINEMATICOFF`, mode 2).
+- External steering position and traction-current commands: autonomy -> supervisor -> driver (`KINEMATICOFF`, mode 2; miControl traction).
 
 Both paths converge into final wheel_modules/command arrays. Internal operation
 commands separately manage global enable/disable and explicit reset transactions.
@@ -21,6 +21,21 @@ The PAIL USB mapping must be verified separately before enabling motion.
 See [the complete temporary control map](../mobotic_manual_control/README.md).
 
 ## Hardware launch
+
+CAN receivers use a 100 ms maximum blocking receive wait and suppress ordinary
+idle-timeout warnings. Frames are delivered as they arrive; this does not slow
+CAN traffic or change acquisition timestamps. Real SocketCAN receive errors,
+CAN error-frame monitoring and battery/operator/drive freshness watchdogs remain
+enabled. During charging or a B2 wait, use the supervisor's `WAITING` instruction
+to identify the actual blocker instead of treating a short quiet bus interval
+as a fault.
+
+The PAIL input uses separate receive-only channels: `operator_rx/can_rx` for
+TPDO1/2 and `operator_events/can_rx` for EMCY, SDO health replies and heartbeat.
+Each has its own filtered SocketCAN reader and bounded ROS history, so diagnostic
+bursts cannot displace control PDOs. Both preserve acquisition timestamps and
+CAN-error reception. A shared drive/operator interface still has one CAN sender;
+the extra event reader introduces no CAN transmissions.
 
 After building and sourcing the workspace:
 
@@ -48,7 +63,7 @@ outstanding without hardware.
 Required external packages: `ros2_socketcan`, `joy`, `sick_safetyscanners2`.
 Bringup does not configure the OS CAN interfaces or PC network interface.
 Match the selected profile: drives use `can0`, battery telemetry uses `can1`.
-The two-module profile uses 250/500 kbit/s respectively; the four-module reference
+The four-module reference
 uses 500/500 kbit/s. Configure the battery adapter in listen-only mode in the OS.
 Drive frames remain on `can_rx`/`can_tx`. Battery frames are isolated on
 `battery_can/can_rx`; the battery monitor remaps its input there. No battery
@@ -168,8 +183,12 @@ independent brake feedback is unknown. Enable does not require a joystick deadma
 
 Motion additionally requires enabled, fresh, fault-free wheel feedback and a
 valid selected command source. Manual motion requires a fresh connected/active
-joystick source, but no held button in the default USB profile. Left stick steers,
-right stick translates/crabs, and either L1 or R1 boosts without stacking.
+joystick source, but no held button in the default USB profile. Ackermann uses left steering plus right forward/reverse; crab uses only the right
+stick. The first steering input owns the family until neutral and measured stop;
+crab wins simultaneous input. Limits are +/-45 degrees in Ackermann and +/-90
+degrees in crab. Traction and steering run concurrently; steering profiles track
+individual targets without a wait-for-heading traction gate. The steering limit
+reference remains fixed during each homing/authority cycle. Either L1 or R1 boosts travel speed without stacking.
 Management lease loss (0.3 s) stops/disables independently of joint-command loss
 (0.1 s) and decoded CAN feedback loss.
 
@@ -195,22 +214,10 @@ and aggregate battery state. CAN topics are connected locally; no SocketCAN brid
 physical safety/battery monitor or scanner is launched. It does not command
 the physical CAN interface.
 
-Four simulators use MiControl steering and four use ELMO traction. They handle the
-production SDO, enable, NMT and synchronous PDO paths; steering moves toward its
-target and traction reports commanded velocity. The supplied IDs, 4096 tick
-resolutions and 121/16 gear ratios match the default YAML. Keep simulator settings
-aligned when using custom driver configuration. There is no physical motor,
-brake or STO model. Protocol unit tests pass, but full ROS build/runtime testing
-is still required before calling this a successful end-to-end motion test.
-Raw ELMO safety-register warnings are expected.
-For the [front-right/rear-left profile](../../docs/two_module_setup.md), the same
-launch creates only four drive simulators and expects four feedback joints.
-The mock node publishes `battery/system_state`, not public `battery/state`.
-Virtual telemetry uses the triggering SYNC's acquisition timestamp across all
-configured simulated drives. Extra stop/enable requests wait for the pending sample
-to finish (at most 100 ms, bounded by half the motion-feedback timeout), rather
-than invalidating it mid-batch. This guard applies only to the virtual position
-source; hardware keeps its configured cyclic timing.
+The virtual platform contains eight miControl SDO drive models: steering and
+traction for every module. Feedback requires all eight joint samples. Geometry
+and units come from the selected four-module configuration. The models do not
+represent physical motor, brake or safety behavior.
 
 ### Drive the virtual platform with a PAIL CAN joystick
 
@@ -241,6 +248,20 @@ mapping still inhibits joystick motion. See the [Docker and RViz commands](../..
 
 ## Inspect the system
 
+When both hardware driver PDO flags are false, bringup selects
+`sdo_socket_can_bridge.launch.py`: the existing SocketCAN receiver plus one
+`mobotic_driver/paced_socket_can_sender`. Shared-bus PAIL traffic uses that same
+sender. Every producer shares the 2 ms minimum software send gap defined once
+in `mobotic_driver/can_scheduling.hpp`; PEAK adapters use the same SocketCAN path.
+Its write queue age is bounded by 50 ms or half the configured command
+watchdog, whichever is tighter. Passive reads use the same 100 ms window as
+the driver response tracker. The PDO/SYNC and virtual transport paths retain
+their own adapters. Interface overrides are compared after resolution so an
+operator using the drive interface cannot create a second sender on that bus.
+`can_tx_sent` and `can_tx_status` expose socket acceptance and queue statistics
+without claiming physical transmission timing. See the driver README for
+admission, stop priority and expiry semantics.
+
 ```bash
 ros2 node list
 ros2 topic list
@@ -252,3 +273,114 @@ rqt_graph
 
 The [project graph](../../docs/moboterra_rqt_graph.md) is source-derived, not a
 captured live graph. Missing publishers/subscribers may change what rqt displays.
+
+
+Kinematics implementations and ROMB integration are owned by
+[`mobotic_kinematics`](../mobotic_kinematics/README.md). Bringup selects
+`kinematics_backend:=romb` (the only supported solver) and delegates node creation to that package.
+`start_ros2_four_micontrol.sh` continues to select ROMB, using the same executable
+names, topics and geometry. ROMB executables now belong to `mobotic_kinematics`.
+
+## Manual-only commissioning test
+
+`control_mode:=manual_only` replaces `mobotic_supervisor` with
+`manual_drive_control`. The default remains `supervised`. Only operator velocity
+and fresh timestamp-correlated kinematics output can reach the driver; autonomy,
+RP1 mode requests and direct-current control are not accepted. Driver limits,
+feedback checks and watchdogs are unchanged.
+
+This explicitly omits supervisor scanner and battery ROS gates. Keep the
+independent hardware scanner/stop circuit working; software tests do not verify
+its physical effectiveness. The robot-local wrapper preserves the original
+launcher's collision, CAN and port checks and original romb kinematics:
+
+```bash
+/home/mobotic/start_ros2_manual_only.sh
+```
+
+The wrapper omits ROS scanner/safety/battery, odometry and description nodes. It
+never reconfigures scanner hardware. Drives remain disabled until neutral controls
+and B2 (or `wheel_modules/enable_drives`). Recovery clears faults and initializes
+at zero targets, then requires acknowledged enabled feedback and 250 ms measured
+joint standstill. Neutral controls are required to request B2 recovery. Once
+recovery starts, stick movement is ignored: no traction/steering motion source
+is authorized and it does not cancel homing or disable drives. After completion,
+discarded recovery commands cannot run; return to neutral for fresh rearm before
+moving. B2 is enable-only and does not cancel startup.
+
+Brief control-loop delays over 100 ms discard pending motion without latching
+drive disable. The control-gap latch uses monotonic time with a 300 ms default
+(control_gap_timeout), independently of ROS timestamp jitter. Repeated ROS times
+or clock discrepancies discard cached commands; up to 40 ms of ROS clock skew
+(clock_skew_tolerance) is tolerated for input acquisition. Receipt-age deadlines,
+command ordering and the independent 100 ms driver motion watchdog still apply.
+Large clock changes can still invalidate input freshness.
+
+Operator STOP/loss, stale or faulted drive feedback, a sustained monotonic control
+gap or another mode authority still latches disable. Correct the cause, return to
+neutral and press B2 again. The manual authority does not respawn or automatically
+re-enable.
+
+From the same ROS environment with `ROS_DOMAIN_ID=42`:
+
+```bash
+ros2 topic echo /moboterra/vehicle/mode
+ros2 service call /moboterra/wheel_modules/disable_drives std_srvs/srv/Trigger '{}'
+```
+
+Stop with Ctrl-C. To restore supervised operation, stop the manual launch and use
+`/home/mobotic/start_ros2_four_micontrol.sh`. Never run both authorities together.
+
+
+## Native launcher shutdown
+
+Both `/home/mobotic/start_ros2_four_micontrol.sh` and its manual-only wrapper now
+run through `mobotic_bringup.shutdown_guard`. On Ctrl-C, SIGTERM, terminal hangup,
+or launch exit, the guard first stops the authority, leaves the driver and CAN
+sender alive for the authority lease to expire, then shuts down the launch group.
+After its writers exit, it sends disable to every configured drive and reads back
+confirmation on the same CAN interface. miControl requires `DEV_Enable 0x3004=0`
+AND `DEV_Status 0x3002` enabled bit clear; ELMO requires controlword readback zero and
+the actual status word's operation-enabled bit clear. Every drive is attempted
+even if another fails; unverified shutdown reports an error and nonzero exit.
+No enable, reset or parameter-storage command is issued by shutdown cleanup.
+
+The guard prints `Shutdown complete: all configured drives verified disabled`
+only after successful readback. This applies to the two native launch scripts;
+calling `ros2 launch` directly bypasses the guard. SIGKILL, power loss, broken CAN
+and an unavailable controller cannot provide verified software shutdown; the
+independent hardware safety circuit remains necessary.
+
+
+### PAIL diagnostics during an accepted homing sequence
+
+`operator/homing_state` supplies timestamped physical interlocks independently
+of the command decoder's EMCY invalidation. It is used only during an already
+accepted B2 reset/homing sequence in MANUAL, in supervised and manual-only
+operation. Initial B2 admission and normal driving still use `operator/state`.
+The observed PAIL communication diagnostics 0x8110/0x8150 with register 0x11 do
+not themselves cancel homing while complete fresh physical PDOs continue to
+prove neutral controls, LINK/EMGY healthy and STOP released. They remain visible
+in the ordinary operator state and raw diagnostics.
+
+STOP/E-stop, radio/link loss, stale/malformed physical inputs, non-neutral sticks,
+CAN error frames, other/unknown receiver faults, drive faults or invalid feedback
+still inhibit/cancel the sequence. Existing driver authority leases and homing
+velocity/time limits are unchanged. The homing topic never publishes an active
+motion command and is not used for autonomous or normal joystick motion.
+After homing, ordinary operator readiness is required for motion again.
+
+
+The geometry for these manual controls is derived from the platform profile and
+shared with kinematics. Native and original romb backends both pass through
+final manual envelope/alignment checks. Homing still uses the configured existing
+encoder-zero reference; this does not calibrate a mechanical home switch or
+prove physical wheel-angle scale. See the manual-control README for controls and
+selection/release behavior.
+
+The host launcher /home/mobotic/start_ros2_four_micontrol.sh runs the same verified
+node-10 PAIL recovery as clear_joystick_error.sh after its stopped-stack/CAN
+preflight and before ROS nodes start. The manual-only wrapper inherits this
+behavior. Keep sticks neutral and B2 released. All eight drives must already
+report disabled. A failed reset or nonzero verification aborts launch; runtime
+PAIL faults still inhibit and require correction/rearm.

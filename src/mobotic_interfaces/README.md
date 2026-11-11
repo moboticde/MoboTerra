@@ -6,7 +6,7 @@ Shared ROS 2 messages and services for the MoboTerra operator, vehicle superviso
 
 - `OperatorState` describes physical inputs, connection, source identity and neutral/rearm state. E-stop and deadman have explicit known flags.
 - `VehicleModeState` describes effective and selected modes, error/safety overlap, readiness, reset progress and supervisor authority.
-- `WheelModuleCommandArray` is final motion: one named record per configured module (two in the two-module profile, four by default), steering position/profile speed, traction velocity and provenance. No current command is exposed. See the [field reference](../../docs/control_path_and_latency.md#final-wheel-command-message).
+- `WheelModuleCommandArray` is final motion: one named record per configured module (four modules, eight actuator joints), steering position/profile speed, traction velocity and provenance. No current command is exposed. See the [field reference](../../docs/control_path_and_latency.md#final-wheel-command-message).
 - `WheelModuleOperationCommand` is internal management: enable and one idempotent reset ID, bound to supervisor instance/generation. It has no motion targets or clear-errors boolean.
 - `WheelModuleStatusArray` contains one named record per configured module with separate `DriveStatus` for steering and traction. Currents are amperes; unknown values have known flags and NaN where appropriate.
 - Native device-state/control-mode values are controller-family-specific. Status/position readiness must not be interpreted as physical E-stop, brake or STO.

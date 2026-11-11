@@ -74,12 +74,16 @@ class RemdeviceReceiver:
     CAN headers must carry acquisition time in the same clock as now_ns.
     """
 
-    def __init__(self, node_id, *, timeout_ns=250_000_000, max_skew_ns=75_000_000):
+    def __init__(self, node_id, *, timeout_ns=250_000_000, max_skew_ns=75_000_000,
+                 can_overrun_advisory=False):
         if type(node_id) is not int or not 1 <= node_id <= 127:
             raise ValueError('node_id must be 1..127')
         if (type(timeout_ns) is not int or type(max_skew_ns) is not int
                 or not 0 < max_skew_ns <= timeout_ns):
             raise ValueError('require 0 < max_skew_ns <= timeout_ns')
+        if type(can_overrun_advisory) is not bool:
+            raise ValueError('can_overrun_advisory must be boolean')
+        self.can_overrun_advisory = can_overrun_advisory
         self.node_id = node_id
         self.timeout_ns = timeout_ns
         self.max_skew_ns = max_skew_ns
@@ -91,12 +95,23 @@ class RemdeviceReceiver:
         self.last_stamps = {}
         self.consumed = {}
         self.last_now_ns = None
+        self.nmt_state = None
+        self.nmt_stamp_ns = None
         self.epoch_ns = 0
         self.physical_sample = None
         self.physical_epoch_ns = 0
         self.emergency_code = 0
         self.emergency_register = 0
         self.reason = 'waiting for both PDOs'
+
+    def overrun_is_advisory(self):
+        # Only this observed communication-only diagnostic is eligible.
+        # Collision, hardware, voltage and unknown errors remain blocking.
+        return (self.can_overrun_advisory and self.emergency_code == 0x8110
+                and self.emergency_register == 0x11)
+
+    def has_blocking_error(self):
+        return bool(self.emergency_code or self.emergency_register) and not self.overrun_is_advisory()
 
     def invalidate(self, reason, now_ns, *, preserve_physical=False):
         if not preserve_physical:
@@ -112,6 +127,7 @@ class RemdeviceReceiver:
             raise ValueError('positive integer clock required')
         if self.last_now_ns is not None and now_ns < self.last_now_ns:
             self.last_stamps.clear()
+            self.nmt_stamp_ns = None
             self.invalidate('clock moved backwards', now_ns)
         self.last_now_ns = now_ns
         if any(not 0 <= now_ns - stamp <= self.timeout_ns for stamp, _ in self.samples.values()):
@@ -158,9 +174,11 @@ class RemdeviceReceiver:
             # Keep that cutoff for motion: recovery still needs fresh PDOs and
             # neutral rearm after processing the event.
             self.last_stamps[cob_id] = stamp_ns
+            was_blocking = self.has_blocking_error()
             self.emergency_code = int.from_bytes(payload[:2], 'little')
             self.emergency_register = payload[2]
-            self.invalidate(f'EMCY 0x{self.emergency_code:04x}', now_ns, preserve_physical=True)
+            if self.has_blocking_error() or was_blocking:
+                self.invalidate(f'EMCY 0x{self.emergency_code:04x}', now_ns, preserve_physical=True)
             return False
         # Physical LINK/EMGY/STOP observation is independent of motion-pair
         # invalidation. Never refresh it from an EMCY or a publishing timer.
@@ -172,11 +190,22 @@ class RemdeviceReceiver:
         self.last_stamps[cob_id] = stamp_ns
         if cob_id == self.heartbeat_id:
             # Bit 7 may be the node-guarding toggle when another master polls.
-            if payload[0] & 0x7f != 5:
+            # A queued heartbeat must not override newer PDO evidence that
+            # the receiver is already Operational. Track acquisition order
+            # across IDs separately from command-pair freshness.
+            if self.nmt_stamp_ns is not None and stamp_ns < self.nmt_stamp_ns:
+                return False
+            self.nmt_state = payload[0] & 0x7f
+            self.nmt_stamp_ns = stamp_ns
+            if self.nmt_state != 5:
                 self.invalidate('receiver boot-up or non-operational', now_ns)
             return False
+        # A valid TPDO establishes Operational state, even while a fault
+        # prevents using its values. Losing local samples is not an NMT reset.
+        if self.nmt_stamp_ns is None or stamp_ns >= self.nmt_stamp_ns:
+            self.nmt_state, self.nmt_stamp_ns = 5, stamp_ns
         self.samples[cob_id] = (stamp_ns, payload)
-        if self.emergency_code or self.emergency_register:
+        if self.has_blocking_error():
             # Keep fresh physical inputs observable for B2 drive disable.
             # snapshot() still denies every motion sample while the fault is latched.
             self.reason = 'receiver EMCY is uncleared'
@@ -200,7 +229,7 @@ class RemdeviceReceiver:
 
     def snapshot(self, now_ns, *, consume=False):
         self._tick(now_ns)
-        if self.emergency_code or self.emergency_register:
+        if self.has_blocking_error():
             self.reason = 'receiver EMCY is uncleared'
             return None
         return self._snapshot(now_ns, consume=consume)
@@ -223,6 +252,7 @@ class RemdeviceReceiver:
             return None
         if consume:
             self.consumed = {cob: self.samples[cob][0] for cob in (self.digital_id, self.analog_id)}
-        self.reason = ('receiver EMCY is uncleared' if self.emergency_code or self.emergency_register
-                       else 'fresh PDO pair')
+        self.reason = ('receiver EMCY is uncleared' if self.has_blocking_error() else
+                       'fresh PDO pair; CAN overrun advisory' if self.overrun_is_advisory() else
+                       'fresh PDO pair')
         return PdoSample(min(digital_stamp, analog_stamp), decode_digital(digital), tuple(analog))

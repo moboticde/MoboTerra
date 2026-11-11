@@ -8,7 +8,7 @@ and derives the existing ROS node parameters; it is not a runtime control node.
 | File in `config/` | Owns |
 |:--|:--|
 | `platform.yaml` | Versioned physical profile: module records, CAN IDs/scaling/raw limits, wheel geometry, shared motion limits, frames, CAN/network endpoints, FlexiSoft telegram mapping, battery participants and USB receiver settings |
-| `driver.yaml` | Feedback/PDO timing and management/watchdog leases |
+| `driver.yaml` | SDO feedback timing and management/watchdog leases |
 | `kinematics.yaml` | Command/feedback freshness and minimum-speed policy |
 | `manual_control.yaml` | F310/F710 SDL axis/button mapping, boost scaling and source freshness |
 | `supervisor.yaml` | Mode transition, standstill, readiness, SOC threshold and speed-reduction policies |
@@ -27,7 +27,7 @@ Xacro reads the same profile; mesh and collision-envelope metadata remain CAD ev
 `diagnostics.odometry_timeout` also generates the supervisor's
 `health_input_timeout` for measured kinematics/odometry inputs. Configure that
 deadline in the diagnostics policy so producer and consumer agree. The separate
-supervisor `health_timeout` bounds health-report delivery and producer liveness;
+supervisor `health_timeout` bounds health-report romb and producer liveness;
 it does not replace acquisition-age validation or motion watchdogs.
 
 The defaults preserve the four-module layout (1.69 m / 0.99 m, 0.325 m radius),
@@ -37,18 +37,63 @@ settings, not automatically recalculated from a geometry edit. Recalibrate them
 when changing gearing, resolution or tyre dimensions. Software ceilings must fit
 the controller's raw velocity/current ceilings.
 
-Profiles may select two to four powered modules, using a unique subset in the
-order `front_left`, `front_right`, `rear_left`, `rear_right`. Each selected module
-must have both steering and traction, with distinct steering-axis XY coordinates.
-`platform-front-right-rear-left.yaml` is the reference diagonal two-module profile
-(drive IDs 3/4 and 7/8). See the [two-module setup guide](../../docs/two_module_setup.md)
-for preserving installed calibration, testing and hardware readiness limits.
+Profiles must contain all four modules, in canonical order: front_left,
+front_right, rear_left, rear_right. Every module has steering and traction.
+Configuration rejects missing modules; all eight joints propagate to the driver,
+ROMB, supervisor, odometry, description and virtual drives. See the
+[four-module setup guide](../../docs/four_module_setup.md).
 
-The number of modules is inferred from the `modules` list. There is no separate
-two/four mode, node implementation or manually maintained joint-count setting.
-Both layouts use the same application and image. The managed host also reads
-each CAN bus bitrate from this selected profile; adapter serial assignments and
-host lifecycle settings remain in `moboterra.env`.
+Each module's `controller` may be `miControl` (case insensitive). Omitting
+it defaults to miControl for both roles. Other controller families are rejected.
+Both hardware and virtual stacks use SDO transport.
+
+The supplied profiles use **121 native user position units per steering output
+revolution** for the installed miControl `0x3762` feedback and `0x3790` absolute
+target. Raw encoder increments at `0x3772` are a different quantity. Keep traction
+at its separate 4096-count scale. With a zero home reference, a 90-degree steering
+request rounds to 30 native user units; using 4096 here would request about 8.46
+physical turns. Per-wheel stop tolerances are derived from the same position
+scale. See [controller scaling evidence](../../docs/controller_object_mapping.md).
+
+```yaml
+modules:
+  - name: front_left
+    cad_steering_xyz: [0.845, 0.495, 0.749955467]
+    mounting_yaw: 0.0
+    steering: {joint: front_left_steering, can_node_id: '0x01', controller: miControl}
+    traction:
+      joint: front_left_traction
+      can_node_id: '0x02'
+      controller: miControl
+      min_traction_velocity: -1700  # miControl motor rpm
+      max_traction_velocity: 1700
+```
+
+`platform-four-micontrol.yaml` prepares all four modules with miControl steering
+and traction, using the existing geometry and CAN IDs. Native traction velocity
+bounds are motor rpm. Historical `traction_profile` fields are compatibility
+metadata; the driver preserves installed controller ramps.
+Software acceleration limits remain enforced by the supervisor. Verify installed
+miControl mode 3 / velocity target `0x3300`, rpm units and the `0x3762` position
+scale against the actual controller project before hardware operation. Changing
+the family alone does not validate encoder resolution, gearing or travel limits.
+
+MANUAL/AUTONOMOUS traction stays in velocity control. KINEMATICOFF switches
+miControl traction to current control (mode 2, `0x3200`) through the supervisor's
+standstill/acknowledgement transaction. Its current limit is
+`motion_limits.max_traction_current` [A], bounded by the selected drives'
+`min_current`/`max_current` [mA]. Only miControl is accepted, and the derived configuration exposes its verified
+current protocol.
+
+For `safety.source: flexisoft`, `safety.telemetry_required: false` makes Ethernet
+feedback monitoring only. This is the default four-module profile: the physical
+FlexiSoft-to-controller STO circuit handles hardware stops independently of ROS.
+The bridge, safety monitor and diagnostic topics remain available. Missing,
+stale or reported FlexiSoft state does not change drive enable, mode, reset,
+speed limits or fault latches. Direct scanner fields, operator STOP, battery,
+drive feedback/faults, known active drive STO and watchdogs retain their checks.
+Set the value to `true` for the additional FlexiSoft software interlocks.
+Profiles omitting the field retain the previous required-telemetry behavior.
 
 Native hardware launch also supports drives and battery on one SocketCAN interface.
 Both bitrate values must match and `can.battery.listen_only` must be `false`, since
@@ -166,3 +211,10 @@ Joystick position settings are `mode_switch_manual_value` and
 canonical constants; the numeric IDs and command-source behavior are unchanged.
 Rebuild dependent nodes and restart the complete stack together after interface
 changes.
+
+
+`motion_limits.max_traction_velocity` is wheel-contact speed in m/s. The supplied
+profiles were converted from their former output rad/s values by multiplying by
+wheel radius, preserving their physical limits. Driver, kinematics and supervisor
+share this unit. Native actuator velocity limits use motor rpm. The driver receives the same `geometry.wheel_radius` used by
+kinematics; m/s-to-native conversion occurs only at the driver boundary.

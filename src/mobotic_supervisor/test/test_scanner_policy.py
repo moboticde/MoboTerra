@@ -14,7 +14,8 @@ class ScannerPolicyTest(unittest.TestCase):
         self.fixture.setUp()
         self.platform = self.fixture.fixture
         self.node = self.fixture.node
-        self.node.safety_source = 'hardwired_sto'
+        self.node.safety_source = 'flexisoft'
+        self.node.require_flexisoft_telemetry = False
         self.node.selected_mode = harness.MODES.AUTONOMOUS
         self.node.motion_inputs_ready = True
         del self.node._source_gate
@@ -105,6 +106,7 @@ class ScannerPolicyTest(unittest.TestCase):
 
     def test_red_from_either_scanner_has_priority_over_yellow_and_override(self):
         self.node.safety_source = 'flexisoft'
+        self.node.require_flexisoft_telemetry = True
         self.node.safety_state.safety_override_active = True
         self.field(yellow=True)
         self.field('rear_right', red=True)
@@ -137,7 +139,7 @@ class ScannerPolicyTest(unittest.TestCase):
         self.platform.now = harness.Time(10.302)
         self.assertFalse(self.node._scanner_gate(self.platform.now)[0])
 
-    def test_red_recovery_requires_new_command_and_keeps_yellow_limit(self):
+    def test_red_recovery_requires_b2_even_after_new_commands_and_yellow_only(self):
         self.node._autonomy_command_callback(self.command())
         self.field(red=True)
         self.assertIsNone(self.node.autonomy_command)
@@ -145,10 +147,9 @@ class ScannerPolicyTest(unittest.TestCase):
         self.assertIsNone(self.node.autonomy_command)
         self.assertFalse(self.node._source_gate(self.platform.now)[0])
         self.node._autonomy_command_callback(self.command())
-        self.assertTrue(self.node._source_gate(self.platform.now)[0])
-        for _ in range(10):
-            out = self.publish(self.command())
-        self.assertAlmostEqual(out.linear.x, .3)
+        self.assertFalse(self.node._source_gate(self.platform.now)[0])
+        self.assertTrue(self.node.operator_drives_disabled)
+        self.assertIsNone(self.node.autonomy_command)
 
     def test_yellow_discards_inflight_unrestricted_kinematics(self):
         msg = self.fixture.joints()
@@ -187,11 +188,11 @@ class ScannerPolicyTest(unittest.TestCase):
             self.platform.feedback()
             node._publish_direct(source, self.platform.now)
             if step == 0:
-                speed = node.final_command_publisher.messages[-1].modules[0].traction_velocity * node.wheel_radius
+                speed = node.final_command_publisher.messages[-1].modules[0].traction_velocity
                 self.assertAlmostEqual(speed, .3)
         final = node.final_command_publisher.messages[-1]
-        self.assertTrue(all(abs(m.traction_velocity * node.wheel_radius) <= .3 + 1e-12 for m in final.modules))
-        self.assertAlmostEqual(final.modules[0].traction_velocity * node.wheel_radius, .3)
+        self.assertTrue(all(abs(m.traction_velocity) <= .3 + 1e-12 for m in final.modules))
+        self.assertAlmostEqual(final.modules[0].traction_velocity, .3)
         self.assertTrue(node._motion_hardware_gate(self.platform.now)[0])
         self.field('rear_right')
         node._publish_direct(source, self.platform.now)

@@ -6,13 +6,16 @@ VirtualMoboticDriveCanCommunication::VirtualMoboticDriveCanCommunication(const r
 {
   const auto id = declare_parameter<std::string>("can_node_id", "0x01");
   const auto role = declare_parameter<std::string>("drive_type", "steering");
+  const auto controller = declare_parameter<std::string>("controller_type", "micontrol");
   const auto resolution = declare_parameter<double>("encoder_resolution", 4096.0);
   const auto gearing = declare_parameter<double>("gear_ratio", role == "traction" ? 16.0 : 121.0);
   if (role != "steering" && role != "traction") { throw std::invalid_argument("drive_type must be steering or traction"); }
   std::size_t consumed = 0;
   const auto node_id = std::stoul(id, &consumed, 16);
   if (consumed != id.size() || node_id == 0 || node_id > 127) { throw std::invalid_argument("can_node_id must be 0x01..0x7F"); }
-  protocol_ = std::make_unique<VirtualDriveProtocol>(node_id, role == "traction", resolution, gearing);
+  if (role == "steering" && controller != "micontrol")
+  { throw std::invalid_argument("steering requires micontrol"); }
+  protocol_ = std::make_unique<VirtualDriveProtocol>(node_id, role == "traction", resolution, gearing, controller);
   last_update_ = now();
   // Every simulator receives all eight units' bootstrap configuration frames.
   pub_can_frames_ = create_publisher<can_msgs::msg::Frame>("can_tx", rclcpp::QoS(1000));
@@ -36,13 +39,7 @@ void VirtualMoboticDriveCanCommunication::canFrameCallback(const can_msgs::msg::
   for (auto reply : protocol_->handle(request))
   {
     reply.header.frame_id = "can";
-    // Every synchronous sample belongs to the same simulated acquisition
-    // instant. Per-process response times add scheduling skew between drives.
-    const auto& stamp = request.header.stamp;
-    const bool stamped_sync = request.id == 0x80 && request.dlc == 0 &&
-        stamp.sec >= 0 && stamp.nanosec < 1000000000u && (stamp.sec != 0 || stamp.nanosec != 0);
-    if (stamped_sync) { reply.header.stamp = stamp; }
-    else { reply.header.stamp = now(); }
+    reply.header.stamp = now();
     pub_can_frames_->publish(reply);
   }
 }

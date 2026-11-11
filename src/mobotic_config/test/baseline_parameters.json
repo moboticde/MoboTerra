@@ -224,7 +224,6 @@
     "axis_speed": 3,
     "axis_crab": 2,
     "axis_steer": 0,
-    "button_deadman": -1,
     "buttons_boost": [
       9,
       10

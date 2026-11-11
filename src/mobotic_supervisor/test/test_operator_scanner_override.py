@@ -12,7 +12,8 @@ class OperatorScannerOverrideTest(unittest.TestCase):
         fixture.setUp()
         self.f = fixture.fixture
         self.n = fixture.node
-        self.n.safety_source = 'hardwired_sto'
+        self.n.safety_source = 'flexisoft'
+        self.n.require_flexisoft_telemetry = False
         self.n.selected_mode = h.MODES.MANUAL
         self.n.operator_scanner_override_enabled = True
         self.n.get_clock = lambda: SimpleNamespace(now=lambda: self.f.now)
@@ -99,8 +100,8 @@ class OperatorScannerOverrideTest(unittest.TestCase):
         msg.velocity = [1, 1, 3, -1.5]
         self.n._emit_final(msg, self.f.now.to_msg(), self.f.now, h.WheelModuleCommandArray.MOTION)
         final = self.n.final_command_publisher.messages[-1]
-        self.assertAlmostEqual(final.modules[0].traction_velocity*self.n.wheel_radius, .3)
-        self.assertAlmostEqual(final.modules[1].traction_velocity*self.n.wheel_radius, -.15)
+        self.assertAlmostEqual(final.modules[0].traction_velocity, .3)
+        self.assertAlmostEqual(final.modules[1].traction_velocity, -.15)
 
     def test_malformed_selector_does_not_exempt_scanners(self):
         for buttons in ([0]*10, [0]*10+[2], []):
@@ -123,6 +124,7 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
         self.select = fixture.select
         n = self.n
         n.safety_source = 'flexisoft'
+        n.require_flexisoft_telemetry = True
         names = ['front_left', 'front_right', 'rear_left', 'rear_right']
         n.expected_module_names = names
         n.expected_steering_joint_names = [name + '_steering' for name in names]
@@ -246,7 +248,7 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
         msg.position = [0.0] * 8
         msg.velocity = [1.0] * 4 + [8.0, -4.0, 2.0, -1.0]
         n._emit_final(msg, self.f.now.to_msg(), self.f.now, h.WheelModuleCommandArray.MOTION)
-        speeds = [m.traction_velocity * n.wheel_radius for m in n.final_command_publisher.messages[-1].modules]
+        speeds = [m.traction_velocity for m in n.final_command_publisher.messages[-1].modules]
         self.assertEqual(len(speeds), 4)
         for speed, expected in zip(speeds, (.3, -.15, .075, -.0375)):
             self.assertAlmostEqual(speed, expected)
@@ -263,6 +265,62 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
         self.assertFalse(self.n._safety_gate(self.f.now)[0])
         self.assertTrue(all(m.traction_velocity == 0
                             for m in self.n.final_command_publisher.messages[-1].modules))
+
+
+class FourModuleMonitoringOnlyScannerOverrideTest(unittest.TestCase):
+    """Physical four-miControl profile with disconnected Ethernet scanners."""
+
+    def setUp(self):
+        fixture = FourModuleOperatorScannerOverrideTest()
+        fixture.setUp()
+        self.n, self.f = fixture.n, fixture.f
+        self.select = fixture.select
+        self.n.require_flexisoft_telemetry = False
+        self.n.safety_state = self.n.safety_io_state = None
+        self.n.safety_received = self.n.safety_io_received = None
+        # Exercise fault reporting beyond discovery and feedback grace periods.
+        self.n.started_at = h.Time(1)
+        self.n.startup_grace = 0.0
+        self.n.drive_startup_requested = True
+        self.n.drive_startup_completed_at = h.Time(1)
+
+    def test_disconnected_scanners_allow_manual_enable_without_scanner_faults(self):
+        self.assertEqual(len(self.n.expected_module_names), 4)
+        self.assertTrue(all(state == (None, None) for state in self.n.scanner_states.values()))
+        self.assertTrue(self.n._safety_gate(self.f.now)[0])
+        self.assertTrue(self.n._enable_gate(self.f.now)[0])
+        self.assertTrue(self.n._base_gate(self.f.now)[0])
+        self.assertEqual(self.n._system_conditions(self.f.now), ([], False))
+
+    def test_scanner_disconnect_callback_does_not_withdraw_enable(self):
+        self.f.now = h.Time(10.001)
+        for name in self.n.scanner_states:
+            msg = SimpleNamespace(header=SimpleNamespace(stamp=self.f.now.to_msg()),
+                scanner_id=name, communication_ok=False, protective_state_known=False,
+                warning_state_known=False, protective_field_clear=False,
+                warning_field_clear=False)
+            self.n._scanner_callback(name, msg)
+        self.assertTrue(self.n._enable_gate(self.f.now)[0])
+        self.assertEqual(self.n._system_conditions(self.f.now), ([], False))
+
+    def test_safety_enabled_restores_both_missing_scanner_faults(self):
+        self.select(False)
+        self.assertFalse(self.n._enable_gate(self.f.now)[0])
+        errors, _ = self.n._system_conditions(self.f.now)
+        for name in self.n.scanner_states:
+            self.assertIn('SCANNER_MONITOR_LOST:' + name, errors)
+
+    def test_receiver_fault_still_inhibits_with_safety_disabled(self):
+        self.n.manual_state.connected = False
+        self.n.manual_state.status_message = 'joystick receiver fault EMCY=0x8150'
+        self.assertIsNone(self.n._operator_selector_value(self.f.now))
+        self.assertFalse(self.n._enable_gate(self.f.now)[0])
+        self.assertIn('OPERATOR_LOST', self.n._system_conditions(self.f.now)[0])
+
+    def test_unknown_selector_does_not_exempt_disconnected_scanners(self):
+        self.n.operator_selector.header.stamp = h.Time(9).to_msg()
+        self.assertIsNone(self.n._operator_selector_value(self.f.now))
+        self.assertFalse(self.n._enable_gate(self.f.now)[0])
 
 
 if __name__ == '__main__':

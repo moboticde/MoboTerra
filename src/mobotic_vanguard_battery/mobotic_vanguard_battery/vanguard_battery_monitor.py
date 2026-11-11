@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass, field
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from can_msgs.msg import Frame
 from mobotic_interfaces.msg import BatterySystemState
 from rclpy.node import Node
@@ -331,8 +332,8 @@ def main(args=None):
     node = VanguardBatteryMonitor()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()

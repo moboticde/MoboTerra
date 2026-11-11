@@ -14,7 +14,7 @@ class ManualRejectionTest(unittest.TestCase):
         self.node = self.fixture.node
         self.node.selected_mode = harness.MODES.MANUAL
         self.warnings = []
-        self.node.get_logger = lambda: SimpleNamespace(warning=self.warnings.append)
+        self.node.get_logger = lambda: SimpleNamespace(warning=self.warnings.append, info=lambda _: None)
 
     def test_fresh_pail_input_reports_disabled_drives_without_buffering_motion(self):
         self.node.operator_drives_disabled = True
@@ -23,7 +23,7 @@ class ManualRejectionTest(unittest.TestCase):
             self.fixture.advance(0.02)
         self.assertIsNone(self.node.manual_command)
         self.assertEqual(len(self.warnings), 1)
-        self.assertIn('drives disabled by B2', self.warnings[-1])
+        self.assertIn('waiting for B2', self.warnings[-1])
         self.assertNotIn('stale', self.warnings[-1])
 
         self.node.operator_drives_disabled = False
@@ -71,5 +71,6 @@ class ManualRejectionTest(unittest.TestCase):
         self.assertIn('DRIVE_STARTUP_FAILED:front', self.warnings[-1])
         self.fixture.advance(2.0)
         self.node._manual_command_callback(self.fixture.velocity())
-        self.assertEqual(len(self.warnings), 2)
+        inhibited = [message for message in self.warnings if message.startswith('Manual velocity inhibited:')]
+        self.assertEqual(len(inhibited), 2)
         self.assertIsNone(self.node.manual_command)

@@ -65,7 +65,7 @@ class ManualSteeringTest(unittest.TestCase):
 
     def test_stop_or_other_source_gate_cannot_be_bypassed(self):
         self.accept()
-        self.node._source_gate = lambda now: (False, 'STOP')
+        self.node._source_gate = lambda now, **kwargs: (False, 'STOP')
         msg = self.fixture.joints()
         self.node.velocity_ledger[msg.header.stamp] = (7, harness.WheelModuleCommandArray.MOTION,
                                                      self.request.header.stamp, True)

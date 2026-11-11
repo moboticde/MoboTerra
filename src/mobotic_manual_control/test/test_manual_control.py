@@ -87,7 +87,6 @@ class ManualControlTest(unittest.TestCase):
         node.axis_speed = 3
         node.axis_steer = 0
         node.axis_crab = 2
-        node.button_deadman = -1
         node.buttons_boost = [9, 10]
         node.button_mode_switch = 4
         # Position-input fixtures exercise future RP1 semantics, not its CAN mapping.
@@ -112,16 +111,14 @@ class ManualControlTest(unittest.TestCase):
         node.require_neutral_rearm = True
         node.last_joy_time = None
         node.last_update_time = self.now
-        node.deadman_pressed = False
         node.turbo_active = False
         node.command = [0.0, 0.0, 0.0]
         node.warned_invalid_layout = False
         node.command_publisher = Publisher()
         node.state_publisher = Publisher()
 
-    def joy(self, *, moving=False, deadman=False, turbo=False):
+    def joy(self, *, moving=False, turbo=False):
         buttons = [0] * 15
-        buttons[8] = int(deadman)  # Optional-deadman test fixture only.
         buttons[10] = int(turbo)
         return SimpleNamespace(
             header=SimpleNamespace(stamp=self.now.to_msg()),
@@ -132,7 +129,6 @@ class ManualControlTest(unittest.TestCase):
     def seed_motion(self):
         self.node.last_joy_time = Time(10.0)
         self.node.command = [0.3, 0.2, 0.15]
-        self.node.deadman_pressed = True
         self.node.turbo_active = True
 
     def output(self):
@@ -151,7 +147,6 @@ class ManualControlTest(unittest.TestCase):
         self.assertEqual(self.output(), [0.0] * 3)
         self.assertEqual(self.node.command, [0.0] * 3)
         self.assertEqual(self.node.last_update_time.nanoseconds, self.now.nanoseconds)
-        self.assertFalse(self.node.deadman_pressed)
         self.assertFalse(self.node.turbo_active)
         state = self.node.state_publisher.messages[-1]
         self.assertFalse(state.connected)
@@ -217,38 +212,11 @@ class ManualControlTest(unittest.TestCase):
         self.node._joy_callback(SimpleNamespace(axes=[], buttons=[]))
         self.node._publish()
         self.assertEqual(self.output(), [0.0] * 3)
-        self.assertFalse(self.node.deadman_pressed)
         self.assertFalse(self.node.turbo_active)
         self.assertEqual(self.node.last_update_time.nanoseconds, self.now.nanoseconds)
         self.assertFalse(self.node.state_publisher.messages[-1].command_active)
 
-    def test_optional_deadman_still_stops_when_explicitly_configured(self):
-        self.node.button_deadman = 8
-        self.seed_motion()
-        self.now = Time(10.1)
-        self.node._joy_callback(self.joy(moving=True, deadman=False))
-        self.node._publish()
-        self.assertEqual(self.node.command, [0.0] * 3)
-        self.assertEqual(self.output(), [0.0] * 3)
-        self.assertFalse(self.node.state_publisher.messages[-1].command_active)
 
-    def test_deadman_held_at_start_requires_neutral_release_and_new_press(self):
-        self.node.button_deadman = 8
-        for pressed in (True, True):
-            self.node._joy_callback(self.joy(deadman=pressed))
-            self.assertFalse(self.node._manual_enabled())
-            self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
-        self.node._joy_callback(self.joy(deadman=False))
-        self.assertFalse(self.node._manual_enabled())
-        self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
-        self.node._joy_callback(self.joy(deadman=True))
-        self.assertTrue(self.node._manual_enabled())
-        self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
-        self.node._joy_callback(self.joy(deadman=True, moving=True))
-        self.assertGreater(self.node.command[0], 0)
-        self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
-        self.node._joy_callback(self.joy(deadman=False, moving=True))
-        self.assertEqual(self.node.command, [0, 0, 0])
 
     def test_unverified_usb_cannot_drive_or_request_modes(self):
         self.node.input_mapping_verified = False
@@ -274,7 +242,7 @@ class ManualControlTest(unittest.TestCase):
         self.node._joy_callback(msg)
         self.assertLess(self.node.command[0], 0)
         self.assertLess(self.node.command[1], 0)
-        self.assertGreater(self.node.command[2], 0)  # reversed speed and steering
+        self.assertLess(self.node.command[2], 0)  # steering sign is independent of speed sign
 
     def test_clock_reversal_clears_old_motion(self):
         self.seed_motion()
@@ -298,7 +266,7 @@ class ManualControlTest(unittest.TestCase):
 
     def switch(self, value):
         self.now = Time(self.now.nanoseconds / 1e9 + 0.02)
-        msg = self.joy(deadman=False)
+        msg = self.joy()
         msg.buttons[self.node.button_mode_switch] = value
         self.node._joy_callback(msg)
 
@@ -479,8 +447,8 @@ class ManualControlTest(unittest.TestCase):
         self.assertGreater(self.node.command[1], 0)
         self.assertEqual(self.node.command[2], 0)
 
-    def test_steering_yaw_follows_forward_reverse_direction(self):
-        for speed in (-1.0, 1.0):
+    def test_steering_yaw_is_independent_of_forward_reverse_and_zero_speed(self):
+        for speed in (-1.0, 0.0, 1.0):
             self.setUp()
             self.node._joy_callback(self.joy())
             self.now = Time(10.2)
@@ -488,7 +456,7 @@ class ManualControlTest(unittest.TestCase):
             msg.axes[3] = speed
             msg.axes[0] = 1.0
             self.node._joy_callback(msg)
-            self.assertGreater(self.node.command[2] * speed, 0)
+            self.assertGreater(self.node.command[2], 0)
 
     def test_nonfinite_or_out_of_range_axis_stops_motion(self):
         for value in (float('nan'), float('inf'), 1.1):
@@ -498,7 +466,7 @@ class ManualControlTest(unittest.TestCase):
             self.node._joy_callback(msg)
             self.assertEqual(self.node.command, [0.0] * 3)
 
-    def test_manual_motion_needs_no_shoulder_and_reports_no_fake_deadman(self):
+    def test_manual_motion_needs_no_shoulder_and_reports_no_hold_input(self):
         self.node._joy_callback(self.joy())
         self.now = Time(10.1)
         self.node._joy_callback(self.joy(moving=True))
@@ -534,7 +502,7 @@ class ManualControlTest(unittest.TestCase):
         self.node._joy_callback(msg)
         self.assertEqual(self.node.command, [0.0] * 3)
 
-    def test_invalid_layout_is_inactive_even_without_deadman_requirement(self):
+    def test_invalid_layout_is_inactive(self):
         self.node._joy_callback(self.joy(moving=True))
         self.node._joy_callback(SimpleNamespace(axes=[], buttons=[]))
         self.node._publish()
@@ -542,19 +510,12 @@ class ManualControlTest(unittest.TestCase):
         self.assertFalse(self.node.state_publisher.messages[-1].connected)
         self.assertFalse(self.node.state_publisher.messages[-1].command_active)
 
-    def test_boost_and_optional_deadman_configuration_is_validated(self):
+    def test_boost_configuration_is_validated(self):
         for buttons in ([], [-1], [9, 9]):
             self.node.buttons_boost = buttons
             with self.assertRaises(ValueError):
                 self.node._validate_parameters()
         self.node.buttons_boost = [9, 10]
-        self.node.button_deadman = -2
-        with self.assertRaises(ValueError):
-            self.node._validate_parameters()
-        self.node.button_deadman = 9
-        with self.assertRaises(ValueError):
-            self.node._validate_parameters()
-        self.node.button_deadman = -1
         self.node.button_mode_switch = -1
         self.node._validate_parameters()
 

@@ -30,6 +30,15 @@ public:
     return true;
   }
   void newSupervisor() { last_recovery_id_ = 0; }
+  // A healthy completed startup may begin one acknowledged operating-mode
+  // change. The caller must first authorize standstill and disable the drives.
+  // This cannot clear a failed startup or bypass explicit fault recovery.
+  bool prepareModeChange()
+  {
+    if (!complete_ || failed_) { return false; }
+    started_ = complete_ = false;
+    return true;
+  }
 private:
   bool started_{false}, complete_{false}, failed_{false};
   uint64_t last_recovery_id_{0};

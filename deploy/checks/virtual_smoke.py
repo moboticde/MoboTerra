@@ -12,6 +12,7 @@ from diagnostic_msgs.msg import DiagnosticArray
 from mobotic_interfaces.msg import WheelModuleStatusArray, VehicleModeState, OperatorState, WheelModuleCommandArray
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
+from std_srvs.srv import Trigger
 from mobotic_config.configuration import Configuration
 
 
@@ -63,6 +64,12 @@ def main():
             msg.status_message = 'virtual smoke check: neutral, no motion source'
             operator.publish(msg)
         operator_timer = node.create_timer(0.05, publish_neutral_operator)
+        # Exercise the same explicit B2 admission as a human operator. This
+        # checker starts only the virtual stack; no hardware bridge is launched.
+        toggle = node.create_client(Trigger, '/moboterra/wheel_modules/enable_drives')
+        enable_future = None
+        enable_requested = False
+        next_enable_attempt = 0.0
         try:
             deadline = time.monotonic() + 60
             ready_since = None
@@ -70,6 +77,22 @@ def main():
                 if launch.poll() is not None:
                     raise RuntimeError('Virtual launch exited before validation')
                 rclpy.spin_once(node, timeout_sec=0.2)
+                if enable_future is not None and enable_future.done():
+                    result = enable_future.result()
+                    enable_requested = result.success
+                    enable_future = None
+                    next_enable_attempt = time.monotonic() + 1.0
+                mode = samples.get('mode')
+                # A transient interlock can withdraw an accepted request. This
+                # virtual-only operator must supply another B2 when requested,
+                # rather than wait forever on its earlier service acceptance.
+                if enable_requested and mode is not None and 'B2_ENABLE_REQUIRED' in mode.reason_codes:
+                    enable_requested = False
+                if (not enable_requested and enable_future is None
+                        and time.monotonic() >= next_enable_attempt and toggle.service_is_ready()
+                        and mode is not None and not mode.drives_enabled and not mode.reset_in_progress
+                        and 'B2_ENABLE_REQUIRED' in mode.reason_codes):
+                    enable_future = toggle.call_async(Trigger.Request())
                 names = {name for name, namespace in node.get_node_names_and_namespaces()
                          if namespace == '/moboterra'}
                 ready = (expected <= names and {'joints', 'odom', 'modules', 'diagnostics', 'mode'} <= samples.keys()
@@ -115,7 +138,7 @@ def main():
             raise
         finally:
             node.destroy_node()
-            rclpy.shutdown()
+            rclpy.try_shutdown()
             try:
                 os.killpg(launch.pid, signal.SIGINT)
                 launch.wait(timeout=5)

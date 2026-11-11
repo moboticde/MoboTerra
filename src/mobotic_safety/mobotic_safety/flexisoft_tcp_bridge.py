@@ -4,6 +4,7 @@ import threading
 import uuid
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from std_msgs.msg import UInt8MultiArray
@@ -153,9 +154,9 @@ def main(args=None):
     try:
         node = FlexiSoftTcpBridge()
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         if node is not None:
             node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()

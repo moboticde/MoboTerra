@@ -100,7 +100,8 @@ class ModeTransitionTest(unittest.TestCase):
         node = self.node
         node.operator_scanner_override_enabled = True
         node.require_operator_interlock = True
-        node.safety_source = 'hardwired_sto'
+        node.safety_source = 'flexisoft'
+        node.require_flexisoft_telemetry = False
         node.manual_state = SimpleNamespace(
             header=SimpleNamespace(stamp=self.now.to_msg()), source_id='remdevice',
             connected=True, estop_state_known=True, estop_pressed=False)
@@ -244,7 +245,8 @@ class ModeTransitionTest(unittest.TestCase):
         self.node.battery_received = self.node.wheel_status_received = self.now
         self.node.measured_velocity_received = self.node.joint_state_received = self.now
         self.node._control()
-        self.assertTrue(self.node.transition_in_progress)
+        self.assertFalse(self.node.transition_in_progress)
+        self.assertTrue(self.node.operator_drives_disabled)
         self.assertIsNone(self.node.transition_standstill_since)
 
     def test_invalid_feedback_clears_cached_standstill(self):
@@ -267,9 +269,9 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertTrue(self.node.transition_timed_out)
         self.advance(0.3)
         self.advance(0.3)
-        self.assertTrue(self.node.transition_in_progress)
+        self.assertFalse(self.node.transition_in_progress)
+        self.assertTrue(self.node.operator_drives_disabled)
         self.assertEqual(self.node.selected_mode, harness.MODES.MANUAL)
-        self.assertIn('timed out', self.states[-1][3])
         accepted, _, _ = self.node._request_mode(harness.MODES.AUTONOMOUS)
         self.assertFalse(accepted)  # Timeout is now latched until explicit reset.
         self.assertIn('MODE_TRANSITION_TIMEOUT', self.node.fault_codes)
@@ -282,7 +284,8 @@ class ModeTransitionTest(unittest.TestCase):
         self.assertEqual(self.node.last_output, [0.0, 0.0, 0.0])
         self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
         self.advance(0.5)
-        self.assertTrue(self.node.transition_in_progress)
+        self.assertFalse(self.node.transition_in_progress)
+        self.assertTrue(self.node.operator_drives_disabled)
 
     def test_direct_mode_stop_uses_only_direct_joint_input(self):
         self.node.selected_mode = harness.MODES.KINEMATICOFF

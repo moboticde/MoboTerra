@@ -1,4 +1,4 @@
-"""Delayed/replayed CAN delivery must not renew battery telemetry freshness."""
+"""Delayed/replayed CAN romb must not renew battery telemetry freshness."""
 
 from types import SimpleNamespace
 import math
@@ -45,7 +45,7 @@ class CanTimestampTest(unittest.TestCase):
         self.node._publish()
         self.assertTrue(self.platform.system[-1].system_ready)
 
-    def test_delayed_delivery_expires_at_acquisition_plus_timeout(self):
+    def test_delayed_romb_expires_at_acquisition_plus_timeout(self):
         self.clear_samples()
         self.send_all(9.51)  # 490 ms old with a 500 ms timeout.
         self.node._publish()

@@ -99,13 +99,17 @@ class TcpBridgeTest(unittest.TestCase):
     def setUp(self):
         NodeAdapter.parameters = {'bind_address': '127.0.0.1', 'accept_timeout': 0.05}
         self.ros_calls = []
+        def try_shutdown():
+            if 'shutdown' not in self.ros_calls:
+                self.ros_calls.append('shutdown')
         self.ros = SimpleNamespace(
             init=lambda **kwargs: self.ros_calls.append('init'),
-            shutdown=lambda: self.ros_calls.append('shutdown'),
+            try_shutdown=try_shutdown,
         )
         tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
         self.namespace = dict(
             math=math, socket=socket, threading=threading, rclpy=self.ros,
+            ExternalShutdownException=type('ExternalShutdownException', (Exception,), {}),
             Node=NodeAdapter, UInt8=SimpleNamespace, UInt8MultiArray=SimpleNamespace,
             SafetyTelegram=lambda: SimpleNamespace(header=SimpleNamespace(stamp=None)), uuid=uuid,
             Clock=lambda **kwargs: SimpleNamespace(**kwargs),
@@ -310,6 +314,17 @@ class TcpBridgeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.namespace['main']()
         self.assertEqual(self.ros_calls, ['init', 'shutdown'])
+
+    def test_signal_handler_shutdown_before_spin_exit_is_clean(self):
+        with patch.object(self.bridge_class, '_serve'):
+            def spin(node):
+                self.nodes.append(node)
+                self.ros.try_shutdown()  # ROS SIGINT handler already shut down.
+                raise self.namespace['ExternalShutdownException']()
+            self.ros.spin = spin
+            self.namespace['main']()
+        self.assertEqual(self.ros_calls, ['init', 'shutdown'])
+        self.assertTrue(self.nodes[-1].destroyed)
 
     def test_keyboard_interrupt_is_a_normal_clean_exit(self):
         with patch.object(self.bridge_class, '_serve'):

@@ -1,7 +1,6 @@
 # Wheel command path, EC comparison and latency
 
-Source review: 23 October 2026. This describes the local MoboTerra source and
-the two-module `platform-front-right-rear-left.yaml` profile. Timing values are
+This describes the local MoboTerra four-module source configuration. Timing values are
 configured periods, not measurements of an installed robot. Policy overlays
 can change them.
 
@@ -30,6 +29,12 @@ operator/cmd_vel or autonomy/cmd_vel
 In KINEMATICOFF, `autonomy/joint_setpoints` goes to the supervisor and uses the
 same final `wheel_modules/command` input. It bypasses inverse kinematics for
 commands; measured feedback and monitoring still operate.
+Traction is current-controlled in this mode: the external JointState effort
+entries carry signed amperes for traction and zero for steering; traction
+velocity entries are zero. Native mode changes are disabled/zero-target,
+standstill-authorized transactions with readback before motion. The confirmed
+implementation uses miControl mode 2 / `0x3200`; unverified ELMO current mode
+is rejected. MANUAL/AUTONOMOUS remain velocity-controlled.
 
 Kinematics does not initialize or enable drives. The supervisor uses
 `wheel_modules/operation_command` for enable/disable and reset transactions.
@@ -50,11 +55,11 @@ launch files can use different namespaces/remappings.
 | Driver feedback to kinematics | `joint_states`; `JointState` | `joint_states`; `JointState` |
 | Candidate publication trigger | Computes on velocity input, then republishes the stored targets on feedback while enabled | Computes/publishes on valid velocity input when cached feedback is fresh |
 | Feedback traction position | Published as zero | Tracked controller rotation, subject to position validity |
-| `JointState.effort` | Motor current in feedback; optional current-mode command values | Empty; current is reported in `wheel_modules/status`; traction commands use velocity mode |
+| `JointState.effort` | Motor current in feedback; optional current-mode command values | Feedback is empty; direct KINEMATICOFF commands use traction current [A] |
 | Enable/reset interface | Separate driver services | Supervisor-owned management messages and verified reset transaction |
 
 Both command paths carry steering target angle [rad], steering profile speed
-[rad/s] and signed traction wheel speed [rad/s]. Both associate joints by name;
+[rad/s] and signed traction wheel-contact speed [m/s]. Both associate joints by name;
 their wire contracts are not interchangeable by topic renaming alone.
 
 ## Final wheel command message
@@ -77,15 +82,18 @@ record contains:
 
 | Field | Unit and meaning |
 | --- | --- |
-| `name` | Module name: `front_right` or `rear_left` in the reviewed two-module profile |
+| `name` | One of `front_left`, `front_right`, `rear_left`, `rear_right` |
 | `steering_position` | Target steering angle [rad] |
 | `steering_profile_velocity` | Nonnegative steering movement profile speed [rad/s] |
-| `traction_velocity` | Signed wheel/output rotation speed [rad/s], not motor rpm or body m/s |
+| `traction_velocity` | Signed wheel-contact speed [m/s]; converted to motor units at the driver boundary |
+| `traction_current_control` | True only for KINEMATICOFF current control |
+| `traction_current` | Signed motor-current target [A]; zero in velocity control |
 
-The default four-module profile has four records; the two-module profile has
-two. These are motion targets, not measured positions, current commands or
-enable requests. `wheel_modules/operation_command` separately carries the
-supervisor identity/generation, timestamp, enable flag and reset ID.
+The four-module profile has four records. These are targets, not measurements or enable requests. Velocity and current
+fields are mutually exclusive and checked against selected vehicle/controller
+modes. `wheel_modules/operation_command` separately carries supervisor
+identity/generation, timestamp, enable/reset, desired traction control mode and
+the standstill-authorized mode-reconfiguration flag.
 
 CONTROLLED_STOP only reduces existing traction magnitude without reversing;
 HOLD requests zero traction. Both hold actual steering. The driver independently
@@ -95,7 +103,7 @@ for stop/hold commands.
 
 ## Latency and reaction time
 
-The return through the supervisor adds one ROS message delivery and callback
+The return through the supervisor adds one ROS message romb and callback
 compared with sending kinematics output directly to the driver. It does not
 add another fixed 20 ms control-cycle wait: the supervisor correlates, validates
 and emits the final command inside `_kinematics_candidate_callback`.
@@ -155,9 +163,9 @@ callback interval. Record typical, high-percentile and maximum observed delay,
 command gaps, watchdog activations and the selected policy/profile. Evaluate
 physical reaction only during the existing secured hardware acceptance process.
 
-Implementation references: [kinematics](../src/mobotic_kinematics/src/mobotic_kinematics.cpp),
+Implementation references: [kinematics](../src/mobotic_kinematics/mobotic_kinematics/romb/adapter.py),
 [supervisor](../src/mobotic_supervisor/mobotic_supervisor/supervisor.py),
 [driver](../src/mobotic_driver/src/mobotic_driver.cpp),
 [supervisor policy](../src/mobotic_config/config/supervisor.yaml),
 [driver policy](../src/mobotic_config/config/driver.yaml) and
-[two-module profile](../src/mobotic_config/config/platform-front-right-rear-left.yaml).
+[four-module profile](../src/mobotic_config/config/platform-four-micontrol.yaml).

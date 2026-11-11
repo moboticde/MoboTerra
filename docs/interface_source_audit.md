@@ -19,7 +19,7 @@ The audit read implementation files, not just their README descriptions:
   mode requests, effective state precedence, source selection, final command
   authority, required fault collection and reset callbacks.
 - `src/mobotic_manual_control/mobotic_manual_control/manual_control.py`:
-  operator publication, input known flags, neutral/deadman rearm and raw `joy`.
+  operator publication, input known flags, neutral rearm and raw `joy`.
 - `src/mobotic_driver/src/mobotic_driver.cpp`: final-command subscriptions,
   internal services, per-drive current/status, PDO acquisition and physical
   position/enable/publication gates.

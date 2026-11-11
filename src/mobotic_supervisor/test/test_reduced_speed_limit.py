@@ -18,7 +18,7 @@ class ReducedSpeedLimitTest(unittest.TestCase):
         n.expected_module_names = names
         n.expected_steering_joint_names = [name + '_steering' for name in names]
         n.expected_traction_joint_names = [name + '_traction' for name in names]
-        n.safety_source = 'hardwired_sto' if condition == 'rp2_disabled' and count == 2 else 'flexisoft'
+        n.safety_source = 'flexisoft'
         n.direct_traction_control_mode = 'velocity'
         n.warning_speed_limit = 1.0  # An overlay must never raise the absolute cap.
         n.max_acceleration_linear = n.max_acceleration_angular = 100
@@ -69,7 +69,7 @@ class ReducedSpeedLimitTest(unittest.TestCase):
                         continue  # RP2 bypass does not authorize automatic modes.
                     self.node._emit_final(msg, self.now.to_msg(), self.now, h.WheelModuleCommandArray.MOTION)
                     wheels = self.node.final_command_publisher.messages[-1].modules
-                    speeds = [wheel.traction_velocity * self.node.wheel_radius for wheel in wheels]
+                    speeds = [wheel.traction_velocity for wheel in wheels]
                     self.assertAlmostEqual(max(map(abs, speeds)), .3)
                     for i, speed in enumerate(speeds):
                         self.assertAlmostEqual(speed / speeds[0], (-.5) ** i)
@@ -97,7 +97,7 @@ class ReducedSpeedLimitTest(unittest.TestCase):
                         self.node._emit_final(msg, self.now.to_msg(), self.now,
                             h.WheelModuleCommandArray.CONTROLLED_STOP)
                     wheels = self.node.final_command_publisher.messages[-1].modules
-                    self.assertTrue(all(abs(m.traction_velocity * self.node.wheel_radius) <= .3 + 1e-12
+                    self.assertTrue(all(abs(m.traction_velocity) <= .3 + 1e-12
                                         for m in wheels))
 
     def test_lower_configured_limits_and_slow_commands_remain_lower(self):
@@ -106,22 +106,22 @@ class ReducedSpeedLimitTest(unittest.TestCase):
                 msg = self.configure(count, condition)
                 self.node.warning_speed_limit = .15
                 self.node._emit_final(msg, self.now.to_msg(), self.now, h.WheelModuleCommandArray.MOTION)
-                self.assertAlmostEqual(max(abs(m.traction_velocity * self.node.wheel_radius)
+                self.assertAlmostEqual(max(abs(m.traction_velocity)
                     for m in self.node.final_command_publisher.messages[-1].modules), .15)
                 for i in range(count, 2 * count):
-                    msg.velocity[i] = .1 / self.node.wheel_radius
+                    msg.velocity[i] = .1
                 self.node._emit_final(msg, self.now.to_msg(), self.now, h.WheelModuleCommandArray.MOTION)
-                self.assertTrue(all(abs(m.traction_velocity * self.node.wheel_radius - .1) < 1e-12
+                self.assertTrue(all(abs(m.traction_velocity - .1) < 1e-12
                     for m in self.node.final_command_publisher.messages[-1].modules))
 
-    def test_wheel_radius_conversion_and_clear_policy(self):
+    def test_contact_speed_cap_is_independent_of_radius_and_clear_policy(self):
         for count in (2, 4):
             for radius in (.1, .325, .5):
                 with self.subTest(count=count, radius=radius):
                     msg = self.configure(count, 'flexisoft_disabled')
                     self.node.wheel_radius = radius
                     self.node._emit_final(msg, self.now.to_msg(), self.now, h.WheelModuleCommandArray.MOTION)
-                    self.assertAlmostEqual(max(abs(m.traction_velocity * radius)
+                    self.assertAlmostEqual(max(abs(m.traction_velocity)
                         for m in self.node.final_command_publisher.messages[-1].modules), .3)
                     self.node.safety_state.safety_override_active = False
                     self.node._emit_final(msg, self.now.to_msg(), self.now, h.WheelModuleCommandArray.MOTION)

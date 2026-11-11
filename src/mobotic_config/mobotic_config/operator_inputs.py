@@ -35,12 +35,12 @@ class RemdeviceMapping:
                     or not 0 <= axis['zero'] < axis['full_scale'] <= 255
                     or type(axis['invert']) is not bool):
                 raise ValueError('invalid REMdevice axis calibration/polarity')
-        if set(self.buttons) not in ({'mode', 'boost', 'reset', 'deadman'},
-                                    {'mode', 'boost', 'reset', 'deadman', 'scanner_override'}):
-            raise ValueError('mode, boost, reset and explicit deadman (null to disable) required')
+        if set(self.buttons) not in ({'mode', 'boost', 'reset'},
+                                    {'mode', 'boost', 'reset', 'scanner_override'}):
+            raise ValueError('mode, boost and reset required; scanner_override is optional')
         signals = set()
         for role, button in self.buttons.items():
-            if role in ('deadman', 'scanner_override') and button is None:
+            if role == 'scanner_override' and button is None:
                 continue
             if (not isinstance(button, dict) or set(button) != {'signal', 'active_high'}
                     or type(button['active_high']) is not bool

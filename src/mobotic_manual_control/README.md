@@ -10,9 +10,8 @@ USB joystick connection. Raw input remains available with
 enabling motion. Use `game_controller_node` for the Logitech profile described
 below. Launch starts exactly one provider. CAN and USB mappings are independent.
 
-A deadman means hold-to-drive: releasing a configured button outputs zero motion.
-This optional feature is implemented for both transports, but remains disabled
-by default (`button_deadman: -1` for USB, `deadman: null` in a verified CAN map).
+Manual input uses neutral rearm and fresh commands. Hold-to-drive button support
+has been removed from both USB and CAN input.
 
 Converts `sensor_msgs/msg/Joy` into a supervised `operator/cmd_vel` command source for the vehicle
 supervisor. It also publishes `mobotic_interfaces/msg/OperatorState` on `operator/state`.
@@ -21,33 +20,39 @@ The node never calls drive services. A stale joystick or invalid joystick layout
 a zero command and an inactive state. The supervisor remains the only component allowed to select this command
 source and authorize motion.
 
-For CAN, `operator/state.connected` reports fresh physical LINK/EMGY/STOP
-evidence. It is independent of command readiness: an EMCY or incomplete PDO pair
-sets `command_active: false`, discards motion, and requires fresh neutral rearm.
+For CAN, `operator/state.connected` requires fresh physical LINK/EMGY/STOP
+evidence and a receiver without an active EMCY/input fault. An EMCY withdraws
+drive readiness and reports its code with joystick/receiver restart guidance;
+the supervisor disables drives and waits for B2 after the fault is corrected.
+An incomplete PDO pair sets `command_active: false`, discards motion, and
+requires fresh neutral rearm without fabricating physical STOP state.
 The physical status retains its own digital acquisition time and expires after
 250 ms; EMCYs and publishing timers cannot refresh it. STOP/radio loss still
-inhibit immediately. This lets supervised zero-target controller initialization
-continue while the motion source rearms, without accepting an old command.
+inhibit immediately. Once the receiver is healthy, supervised zero-target
+controller initialization can proceed under B2 authorization while the motion
+source rearms, without accepting an old command.
 The measured RP2 selector is published separately on `operator/scanner_selector`
 with its digital acquisition timestamp and no motion axes. Publishing that
 physical switch state never feeds the teleop callback or rearms motion.
-Hardware bringup uses a separate receive-only SocketCAN channel filtered to the
-operator receiver IDs and CAN errors. This prevents drive-message bursts from
-dropping operator samples; all input freshness checks still use CAN acquisition
-time. The operator sends its permitted NMT/SDO recovery traffic through the
-existing shared sender.
-No hold-to-drive button is required in the default profile (`button_deadman: -1`).
-An optional configured deadman still stops immediately when released. In MANUAL,
+Hardware bringup uses two receive-only SocketCAN channels: `operator_rx/can_rx`
+contains the two control PDOs, while `operator_events/can_rx` contains receiver
+EMCY, SDO and heartbeat messages. Both retain CAN errors and acquisition stamps.
+Separate bounded DDS histories prevent diagnostic bursts from evicting control
+PDOs; queued samples still have to meet the existing 250 ms age and 75 ms pair
+skew limits. Receiver faults and STOP retain their existing inhibition behavior.
+The operator sends permitted NMT/SDO recovery traffic through the existing shared
+sender. The extra reader does not transmit CAN frames. Virtual input stays on
+the isolated `operator_can` topics.
+In MANUAL,
 stick input can command motion without pressing a button, subject to supervisor
 readiness and speed limits; keep sticks neutral during startup and mode changes.
 
-Joystick timeout/disconnection clears the stored velocity, deadman/turbo flags,
+Joystick timeout/disconnection clears the stored velocity, turbo state,
 and acceleration timing. The callback also detects a receipt gap before accepting
 a reconnect message, so timer ordering cannot revive an old command. A neutral
 joystick remains at zero after reconnection. Held nonzero controls cannot rearm:
 fresh neutral input is required before subsequent stick movement is accepted.
-A configured deadman additionally requires release and a new press. A backward
-clock jump, mode/authority change or safety recovery requires this same rearm.
+A backward clock jump, mode/authority change or safety recovery requires this same rearm.
 
 The temporary USB profile is for Logitech F310/F710, using the hardware XInput
 setting and `joy/game_controller_node`. It uses SDL's standardized ROS layout,
@@ -65,12 +70,11 @@ to operator command/state, not directly to `joy`.
 
 ## Temporary Logitech controls
 
-For the measured PAIL CAN receiver in virtual mode, the left paddle (A2) steers,
-including pre-steering at standstill. The right cross stick uses A3 for
-forward/reverse and A4 for crab left/right, with zero yaw when the paddle is
-centred. These CAN channel numbers are independent of the USB indices below.
-Stationary angle requests pass through the supervisor and are disabled by
-default outside the virtual CAN launch.
+The measured PAIL CAN mapping uses A2 for left-stick steering and A3/A4 for
+right-stick forward/reverse and sideways translation. These channel numbers are
+independent of the USB indices below. Left-stick input alone does not steer or
+rotate the vehicle. Manual steering families are selected by the first qualifying
+steering input; crab wins if both qualify in the same acquisition sample.
 
 | Physical control | ROS index | Role |
 |:--|:--|:--|
@@ -82,17 +86,67 @@ default outside the virtual CAN launch.
 | Back | button 4 | Toggle MANUAL (0) / AUTONOMOUS (1), temporary RP1 role |
 | Left stick vertical, face buttons, Start, stick clicks, D-pad and triggers | unused | No assigned function |
 
-The two right-stick translation axes are independent. Left-stick yaw is proportional to
-forward/reverse input, so it does not command stationary rotation. The supervisor
-still applies planar speed and safety limits. L1 or R1 boosts while held; pressing
-both does not stack the boost. Releasing them returns to the normal scale without
-disabling driving. Boost cannot bypass supervisor limits, and USB controls do not
-replace the independent RP2/STOP safety chain.
+Ackermann uses left-stick horizontal plus right-stick forward/reverse; right-stick
+sideways input is ignored after Ackermann wins. Curvature derives from configured
+wheel coordinates so full left-stick throw reaches 45 degrees on the innermost
+wheel; outer wheels use the matching smaller angle. Front and rear steering retain
+the existing coordinated four-wheel model, with opposite angles for a common turn
+centre. Reversing changes yaw sign with travel direction.
 
-`operator/state.deadman_pressed` reports an actual configured button, not simulated
-permission; it is false with the default disabled deadman. The supervisor requires
-fresh `connected` and `command_active` flags. The manual node includes any optional
-deadman requirement in `command_active`.
+Crab uses only the right-stick vector and ignores the left stick. Sideways-only
+input drives sideways at a 90-degree heading; diagonal input gives the corresponding
+intermediate heading. Every wheel stays within +/-90 degrees. Straight travel
+without steering does not reserve a family. After selection, only neutral owning
+controls plus fresh measured body AND individual traction standstill release it.
+Returning the ignored stick to centre is not required. A connection/authority
+reset discards the selection and old motion commands. `operator/state.status_message`
+reports `steering=ackermann`, `crab`, `straight` or `idle`.
+
+Final manual wheel commands are checked in both authorities, for native and romb
+backends. Targets use the nearest full-turn home and account for pi-mounted right
+units and their traction polarity. Traction follows the requested travel command while steering moves; there is
+no wait-for-heading traction gate. Like the example project, steering headings
+use the previous requested positions for continuity. An equivalent heading that
+would need more than 90 degrees of steering instead reverses traction. Reversing
+full sideways Crab therefore keeps the four steering targets and reverses travel,
+rather than sweeping the steering from +90 to -90 degrees.
+
+Crab uses one shared rolling-axis choice for all four modules, including
+pi-mounted right motors. Starting directly sideways and approaching sideways
+gradually choose the same controller-angle branch. When an up-to-sideways-to-down
+stick sweep reaches +/-90 degrees, steering stays at that endpoint and traction
+is zero beyond the boundary. Returning toward the forward half-plane or neutral
+releases the boundary; no nearly-180-degree steering sweep is requested.
+At neutral, the command reports measured hold positions instead of unbounded
+wrapped kinematics angles.
+
+Both kinematics backends publish complete wheel-target batches as fresh velocity
+commands arrive, using the latest fresh, complete joint feedback. Publication is
+not throttled to the slower physical SDO feedback cycle: the driver retains its
+100 ms command watchdog. Source timestamps, command expiry and authority checks
+remain enforced.
+Every moving steering motor receives the same configured profile-speed limit,
+as in the example. Each motor's profile becomes zero when its target is reached
+within one configured encoder count. Small endpoint overshoot does not restart
+corrections; inward input permits steering again. The driver applies the zero
+profile and skips another position-move request while traction continues.
+
+Steering bounds retain a fixed full-turn reference for each homing/authority
+cycle; moving feedback cannot shift it. Physical-heading and controller-coordinate
+targets stay inside +/-90 degrees for Crab and +/-45 degrees for Ackermann,
+including rounded pi mounting offsets. Ackermann keeps the geometry-dependent
+inner/outer angles; Crab rolling axes stay parallel. Shared command timing and
+profile limits do not guarantee identical physical arrival times: controller
+ramps, CAN delivery and motor response still apply. Existing drive watchdogs and
+STOP/E-stop remain active.
+
+The supervisor still applies planar speed and safety limits. L1 or R1 boosts while
+held; pressing both does not stack the boost. Boost changes travel speed, not the
+45/90-degree steering ceilings, and cannot bypass platform limits.
+
+The supervisor requires fresh `connected` and `command_active` flags. The existing
+`OperatorState.deadman_pressed` and `deadman_state_known` fields remain false for
+message compatibility; they have no input mapping or permission logic.
 
 Standardized indices are documented by the
 [ROS joystick driver](https://github.com/ros-drivers/joystick_drivers/blob/ros2/joy/README.md).
@@ -135,17 +189,60 @@ The physical USB mapping and stop behavior still require hardware validation.
 
 The CAN provider decodes the documented unsigned-magnitude/direction format and
 supports mapped B2 rising-edge requests to the supervisor's
-`wheel_modules/toggle_drives`. B2 disables enabled drives or cancels pending
-initialization without requiring neutral controls. Enabling requires fresh
-neutral controls, healthy receiver input and supervisor approval. It never
+`wheel_modules/enable_drives`, matching Logitech X in the example project.
+B2 initializes/enables; repeated presses during initialization or while enabled
+leave the request unchanged. It never disables or cancels startup. Enabling requires fresh
+neutral controls, healthy receiver input and supervisor approval. B2 never
 reads or clears receiver error registers or restarts receiver communication.
 Held/reconnected B2 does not retry: release and press again. After a response,
-motion requires new neutral input. Active receiver faults remain inhibited;
-the stack stays running. See [B2 drive toggle](../../docs/remdevice_commissioning.md#b2-drive-enabledisable).
+motion requires new neutral input. Blocking receiver faults remain inhibited;
+the stack stays running. See [B2 drive enable](../../docs/remdevice_commissioning.md#b2-drive-enabledisable).
 RP2/STOP retain their independent safety functions.
+For a verified PAIL profile, `operator.receiver_can_overrun_advisory: true`
+allows only `0x8110` / register `0x11` to remain a visible warning while fresh
+validated controls continue. The default is `false`. This does not renew input
+timestamps or bypass stale/missing PDOs, invalid axes, STOP, LINK/EMGY, CAN-error
+frames or hardware safety. Collision `0x8150` and other faults remain blocking.
 The provider never rewrites PDO mappings, node ID or bitrate. Its explicit
 commissioning service can send targeted NMT start; after mapping verification,
-targeted NMT startup is automatic. See the guide for hardware acceptance.
+targeted NMT startup is automatic, rate-limited to once per second while the
+state is unknown, boot-up, Stopped or Pre-operational. Valid TPDOs or an
+Operational heartbeat establish Operational state. Missing/stale local input
+or a CAN error invalidates commands without implying an NMT state change or
+causing another Start. Heartbeats never refresh command samples. See the guide
+for hardware acceptance.
+
+`receiver_auto_recovery` defaults to `true` for verified CAN mappings. The
+provider reads the receiver's actual `0x1001:0` error register at startup and
+at most once per second, including while PDO input is healthy. This catches
+faults whose EMCY predates subscription, establishes a current-register
+baseline and distinguishes device health from a software default of zero.
+`operator/raw` includes the last matched register-read value and acquisition
+timestamp (both null before the first accepted response), plus the last known
+NMT state and its acquisition timestamp. These timestamps are observations;
+publishing diagnostics does not renew them. A fresh matching zero response clears a
+missed EMCY reset and discards old controls for blocking-fault recovery.
+`operator.receiver_auto_communication_reset` defaults to `false`: monitoring is
+read-only and never clears receiver history or resets the device. B2 only calls
+the supervisor's drive-enable service; it cannot trigger either a receiver read
+or a receiver reset. If communication reset is explicitly enabled in the profile,
+for `0x8150` with register `0x11`, it can reset the mapped receiver only, with fresh neutral
+radio inputs, a current supervisor report confirming disabled drives and no
+pending enable/toggle. It waits 500 ms before targeted NMT start. Resets are
+limited to three per process and spaced at least five seconds apart. Motion
+requires new neutral inputs after recovery; drive enable remains supervisor
+owned. Persistent faults, including EEPROM errors, stay inhibited. No EEPROM,
+PDO mapping, node-ID or bitrate writes are performed. Set this parameter to
+`false` to retain passive receiver-fault handling.
+
+The supplied REMdevice CANopen manual, C-26, specifies that `0x1029:1`
+defaults to `1` (No Change on communication error). The receiver can therefore
+remain Operational and transmit PDOs while reporting a communication fault.
+PDO transmission is not an error-clear indication. C-24 defines `0x8150` as
+Collision of Transmission COB-ID, distinct from `0x8110` CAN Overrun Error;
+an active collision remains blocking even with fresh PDOs. A matching current
+zero register or a zero-code/zero-register EMCY clears the cached diagnostic;
+new neutral controls and B2 are still required for drive recovery.
 
 ROS-free regression tests:
 
@@ -153,3 +250,22 @@ ROS-free regression tests:
 $env:PYTHONPATH="src/mobotic_config;src/mobotic_manual_control"
 python -m unittest discover -s src/mobotic_manual_control/test -v
 ```
+
+
+### PAIL diagnostics during an accepted homing sequence
+
+`operator/homing_state` supplies timestamped physical interlocks independently
+of the command decoder's EMCY invalidation. It is used only during an already
+accepted B2 reset/homing sequence in MANUAL, in supervised and manual-only
+operation. Initial B2 admission and normal driving still use `operator/state`.
+The observed PAIL communication diagnostics 0x8110/0x8150 with register 0x11 do
+not themselves cancel homing while complete fresh physical PDOs continue to
+prove neutral controls, LINK/EMGY healthy and STOP released. They remain visible
+in the ordinary operator state and raw diagnostics.
+
+STOP/E-stop, radio/link loss, stale/malformed physical inputs, non-neutral sticks,
+CAN error frames, other/unknown receiver faults, drive faults or invalid feedback
+still inhibit/cancel the sequence. Existing driver authority leases and homing
+velocity/time limits are unchanged. The homing topic never publishes an active
+motion command and is not used for autonomous or normal joystick motion.
+After homing, ordinary operator readiness is required for motion again.

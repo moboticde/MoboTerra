@@ -45,7 +45,7 @@ class FeedbackFreshness
 {
 public:
   using Clock = OrderedFeedbackSample::Clock;
-  enum Field : std::size_t { STATUS, VELOCITY, POSITION, CURRENT, ERROR_REGISTER, ERROR_CODE, CONTROL_MODE, FIELD_COUNT };
+  enum Field : std::size_t { STATUS, VELOCITY, POSITION, CURRENT, ERROR_REGISTER, CONTROL_MODE, FIELD_COUNT };
 
   // The decoder must commit the value/side effects only when this returns true.
   bool record(Field field, Clock::time_point acquired_at, int64_t source_stamp_ns = 0)
@@ -62,16 +62,15 @@ public:
     const auto elapsed = age(field, now);
     return elapsed >= 0.0 && elapsed <= timeout;
   }
-  bool motionFresh(bool steering, double timeout, Clock::time_point now = Clock::now()) const
+  bool motionFresh(double timeout, Clock::time_point now = Clock::now()) const
   {
-    (void)steering;
     return fresh(VELOCITY, timeout, now) && fresh(POSITION, timeout, now);
   }
-  bool ready(bool steering, double motion_timeout, double status_timeout, double fault_timeout,
+  bool ready(double motion_timeout, double status_timeout, double fault_timeout,
              Clock::time_point now = Clock::now()) const
   {
-    return motionFresh(steering, motion_timeout, now) && fresh(STATUS, status_timeout, now) &&
-           fresh(ERROR_REGISTER, fault_timeout, now) && (steering || fresh(ERROR_CODE, fault_timeout, now));
+    return motionFresh(motion_timeout, now) && fresh(STATUS, status_timeout, now) &&
+           fresh(ERROR_REGISTER, fault_timeout, now);
   }
 private:
   std::array<OrderedFeedbackSample, FIELD_COUNT> samples_{};

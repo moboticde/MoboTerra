@@ -3,9 +3,9 @@
 #include <mobotic_driver/communication.hpp>
 #include <mobotic_driver/management_lease.hpp>
 #include <mobotic_driver/motion_source_gate.hpp>
-#include <mobotic_driver/pdo_configuration.hpp>
+#include <mobotic_driver/sdo_configuration.hpp>
 #include <mobotic_driver/traction_position.hpp>
-#include <mobotic_driver/sdo_channel.hpp>
+#include <mobotic_driver/can_scheduling.hpp>
 #include <mobotic_driver/drive_startup.hpp>
 #include <mobotic_driver/reset_recovery.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
@@ -31,16 +31,15 @@ public:
   ~MoboticDriver() override;
   void canFrameCallback(const can_msgs::msg::Frame& frame);
   void feedbackTimerCallback();
+  void scheduleFeedbackReads();
   bool jointSetpointsCallback(const sensor_msgs::msg::JointState& msg, MotionSourceGate::Source source);
   void wheelModuleCommandCallback(const mobotic_interfaces::msg::WheelModuleOperationCommand& msg);
   void finalCommandCallback(const mobotic_interfaces::msg::WheelModuleCommandArray& msg);
   void watchdogTimerCallback();
   void sendStopToAllDrives();
-  void disableAllDrives();
+  void disableAllDrives(bool force = false);
   void enableAllDrives();
   void initializeAllDrives();
-  void tractionPdoTimerCallback();
-  void publishTractionPdoCycle();
   static can_msgs::msg::Frame stampFrame(const can_msgs::msg::Frame& frame, const std::string& frame_id, const rclcpp::Time& stamp);
 
 private:
@@ -65,12 +64,15 @@ private:
   void enforceFeedbackFreshness();
   void publishDiagnostics();
   void publishCanFrame(const can_msgs::msg::Frame& frame);
-  void pumpSdo(unsigned node);
+  void dispatchSdo();
   void advanceStartup();
-  void failStartup();
+  bool steeringAlignmentPending() const;
+  bool steeringAlignmentPermitted() const;
+  void advanceSteeringAlignment();
+  bool prepareEnableFeedback();
+  void failStartup(bool abort_completed_mode = false);
 
-  std::shared_ptr<rclcpp::TimerBase> feedback_timer_, watchdog_timer_setpoints_, timer_can_heartbeat_,
-      traction_pdo_timer_;
+  std::shared_ptr<rclcpp::TimerBase> feedback_timer_, watchdog_timer_setpoints_, timer_can_heartbeat_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_joint_states_;
   rclcpp::Publisher<mobotic_interfaces::msg::WheelModuleStatusArray>::SharedPtr pub_wheel_module_status_;
   rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr pub_can_frames_;
@@ -87,23 +89,22 @@ private:
   ManagementLease::Clock::time_point last_motion_command_received_{}, last_can_error_{};
   uint64_t can_error_count_{0};
   bool management_disable_sent_{false};
+  std::optional<ManagementLease::Clock::time_point> last_disable_request_;
   ManagementLease::Clock::time_point last_management_disable_{};
   std::map<std::string, OrderedFeedbackSample> last_can_feedback_;
   // Original ROS acquisition/reception stamps for velocity and steering position.
   std::map<std::string, std::array<int64_t, 2>> motion_sample_stamp_ns_;
-  std::map<std::string, RawRegisterTelemetry> sto_status_, digital_inputs_;
-  std::map<std::string, rclcpp::Time> last_safety_poll_;
   // CAN infrastructure
   rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr sub_can_frames_;
   std::map<std::string, MoboticDriveCanCommunication> drives_;
   std::map<std::string, WheelModuleBinding> wheel_modules_;
-  std::map<std::string, double> last_motor_current_ma_;
-  std::map<std::string, PdoConfiguration> configuration_;
+  std::map<std::string, SdoConfiguration> configuration_;
   std::map<std::string, TractionPosition> traction_positions_;
   std::map<std::string, bool> position_valid_;
   std::map<std::string, uint64_t> reset_fault_generation_;
-  std::map<std::string, std::array<int64_t, 4>> field_stamp_ns_;
-  std::map<std::string, uint64_t> reset_error_code_generation_;
+  std::map<std::string, std::array<int64_t, 3>> field_stamp_ns_;
+  std::map<std::string, int64_t> native_mode_stamp_ns_;
+  int64_t enable_probe_after_ns_{0};
   int64_t reset_requested_ns_{0};
   bool reset_release_sent_{true};
   bool boot_reconfigure_pending_{false};
@@ -111,39 +112,55 @@ private:
   mobotic_interfaces::msg::VehicleModeState authority_;
   std::set<std::string> retired_authorities_;
   std::map<std::string, double> accepted_traction_targets_;
-  int64_t sync_stamp_ns_{0}, published_cycle_ns_{0};
-  double traction_pdo_period_{0.02};
-  ManagementLease::Clock::time_point last_physical_pdo_cycle_{};
-  std::vector<can_msgs::msg::Frame> last_physical_pdo_commands_;
+  int64_t published_cycle_ns_{0};
   int64_t last_final_stamp_ns_{0};
   bool virtual_position_source_{false};
   bool controller_control_started_{false};
   DriveStartup startup_;
   double startup_timeout_{15.0};
+  enum class SteeringAlignment { IDLE, WAITING, MOVING, COMPLETE };
+  SteeringAlignment steering_alignment_{SteeringAlignment::IDLE};
+  bool steering_align_on_enable_{false};
+  double steering_alignment_velocity_{0.6}, steering_alignment_timeout_{12.5};
+  int64_t steering_alignment_after_ns_{0}, steering_alignment_motion_after_ns_{0};
+  std::map<std::string, int64_t> steering_alignment_target_ack_ns_;
+  std::map<std::string, int32_t> steering_alignment_targets_;
+  uint64_t steering_alignment_generation_{0}, steering_alignment_failed_reset_id_{0};
+  std::string steering_alignment_supervisor_;
+  ManagementLease::Clock::time_point steering_alignment_started_{}, last_steering_alignment_command_{};
   std::map<unsigned, SdoChannel> sdo_channels_;
-  double physical_sample_skew_budget_{0.05};
+  std::map<unsigned, std::string> sdo_node_names_;
+  std::vector<unsigned> sdo_nodes_;
+  SdoBusScheduler sdo_bus_scheduler_;
+  std::shared_ptr<rclcpp::TimerBase> sdo_dispatch_timer_;
+  double feedback_request_period_{0.1};
+  int64_t last_motion_batch_ns_{0};
+  double last_motion_scan_span_ms_{0.0};
+  uint64_t incoherent_motion_sets_{0};
+  std::map<std::string, rclcpp::Time> last_software_enable_poll_;
+  std::map<unsigned, SdoBusScheduler::Clock::time_point> last_configuration_request_;
+  double physical_sample_skew_budget_{0.1};
   double sample_skew_budget_{0.005};
-  double max_steering_velocity_{4.32}, max_traction_velocity_{11.12};
+  double wheel_radius_{0.325};
+  double max_steering_velocity_{4.32}, max_traction_velocity_{3.614}; // rad/s, m/s
+  double max_traction_current_{4.0};
+  bool current_overspeed_latched_{false};
+  bool traction_mode_pending_{false}, traction_mode_initialized_{false};
+  int64_t mode_transaction_boundary_ns_{0};
   uint64_t reset_id_{0};
   std::map<std::string, rclcpp::Time> last_enable_attempt_, last_initialize_attempt_;
-  std::map<std::string, rclcpp::Time> last_error_poll_, last_status_poll_;
+  std::map<std::string, rclcpp::Time> last_error_poll_, last_status_poll_, last_mode_poll_, last_current_poll_;
   rclcpp::Subscription<mobotic_interfaces::msg::WheelModuleOperationCommand>::SharedPtr sub_wheel_module_command_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_setpoints_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_supervisor_joint_setpoints_;
   rclcpp::Subscription<mobotic_interfaces::msg::VehicleModeState>::SharedPtr sub_mode_state_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_disable_all_drives_, srv_initialize_all_drives_;
   double watchdog_timeout_{0};
   double diagnostic_sdo_period_{1.0};
+  bool software_enable_diagnostics_{false};
   double motion_feedback_timeout_{0.3}, status_feedback_timeout_{0.3}, fault_feedback_timeout_{2.5};
   bool feedback_motion_blocked_{true};
   bool feedback_stop_sent_{false};
   FeedbackFreshness::Clock::time_point last_feedback_stop_{};
-  int traction_max_profile_velocity_{0}; // Populated from declared parameters in the constructor.
-  int traction_profile_accel_{0}, traction_profile_decel_{0};
-  int telemetry_pdo_sync_divider_{1};
-  bool traction_pdo_enabled_{true};
-  bool telemetry_pdo_enabled_{true};
-  bool feedbacks_requested_{false}, enable_all_drives_requested_{false}, initialize_all_drives_requested_{false};
+  bool enable_all_drives_requested_{false}, initialize_all_drives_requested_{false};
   bool module_management_received_{false};
 };
 #endif // MOBOTIC_DRIVER_H

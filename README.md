@@ -13,50 +13,35 @@ MoboTerra defaults to four powered steering/traction modules (`front_left`, `fro
 spacing follows actual CAD axes: 1.69 m front–rear / 0.99 m left–right, with the
 old four-wheel radius 0.325 m and width 0.31 m. CAD Z=0 is confirmed as the floor.
 CAN bindings and reference mounting offsets still require hardware checks.
-The same application also supports two powered modules: select the required
-records in the platform config's `modules` list. Driver bindings, feedback gates,
-kinematics, odometry, virtual drives and the robot model follow that list.
-See the [configuration and two-module setup](docs/two_module_setup.md); the
-front-right/rear-left profile uses a 250-kbit/s platform bus, PAIL receiver node
-10, master node 11 and the confirmed B1/SP3 and B2/SP4 control mapping.
-
-Select the platform profile that matches the machine before hardware launch:
-
-| Profile | Modules | Batteries | Platform CAN | PAIL operator |
-|:--|:--|:--|:--|:--|
-| [platform.yaml](src/mobotic_config/config/platform.yaml), default | Four steering/traction modules | Two (`battery1`, `battery2`) | `can0`, 500 kbit/s | Receiver node 9; mapping unverified, zero motion/capture only |
-| [platform-front-right-rear-left.yaml](src/mobotic_config/config/platform-front-right-rear-left.yaml) | Front-right nodes 3/4 and rear-left nodes 7/8 | One (`battery1`) | `can0`, 250 kbit/s | Receiver node 10, master node 11; confirmed stick, RP1, B1 and B2 assignments |
-
-Both profiles use a separate battery bus. The two-module PAIL profile uses RP1
-for Manual/Autonomous selection, B1/SP3 for boost and B2/SP4 for reset, with no
-hold-to-drive button. RP2 Safety Enable/Disable has no confirmed ROS input mapping;
-its physical safety function must be verified independently. See the
-[PAIL capture and commissioning guide](docs/remdevice_commissioning.md).
+Only the complete four-module layout is supported. See the
+[four-module setup guide](docs/four_module_setup.md). Both `platform.yaml` and
+`platform-four-micontrol.yaml` contain all four modules; source operator mappings
+remain unverified until commissioned. The native robot launcher retains its
+existing installed host configuration and overrides.
 
 ## Control architecture
 
 - Operator/autonomous velocity: candidate -> supervisor -> `vehicle/cmd_vel` -> kinematics -> `kinematics/joint_setpoints` -> supervisor -> `wheel_modules/command` -> driver.
 - Autonomy with its own kinematics: `autonomy/joint_setpoints` -> supervisor -> the same final `wheel_modules/command` array -> driver.
-  KINEMATICOFF is mode 2; velocity candidates have no motion effect there.
+  KINEMATICOFF is mode 2: steering position and traction current [A], with miControl native current mode 2 / `0x3200`; velocity candidates have no motion effect there. Native control-mode changes require standstill and acknowledgement.
 - The supervisor contains the mode state machine and publishes `vehicle/mode`, including automatic SAFETY and latched ERROR. Operator inputs are separately published on `operator/state`.
 - Internal `wheel_modules/operation_command` manages enable/disable and explicit reset transactions for all units together. Public reset is supervisor-owned `wheel_modules/clear_errors`.
 - The driver publishes `joint_states` and `wheel_modules/status`. Missing required CAN feedback
   blocks motion on all units; a new motion command is required after recovery.
 
-Physical startup follows the EC order: launch, initialize, then enable. The
+Physical startup follows this order: launch, initialize, then enable. The
 supervisor and driver perform this sequence automatically; there is no separate
 manual physical `initialize_all_drives` / `enable_all_drives` step. See the
 [startup sequence below](#physical-startup-and-recovery).
 
 All topic names above are relative to the robot namespace, normally `/moboterra`.
-FlexiSoft profiles require both `safety/state` and `safety/io_state`. The explicit
-two-module hardware-STO profile requires no Siemens network telemetry. Both
-variants require `battery/system_state`. The two-module profile requires **one
-Vanguard fixed pack**; the four-module profile requires **two**. Both use the
-listen-only 500-kbit/s battery bus. `battery/battery1/state` exposes pack 1;
-`battery/battery2/state` is published only when pack 2 is configured.
-`battery/state` aliases pack 1; the supervisor requires every configured pack
-ready and at least 20% SOC, using the **minimum SOC** across those packs.
+The default four-module profile uses FlexiSoft Ethernet feedback for monitoring
+only (`safety.telemetry_required: false`); the physical controller operates drive
+STO independently. Scanner fields, operator STOP, drive feedback, faults and
+watchdogs still gate ROS motion. Set `safety.telemetry_required: true` to require
+both `safety/state` and `safety/io_state` as additional software interlocks.
+The four-module profile configures `battery1` and `battery2`. The monitor
+requires every configured participant and reports the minimum pack SOC.
 The retained reference source addresses/PGNs need verification for the installed
 packs; see [battery telemetry and commissioning](src/mobotic_vanguard_battery/README.md).
 
@@ -93,7 +78,7 @@ an absolute speed in m/s (default `0.3`); it replaces the former proportional
 The safety adapter reads each SICK microScan3's `RawMicroScanData` directly on
 `scanner/front_left/raw_data` and `scanner/rear_right/raw_data`, then publishes
 `scanner/<location>/safety_zone_status`. Both scanners must provide fresh, valid
-field status, including in the two-module `hardwired_sto` profile.
+field status, on the four-module platform.
 
 | Scanner condition | Supervisor response |
 |:--|:--|
@@ -122,20 +107,19 @@ controller/STO chain remains responsible for physical safety.
    of at least 20%, the configured operator interlock, applicable safety/STO
    conditions and host checks when required. No motion command is needed.
 3. The driver disables/zeros targets, performs the initial fault-clear sequence
-   once, configures PDOs, controller modes and traction limits/ramps, and verifies
+   once, selects miControl modes through SDOs, and verifies
    configuration acknowledgements/readback for every configured drive.
 4. Only after configuration completes does it enable the drives with zero
    targets. Position/velocity feedback may become available only after enable.
 5. Fresh, complete, enabled and fault-free drive feedback completes startup and
    permits motion. Missing feedback from any required module blocks all modules.
 
-In the two-module profile, Elmo nodes **4 and 8** publish traction feedback through
-TPDOs, including position through TPDO3. SYNC starts after all configured drives
-(including steering nodes 3 and 7) finish configuration; joystick motion is not
-needed to start feedback.
+All configured miControl drives supply position, velocity, native status and
+faults through SDOs. Installed ramps and PDO mappings are preserved; the driver
+sends no drive PDO configuration, RPDO commands or SYNC frames.
 
 Startup has a 15 s deadline. Failed setup, timeout or lost permission requests
-stop/disable; investigate a failed startup and restart the driver to retry.
+stop/disable; investigate a failed startup and request a new supervised B2 recovery to retry.
 Runtime B2 requests supervisor-owned verified fault reset and zero-target
 re-enable, with neutral controls and ready interlocks. Encoder reference and
 saved parameters are retained; startup does not home or zero an encoder.
@@ -155,7 +139,7 @@ The command asks for Ubuntu administrator authentication, installs missing host
 packages and Docker/Compose, and builds the runtime, GUI and offline CAD tools.
 ROS dependencies are installed inside Docker; no host ROS installation or manual
 pip commands are needed. The build runs the full ROS tests, validates the supplied
-configuration and starts isolated four- and two-module virtual stacks to check
+configuration and starts an isolated four-module virtual stack to check
 enabled drives, supervisor readiness, joints, odometry and diagnostics. The installer also checks the installed
 entrypoint, healthcheck, RViz, ROS Graph and CAD imports. It installs `moboterra-gui`,
 `moboterra-tools` and desktop application entries. The default prepares software
@@ -184,6 +168,10 @@ message definitions after interface changes.
 
 On a ROS 2 Linux build host (target: Jazzy), from the MoboTerra repository root:
 
+The archived `example_project/` tree is excluded by `COLCON_IGNORE`; the active
+workspace contains the 12 packages under `src/`. ROMB requires the separately
+provisioned [verified runtime](src/mobotic_kinematics/README.md).
+
 ```bash
 source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src --rosdistro jazzy -y
@@ -195,8 +183,7 @@ ros2 launch mobotic_bringup moboterra.launch.py \
   can_interface:=can0 battery_can_interface:=can1
 ```
 
-This launches the default four-module profile. For the two-module robot, add
-`platform_config:=src/mobotic_config/config/platform-front-right-rear-left.yaml`.
+This launches the four-module profile. Partial module layouts are unsupported.
 On a deployed host, use the commissioned `/etc/moboterra/platform.yaml` instead.
 Hardware launch can initialize and enable drives automatically once readiness
 passes; secure the machine and verify the selected configuration first.
@@ -218,10 +205,11 @@ The default `publish_odom_tf:=auto` honors the shared odometry policy.
 Use `publish_odom_tf:=false` if an external estimator owns that transform, or
 `start_odometry:=false` to omit the node. Use `start_description:=false` only when another description owner is already running. No laser/IMU fusion or autonomous navigation is added.
 
-The four-wheel profile restores the 10 ms heartbeat and 116053 increments/s
-traction ceiling. The virtual driver acceleration/deceleration use the actual 0.325 m wheel
-radius (32093 increments/s^2 for nominal 1 m/s^2); physical startup applies the selected ramps. The supervisor command ramp
-remains 0.5 m/s^2. See the [bringup configuration](src/mobotic_bringup/README.md).
+The four-wheel reference profile uses a 10 ms heartbeat and motor-rpm traction
+limits of 1700. miControl ramps remain installed in the controller; the
+supervisor command ramp remains 0.5 m/s². The active four-miControl physical
+profile retains its lower configured motion limits. See the
+[driver guide](src/mobotic_driver/README.md).
 
 Before launching on a secured platform, verify the configuration against the
 machine. Scanner defaults: front `10.60.20.52`, rear `10.60.20.53`,
@@ -232,7 +220,7 @@ An active motion command is not required to initialize or enable.
 The default operator source is PAIL CAN. USB joystick support is an alternative
 that requires its own verified configuration. Manual motion requires fresh
 operator input and all supervisor readiness checks.
-Startup, reconnect, mode changes and safety recovery additionally require neutral controls; a configured deadman requires release/new press. USB E-stop state is unknown rather than fabricated.
+Startup, reconnect, mode changes and safety recovery additionally require neutral controls and fresh input. USB E-stop state is unknown rather than fabricated.
 
 Check the deployed configuration and live readiness without requesting motion:
 
@@ -256,7 +244,7 @@ Add `--offline` for configuration validation without ROS or CAN access.
 | Mode change | Stop, confirm fresh sustained standstill, then accept only new commands |
 | Measured velocity loss | Odometry/odom TF publication stops; recovery rebases without guessing missing travel and increases uncertainty |
 
-ROS monitoring/control is not safety-rated. ELMO/FlexiSoft and the independent
+ROS monitoring/control is not safety-rated. miControl/FlexiSoft and the independent
 hardware stop/brake chain remain responsible for physical safety.
 
 ## Documentation and remaining work
@@ -271,7 +259,7 @@ Still required: full ROS 2 Jazzy/C++ build and integration validation, virtual-s
 runtime validation on the target, and secured hardware commissioning. Physical
 acceptance must cover scanner field assignments and stop/recovery, B2 fault
 reset, STOP/RP2, radio loss, drive feedback, CAN bindings and safety wiring.
-The two-module control assignment is confirmed; the default four-module PAIL
+The source four-module PAIL
 mapping still permits capture only until verified.
 
 The [robot description](src/mobotic_description/README.md), wheel odometry and

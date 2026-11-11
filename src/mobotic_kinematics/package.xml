@@ -3,21 +3,25 @@
 <package format="3">
   <name>mobotic_kinematics</name>
   <version>0.1.0</version>
-  <description>Inverse and forward kinematics for the MoboTerra steerable wheel modules.</description>
+  <description>ROMB inverse/direct kinematics integration and MoboTerra steering policy.</description>
 
   <maintainer email="noreply@mobotic.invalid">Mobotic Development Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
 
-  <depend>eigen</depend>
   <depend>geometry_msgs</depend>
-  <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
+  <depend>mobotic_interfaces</depend>
 
   <exec_depend>ros2launch</exec_depend>
 
-  <test_depend>ament_cmake_test</test_depend>
 
   <exec_depend>mobotic_config</exec_depend>
   <export>

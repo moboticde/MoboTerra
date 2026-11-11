@@ -10,7 +10,7 @@ def example_mapping():
                      for role, channel in (('speed', 1), ('steer', 2), ('crab', 3))},
             'buttons': {'mode': {'signal': 'SP1', 'active_high': True},
                         'boost': {'signal': 'SP2', 'active_high': True},
-                        'reset': {'signal': 'SP3', 'active_high': True}, 'deadman': None}}
+                        'reset': {'signal': 'SP3', 'active_high': True}}}
 
 
 class MappingTest(unittest.TestCase):
@@ -19,14 +19,20 @@ class MappingTest(unittest.TestCase):
         self.assertFalse(mapping.verified)
         self.assertEqual(mapping.node_id, 9)
 
-    def test_verified_axes_no_deadman_and_explicit_polarity(self):
+    def test_verified_axes_and_explicit_polarity(self):
         value = example_mapping()
         value['buttons']['mode']['active_high'] = False
         mapping = RemdeviceMapping(value)
-        self.assertFalse(mapping.button('deadman', {}))
         self.assertTrue(mapping.button('mode', {'SP1': False}))
         value['buttons']['mode']['signal'] = 'SP4'
         self.assertTrue(mapping.button('mode', {'SP1': False}))
+
+    def test_removed_hold_button_mapping_is_rejected(self):
+        for value in (None, {'signal': 'SP4', 'active_high': True}):
+            mapping = example_mapping()
+            mapping['buttons']['deadman'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                RemdeviceMapping(mapping)
 
     def test_invalid_or_ambiguous_control_maps_rejected(self):
         mutations = [lambda m: m.update(node_id=True), lambda m: m.update(node_id=128),
@@ -44,7 +50,6 @@ class MappingTest(unittest.TestCase):
                      lambda m: m['buttons']['mode'].update(signal='D0'),
                      lambda m: m['buttons']['mode'].update(signal='SP17'),
                      lambda m: m['buttons']['boost'].update(active_high=1),
-                     lambda m: m['buttons'].pop('deadman'),
                      lambda m: m['axes'].pop('steer')]
         for change in mutations:
             mapping = copy.deepcopy(example_mapping()); change(mapping)

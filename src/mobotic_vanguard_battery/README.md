@@ -5,14 +5,13 @@ is remapped by both launch files to `battery_can/can_rx`, isolated from drive CA
 Publishes:
 
 - `battery/<id>/state` (`sensor_msgs/msg/BatteryState`): individual measurements;
-  `battery1` for the two-module profile, `battery1` and `battery2` for four modules.
+  `battery1` and `battery2` for the supported four-module profiles.
 - `battery/state` (`sensor_msgs/msg/BatteryState`): compatibility alias for
   `primary_battery_id` (now `battery1`); it is not an aggregate of both packs.
 - `battery/system_state` (`mobotic_interfaces/msg/BatterySystemState`): readiness
   and minimum SOC across the configured internal participants; consumed by the supervisor.
 
-The two-module profile configures **one fixed pack** (`battery1`); the four-module
-profile configures **two fixed packs** (`battery1`, `battery2`). Both use the same
+The four-module profile configures **two fixed packs** (`battery1`, `battery2`). Both use the same
 500-kbit/s battery CAN bus, with no separate Parallel Battery Controller. Each
 configured participant gets a `battery/<id>/state` publisher; IDs must be valid
 ROS topic tokens. The monitor separates traffic by source address and PGN and
@@ -34,7 +33,7 @@ Stale/missing/invalid SOC or electrical fields become NaN and block aggregate
 readiness. Stale status marks the participant absent and reports watchdog expiry.
 Reserved J1939 values must not appear as valid 100% SOC.
 When `can_rx.header.stamp` is nonzero, each status/SOC/electrical sample retains
-its CAN acquisition time. Delayed delivery consumes `telemetry_timeout` (default
+its CAN acquisition time. Delayed romb consumes `telemetry_timeout` (default
 0.5 s) rather than starting another full timeout at callback time. Already stale
 frames and timestamps more than 100 ms ahead are rejected. Smaller future skew
 is clamped to reception time, without granting extra freshness. Duplicate
@@ -53,11 +52,16 @@ when all required participants are fresh/ready with valid SOC. SOC below `0.2`
 The supervisor does not subscribe to public `battery/state`; its gate uses the
 aggregate `battery/system_state`. External monitoring can consume either.
 
+The SocketCAN receiver filters for the configured status/SOC/electrical PGN/source bindings
+at every J1939 priority plus the charging-request/charger-status guards.
+This keeps unrelated drive and operator traffic out of the battery ROS queue
+when all devices share one interface. CAN acquisition timestamps and freshness
+deadlines are unchanged.
+
 Every configured pack must provide fresh status, SOC and electrical telegrams,
 with valid values, operational status and HV connected. Any required pack's
 loss/fault/HV loss blocks readiness; valid SOC below 20% produces a warning
-without blocking supervisor enable/motion or B2 recovery. The two-module profile does not wait for pack 2 or publish its
-topic. The aggregate reports the minimum configured SOC, never an average that
+without blocking supervisor enable/motion or B2 recovery. The aggregate reports the minimum configured SOC, never an average that
 could hide a depleted pack. Per-pack current/voltage remain separate; no system
 current is synthesized.
 
