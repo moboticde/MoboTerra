@@ -26,3 +26,17 @@ Thumbs.db
 *.db3
 *.mcap
 can_telemetry_records/
+
+# Pi-local generated output and migration backups (active configuration is tracked).
+/runtime/
+/config/raspberry-pi/runtime/
+/config/raspberry-pi/backups/
+/config/raspberry-pi/native-stack.lock
+/config/raspberry-pi/*.log
+/config/raspberry-pi/*.before-*
+/config/managed/before-*/
+/config/managed/*.before-*
+
+# Imported diagnostic snapshots are data; retain the actual JSON configuration.
+/config/raspberry-pi/*.json
+!/config/raspberry-pi/safety-ethernet-parameters.json

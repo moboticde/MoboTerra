@@ -21,6 +21,26 @@ namespace = {'generate_launch_description': resolved_factory(SOURCE)}
 
 
 class SocketCanLaunchTest(unittest.TestCase):
+    def test_optional_rviz_uses_robot_namespace_and_shared_tf_topics(self):
+        for enabled in ('false', 'true'):
+            actions, context = resolve(factory(SOURCE)(), {
+                'start_rviz': enabled, 'rviz_config': '/tmp/example.rviz',
+                'robot_name': 'viewer_robot', 'start_odometry': 'true',
+                'publish_odom_tf': 'true',
+            })
+            nodes = [a for a in actions if a.kind == 'Node']
+            viewer = next(a for a in nodes if a.kwargs.get('executable') == 'rviz2')
+            self.assertEqual(viewer.kwargs['condition'].perform(context), enabled == 'true')
+            self.assertEqual(viewer.kwargs['namespace'].perform(context), 'viewer_robot')
+            self.assertEqual(viewer.kwargs['arguments'], ['-d', '/tmp/example.rviz'])
+            self.assertEqual(viewer.kwargs['remappings'], [('/tf', 'tf'), ('/tf_static', 'tf_static')])
+            self.assertFalse(viewer.kwargs['respawn'])
+            odometry = next(a for a in nodes if a.kwargs.get('executable') == 'mobotic_odometry')
+            self.assertTrue(odometry.kwargs['condition'].perform(context))
+            self.assertEqual(odometry.kwargs['parameters'][1]['publish_tf'].args[0].perform(context), 'true')
+            description = next(a for a in nodes if a.kwargs.get('executable') == 'robot_state_publisher')
+            self.assertEqual(description.kwargs['remappings'], [('/tf', 'tf'), ('/tf_static', 'tf_static')])
+
     def test_manual_only_replaces_authority_and_keeps_driver_watchdogs(self):
         actions, _ = resolve(factory(SOURCE)(), {'control_mode': 'manual_only'})
         nodes = [a for a in actions if a.kind == 'Node']
@@ -250,13 +270,13 @@ class SocketCanLaunchTest(unittest.TestCase):
             self.assertEqual(arguments['interval_sec'], '0.1')
             self.assertEqual(arguments['warn_on_receive_timeout'], 'false')
 
-    def test_default_drive_and_battery_interfaces_are_separate(self):
+    def test_default_drive_and_battery_interfaces_share_can0(self):
         arguments = {action.args[0]: action.kwargs for action in self.actions
                      if action.kind == 'DeclareLaunchArgument'}
         self.assertEqual(arguments['can_interface']['default_value'], 'auto')
         self.assertEqual(resolve(factory(SOURCE)())[1]['can_interface'], 'can0')
         self.assertEqual(arguments['battery_can_interface']['default_value'], 'auto')
-        self.assertEqual(resolve(factory(SOURCE)())[1]['battery_can_interface'], 'can1')
+        self.assertEqual(resolve(factory(SOURCE)())[1]['battery_can_interface'], 'can0')
         self.assertEqual(arguments['start_battery_socketcan']['default_value'], 'true')
 
     def test_physical_operator_receiver_is_opt_in_and_virtual_only(self):
@@ -349,7 +369,7 @@ class SocketCanLaunchTest(unittest.TestCase):
         include = next(action for action in group.kwargs['actions'] if action.kind == 'IncludeLaunchDescription')
         self.assertEqual(include.args[0].args[0].args[0][-1], 'socket_can_receiver.launch.py')
         transport = dict(include.kwargs['launch_arguments'])
-        self.assertEqual(transport['interface'], 'can1')
+        self.assertEqual(transport['interface'], 'can0')
         self.assertEqual(transport['use_bus_time'], 'true')
         self.assertEqual(transport['interval_sec'], '0.1')
         self.assertEqual(transport['warn_on_receive_timeout'], 'false')

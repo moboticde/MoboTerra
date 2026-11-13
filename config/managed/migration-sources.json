@@ -1,0 +1,37 @@
+{
+  "/etc/moboterra": {
+    "moboterra.env": "cef54df2d181b219a35b2e147ba62776c2e7aaf482e0394b14edb6999b054187",
+    "moboterra.env.before-250k-20261021_143502": "6e5fe290e969a379d4997493a4e3cdf0e974c4a659908f37f88ec2bc84eb18b6",
+    "moboterra.env.before-project-start-20261021_143907": "ef4e4dc394deb919b947163e116c7480a2c0cc5bc647c7f7b02864b45c83217d",
+    "physical-driver.yaml": "eaf04368b6ea5e59e2c75e77bce07583215d2d9868bbc8ac9a07dea1181bf100",
+    "physical-manual.yaml": "6daa44989465097d3bc0470f7fbc1b4339bd4c8a1bfa1560f89b6affc358392c",
+    "physical-supervisor.yaml": "18d26d4ea97d6f30095411b9d369a198a5c6aa483e93c47c4db35c03cc8c2fe3",
+    "platform.yaml": "8a3b21a8dcd83bbd0c62fb84fe1372566adb09a0b728ff21a0b9e27e973d423e",
+    "platform.yaml.before-250k-20261021_143502": "e4cdc1f0f77d4fb4cc407b6ae0401044c00fa657edbb734d35fe5ed5d958b743",
+    "platform.yaml.before-project-start-20261021_143907": "b20f4f8e76f3f1c837e2163c9ee13834ce1c473a5aa44382e4880c1af1b11624",
+    "platform.yaml.before-scanner-host-20261021_144102": "0113410672e0efbfb08f1fb0809a5d79142b28000793bcb3b0634e069bfc073d",
+    "software.env": "471e293f3c47b2f66a1804fe8e9e6f5db1dc41eb238274e82af67b9a8064c488"
+  },
+  "/opt/moboterra/current/config": {
+    "battery.yaml": "9ff73c1d49ea2d837dd41baf0e0c1a69cbc841b2f7f408fe487f62f4643fac7e",
+    "diagnostics.yaml": "8a90c33174c8354f81693a6934e2179926ce5bbcc277acbfe7ab2106dce0f4fa",
+    "driver.yaml": "6e2ef35afbe9e3b49cba9194ff8c52533b60125b1e9406d46452ce23d2121fd6",
+    "kinematics.yaml": "1c954b2c0d40e4704b1f6b78b88d549d235b9173e877b7869f460bada565080d",
+    "manual_control.yaml": "ba8e0d2fdcec869b52d844af8c8c5178da1659aab20891ccefd3d4763931c4db",
+    "odometry.yaml": "5ef17600cbd0e231071a48ddc63ce0bf2366bb1a058b5897c4a93daeab1da83e",
+    "platform-front-right-rear-left.yaml": "10726bef6419f8dee438c01fa3516aade09260efc6fcd94a9091252e327a926b",
+    "platform.yaml": "a287faf718d22eb870dc156e9554b1fafdbe2c9e6647c1518d5660ceca4a3a53",
+    "safety.yaml": "54e27b1f09ce8d0541d9a4a2d197443a675eeb7e8212f61184b8e8d7b4561b37",
+    "scanners.yaml": "d0e5ef982b42cf7e670cc50f6aa95bf4bb2d288f1bea94a300f7dcb26aca5b38",
+    "supervisor.yaml": "a7f674c5d43e989fc592023b843fef6ad6fad326fdebdceb239da263fa7ebb45"
+  },
+  "/opt/moboterra/current/compose.yaml": {
+    ".": "3f912be9fa73ccdc93f929915c5bcf18fea05946496dce0cc3c7515dfbd5c574"
+  },
+  "/etc/systemd/system/moboterra-supervisor.service": {
+    ".": "c8d80d5bab27b93221fea0fc04723d5b8f7cb1f4a35a2d13cd8de45abd5da126"
+  },
+  "/etc/tmpfiles.d/moboterra.conf": {
+    ".": "95d8a41744f4df1820683ca0aae8f58b2bda8de212945c0c33952adac6849130"
+  }
+}

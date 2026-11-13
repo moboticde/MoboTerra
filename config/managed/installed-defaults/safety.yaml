@@ -1,0 +1,7 @@
+# Node policy only. Shared hardware/geometry/limits are derived from platform.yaml.
+/**:
+  ros__parameters:
+    accept_timeout: 0.5
+    status_timeout: 0.25
+    publish_period: 0.05
+    estop_implies_sto: true

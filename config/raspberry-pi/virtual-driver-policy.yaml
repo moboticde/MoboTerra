@@ -1,0 +1,5 @@
+/**:
+  ros__parameters:
+    feedback_request_period: 0.1
+    traction_pdo_period: 0.1
+    can_heartbeat_period: 0.1

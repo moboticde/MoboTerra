@@ -13,7 +13,8 @@
     mode_switch_manual_value: 0
     mode_switch_autonomous_value: 1
     mode_state_timeout: 0.5
-    scale_linear: 0.4
+    scale_linear: 0.5
     scale_angular: 0.4
     joystick_timeout: 0.25
-    publish_period: 0.02
+    publish_period: 0.05
+    receiver_transmit_enabled: true

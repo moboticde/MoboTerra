@@ -1,0 +1,93 @@
+name: moboterra
+
+services:
+  robot:
+    image: ${MOBOTERRA_IMAGE:?MOBOTERRA_IMAGE must be set}
+    container_name: moboterra-robot
+    network_mode: host
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    group_add:
+      - ${INPUT_GID:?INPUT_GID must be set}
+    device_cgroup_rules:
+      - "c 13:* r"
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?ROS_DOMAIN_ID must be set}
+      ROS_HOME: /var/log/ros
+      ROBOT_NAME: ${ROBOT_NAME-moboterra}
+      MOBOTERRA_REQUIRED_NODES: ${MOBOTERRA_REQUIRED_NODES:-}
+    command:
+      - ros2
+      - launch
+      - mobotic_bringup
+      - moboterra.launch.py
+      - stack_type:=hardware
+      - robot_name:=${ROBOT_NAME-moboterra}
+      - platform_config:=/etc/moboterra/platform.yaml
+      - host_state_path:=/run/moboterra-host/state.json
+      - driver_parameters_file:=${DRIVER_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/driver.yaml}
+      - supervisor_parameters_file:=${SUPERVISOR_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/supervisor.yaml}
+      - manual_parameters_file:=${MANUAL_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/manual_control.yaml}
+      - safety_parameters_file:=${SAFETY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/safety.yaml}
+      - battery_parameters_file:=${BATTERY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/battery.yaml}
+      - kinematics_parameters_file:=${KINEMATICS_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/kinematics.yaml}
+      - diagnostics_parameters_file:=${DIAGNOSTICS_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/diagnostics.yaml}
+      - odometry_parameters_file:=${ODOMETRY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/odometry.yaml}
+      - scanner_parameters_file:=${SCANNER_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/scanners.yaml}
+      - can_interface:=can0
+      - battery_can_interface:=can1
+    volumes:
+      - type: bind
+        source: /run/moboterra-supervisor
+        target: /run/moboterra-host
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/moboterra
+        target: /etc/moboterra
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/moboterra/position-state
+        target: /var/lib/moboterra/position-state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/moboterra/ros-logs
+        target: /var/log/ros
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /dev/input
+        target: /dev/input
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/udev
+        target: /run/udev
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m,uid=10001,gid=10001
+      - /run:rw,nosuid,nodev,size=16m,uid=10001,gid=10001
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/moboterra-healthcheck"]
+      interval: 10s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+    stop_grace_period: 30s

@@ -64,6 +64,7 @@ class RemdeviceControlTest(unittest.TestCase):
         node.reset_observed_pair = None
         node.drive_toggle_status = ''
         node.last_start_ns = None
+        node.receiver_transmit_enabled = True
         # Existing tests isolate B2 and command behavior from automatic recovery.
         node.receiver_auto_recovery = False
         node.receiver_auto_communication_reset = False
@@ -435,6 +436,86 @@ class RemdeviceControlTest(unittest.TestCase):
         self.assertTrue(self.node.decoder.has_blocking_error())
         self.assertFalse(self.state().connected)
 
+    def test_pdo_based_policy_diagnostics_do_not_drop_motion_or_require_rearm(self):
+        self.node.decoder.errors_advisory = True
+        warnings, infos = [], []
+        self.node.get_logger = lambda: SimpleNamespace(error=warnings.append,
+            warning=warnings.append, info=infos.append)
+        self.pair(); self.pair(speed=255)
+        self.state()
+        initial_infos = len(infos)
+        for code, register in ((0x8110, 0x11), (0x8150, 0x11), (0x6000, 1), (0, 0)):
+            stamp = self.node.last_joy_stamp
+            count = len(self.node.joy_publisher.messages)
+            self.send(0x89, [code & 255, code >> 8, register, 0, 0, 0, 0, 0])
+            state = self.state()
+            self.assertTrue(state.connected and state.command_active)
+            self.assertEqual(self.node.last_joy_stamp, stamp)
+            self.assertEqual(len(self.node.joy_publisher.messages), count)
+            self.assertNotIn('EMCY=', state.status_message)
+            self.assertNotIn('diagnostic warning', state.status_message)
+            raw = json.loads(self.node.raw_publisher.messages[-1].data)
+            self.assertEqual(raw['receiver_error_code'], code)
+            self.assertEqual(raw['receiver_error_register'], register)
+            self.pair(speed=255)
+            self.assertTrue(self.state().command_active)
+        self.assertFalse(self.resets)
+        self.assertFalse(warnings)
+        self.assertEqual(len(infos), initial_infos)
+
+    def test_pdo_based_policy_register_errors_never_reset_healthy_receiver(self):
+        self.node.decoder.errors_advisory = True
+        self.auto_recovery_fault()
+        for register in (0x11, 0x15, 0):
+            if self.node.receiver_read is None:
+                self.now = Time(nanoseconds=self.now.nanoseconds + 1_000_000_000)
+                self.pair(); self.state()
+            self.error_register_reply(register)
+            self.assertTrue(self.state().connected)
+            self.assertIsNone(self.node.receiver_reset_ns)
+            self.assertFalse(self.node.decoder.has_blocking_error())
+        self.assertEqual(self.node.receiver_reset_attempts, 0)
+        self.assertTrue(all(frame.id != 0 for frame in self.node.can_publisher.messages))
+
+    def test_pdo_based_policy_keeps_stop_link_and_pdo_validation(self):
+        for cause in ('stop', 'link', 'invalid_axis', 'stale', 'analog_missing', 'bad_dlc'):
+            with self.subTest(cause=cause):
+                self.setUp()
+                self.node.decoder.errors_advisory = True
+                self.pair(); self.pair(speed=255)
+                self.send(0x89, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0])
+                if cause == 'stop':
+                    self.send(0x189, [0] * 7 + [0xA8])
+                elif cause == 'link':
+                    self.send(0x189, [0] * 7 + [0x08])
+                elif cause == 'invalid_axis':
+                    self.send(0x189, [1, 1, 0, 0, 0, 0, 0, 0x28])
+                    self.send(0x289, [255] + [0] * 7)
+                elif cause == 'analog_missing':
+                    for _ in range(6):
+                        self.send(0x189, [0] * 7 + [0x28], dt=.05)
+                elif cause == 'bad_dlc':
+                    self.send(0x289, [0])
+                else:
+                    self.now = Time(nanoseconds=self.now.nanoseconds + 251_000_000)
+                state = self.state()
+                self.assertFalse(state.connected or state.command_active)
+                self.assertEqual(self.node.command, [0, 0, 0])
+
+    def test_pdo_based_policy_can_error_indication_does_not_clear_fresh_input(self):
+        self.node.decoder.errors_advisory = True
+        warnings = []
+        self.node.get_logger = lambda: SimpleNamespace(error=warnings.append,
+            warning=warnings.append, info=lambda _: None)
+        self.pair(); self.pair(speed=255)
+        stamp = self.node.last_joy_stamp
+        self.node._can_callback(SimpleNamespace(id=0x20000040, dlc=8, data=[0] * 8,
+            header=SimpleNamespace(stamp=self.now.to_msg()), is_extended=False, is_rtr=False, is_error=True))
+        self.assertTrue(self.state().connected)
+        self.assertEqual(self.node.last_joy_stamp, stamp)
+        self.assertEqual(self.node.decoder.can_error_count, 1)
+        self.assertFalse(warnings)
+
     def test_receiver_fault_is_logged_without_b2_and_not_hidden_by_pending_enable(self):
         warnings = []
         self.node.get_logger = lambda: SimpleNamespace(
@@ -679,6 +760,57 @@ class RemdeviceControlTest(unittest.TestCase):
                 self.assertEqual(self.node.decoder.emergency_code, code)
                 self.assertEqual(self.node.receiver_reset_attempts, 0)
                 self.assertEqual(len(self.node.can_publisher.messages), 1)
+
+    def test_receive_only_blocks_automatic_and_explicit_nmt_in_every_receiver_state(self):
+        self.node.receiver_transmit_enabled = False
+        self.node.receiver_auto_recovery = True
+        for status in (None, 0, 127, 4, 5):
+            self.node.decoder.nmt_state = status
+            self.now = Time(nanoseconds=self.now.nanoseconds + 1_100_000_000)
+            self.state()
+            self.assertFalse(self.node._send_start())
+            response = self.node._start_receiver(None, SimpleNamespace())
+            self.assertFalse(response.success)
+            self.assertIn('receive-only', response.message)
+        self.assertFalse(self.node.can_publisher.messages)
+        self.assertIsNone(self.node.last_start_ns)
+        self.assertIsNone(self.node.receiver_poll_ns)
+
+    def test_receive_only_preserves_stick_input_and_stop_detection(self):
+        self.node.receiver_transmit_enabled = False
+        self.node.receiver_auto_recovery = True
+        self.pair()
+        self.pair(speed=255)
+        state = self.state()
+        self.assertTrue(state.connected and state.command_active)
+        self.assertGreater(self.node.command[0], 0)
+        self.pair(status=0xa8)
+        state = self.state()
+        self.assertFalse(state.connected or state.command_active)
+        self.assertTrue(state.estop_pressed)
+        self.assertFalse(self.node.can_publisher.messages)
+        self.assertFalse(json.loads(self.node.raw_publisher.messages[-1].data)['receiver_transmit_enabled'])
+
+    def test_receive_only_b2_still_requests_drive_enable_without_receiver_tx(self):
+        self.node.receiver_transmit_enabled = False
+        self.node.receiver_auto_recovery = True
+        self.pair()
+        self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+        self.state()
+        self.assertFalse(self.node.can_publisher.messages)
+
+    def test_receive_only_faults_remain_blocking_without_poll_or_communication_reset(self):
+        self.node.receiver_transmit_enabled = False
+        self.node.receiver_auto_recovery = self.node.receiver_auto_communication_reset = True
+        self.pair()
+        self.send(0x89, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0])
+        for _ in range(3):
+            self.pair()
+            self.assertFalse(self.state().connected)
+        self.assertEqual(self.node.decoder.emergency_code, 0x8150)
+        self.assertEqual(self.node.receiver_reset_attempts, 0)
+        self.assertFalse(self.node.can_publisher.messages)
 
     def test_receiver_poll_is_rate_limited_and_can_be_disabled(self):
         self.auto_recovery_fault()

@@ -1,0 +1,14 @@
+# Node policy only. Shared hardware/geometry/limits are derived from platform.yaml.
+/**:
+  ros__parameters:
+    publish_tf: true
+    feedback_timeout: 0.3
+    max_integration_interval: 0.3
+    initial_pose: [0,0,0]
+    initial_pose_variances: [0.01,0.01,0.01]
+    twist_variances: [0.01,0.01,0.01]
+    process_variance_rates: [0.001,0.001,0.001]
+    gap_variance_rates: [1,1,1]
+    unobserved_variance: 1000000
+    max_linear_speed: 5
+    max_angular_speed: 5

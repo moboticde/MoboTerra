@@ -1,0 +1,21 @@
+# Persistent rosbag recorder overrides. Topic publishers are unchanged.
+/moboterra/tf_static:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: transient_local
+/moboterra/tf:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/moboterra/can_rx:
+  history: keep_last
+  depth: 10000
+  reliability: best_effort
+  durability: volatile
+/moboterra/can_tx:
+  history: keep_last
+  depth: 10000
+  reliability: best_effort
+  durability: volatile

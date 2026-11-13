@@ -1,0 +1,6 @@
+{
+  "version": "3fc91abd1f2d-20261028115420-1824675",
+  "runtime_image": "moboterra:3fc91abd1f2d-20261028115420-1824675-jazzy-arm64",
+  "gui_image": "moboterra-gui:3fc91abd1f2d-20261028115420-1824675-jazzy-arm64",
+  "tools_image": "moboterra-tools:3fc91abd1f2d-20261028115420-1824675-jazzy-arm64"
+}

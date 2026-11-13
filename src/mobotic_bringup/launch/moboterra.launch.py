@@ -55,6 +55,9 @@ def _launch_setup(context):
     manual_only = LaunchConfiguration('control_mode').perform(context) == 'manual_only'
     if manual_only and start_manual_interface.perform(context) != 'true':
         raise ValueError('manual_only requires start_manual_interface:=true')
+    if (manual_only and stack_type.perform(context) == 'hardware'
+            and start_scanners.perform(context) != 'true'):
+        raise ValueError('manual_only requires start_scanners:=true on hardware')
 
     driver_config = cfg.parameters('driver')
     kinematics_config = cfg.parameters('kinematics')
@@ -234,6 +237,7 @@ def _launch_setup(context):
             **{key: manual_config[key] for key in ('max_velocity_linear', 'max_velocity_angular')},
             'manual_timeout': manual_config['joystick_timeout'],
             'feedback_timeout': driver_config['motion_feedback_timeout'],
+            'scanner_timeout': supervisor_config['safety_timeout'],
             'candidate_timeout': min(0.1, driver_config['watchdog_timeout']),
             'reset_timeout': max(20.0, driver_config['startup_timeout'] + 5.0),
         }],
@@ -417,6 +421,13 @@ def _launch_setup(context):
         namespace=robot_name, output='screen',
         parameters=[{'robot_description': ParameterValue(render_description(cfg), value_type=str)}],
         remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')])
+    rviz_config = LaunchConfiguration('rviz_config').perform(context)
+    rviz = Node(
+        condition=IfCondition(LaunchConfiguration('start_rviz')),
+        package='rviz2', executable='rviz2', name='rviz2',
+        namespace=robot_name, output='screen', respawn=False,
+        arguments=['-d', rviz_config] if rviz_config else [],
+        remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')])
     scanner_projection = Node(
         condition=_hardware_component_condition(stack_type, start_scanners),
         package='mobotic_scanner_projection', executable='scanner_evaluation_projection',
@@ -453,6 +464,7 @@ def _launch_setup(context):
         diagnostics,
         manual_drive_control if manual_only else supervisor,
         description,
+        rviz,
         scanner_projection,
         scanner_adapter,
     ]
@@ -467,6 +479,10 @@ def generate_launch_description():
                               description='Original customer ROMB kinematics'),
         DeclareLaunchArgument('host_state_path', default_value='',
                               description='Required host health state file for managed deployment'),
+        DeclareLaunchArgument('start_rviz', default_value='false', choices=['true', 'false'],
+                              description='Optional RViz viewer; closing it does not stop the robot stack'),
+        DeclareLaunchArgument('rviz_config', default_value='',
+                              description='RViz configuration file; empty uses RViz defaults'),
         DeclareLaunchArgument('start_description', default_value='true', choices=['true', 'false']),
         DeclareLaunchArgument('start_odometry', default_value='true', choices=['true', 'false']),
         DeclareLaunchArgument('publish_odom_tf', default_value='auto', choices=['auto', 'true', 'false'],

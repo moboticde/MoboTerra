@@ -13,12 +13,12 @@ joints total. Configuration rejects missing modules and partial layouts.
 
 Both source profiles, `platform.yaml` and `platform-four-micontrol.yaml`, contain
 all four modules. The latter supplies prepared miControl scaling and lower motion
-limits. Source operator mappings remain unverified until commissioned. Synthetic
+limits. The default profile contains this robot's commissioned operator mapping. Synthetic
 operator data in tests is not an installed hardware profile.
 
-The robot uses `~/start_ros2_four_micontrol.sh` with
-`~/.config/moboterra/platform-can0-500k-micontrol.yaml` and existing driver,
-supervisor and manual overrides. It selects original ROMB kinematics and
+The robot uses `~/start_ros2_four_micontrol.sh` with the actual hardware profile
+and node policies in `src/mobotic_config/config/`, without component override
+files. It selects original ROMB kinematics and
 miControl SDO-only communication. All eight drive samples are required for
 complete feedback. Both battery participants and both scanners retain their
 configured bindings. Removing obsolete configurations does not recalibrate
@@ -27,7 +27,7 @@ geometry, encoder units, wheel signs, gearing or installed controller settings.
 Validate the installed configuration without starting the robot:
 
 ```bash
-ros2 run mobotic_config check_config --platform-config "$HOME/.config/moboterra/platform-can0-500k-micontrol.yaml" --override driver="$HOME/.config/moboterra/physical-driver-sdo.yaml" --override supervisor=/etc/moboterra/physical-supervisor.yaml --override manual=/etc/moboterra/physical-manual.yaml
+ros2 run mobotic_config check_config
 ```
 
 FlexiSoft is the only supported safety source. The legacy software STO-derived

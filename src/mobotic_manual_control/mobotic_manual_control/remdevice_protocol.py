@@ -75,7 +75,7 @@ class RemdeviceReceiver:
     """
 
     def __init__(self, node_id, *, timeout_ns=250_000_000, max_skew_ns=75_000_000,
-                 can_overrun_advisory=False):
+                 can_overrun_advisory=False, errors_advisory=False):
         if type(node_id) is not int or not 1 <= node_id <= 127:
             raise ValueError('node_id must be 1..127')
         if (type(timeout_ns) is not int or type(max_skew_ns) is not int
@@ -84,6 +84,10 @@ class RemdeviceReceiver:
         if type(can_overrun_advisory) is not bool:
             raise ValueError('can_overrun_advisory must be boolean')
         self.can_overrun_advisory = can_overrun_advisory
+        if type(errors_advisory) is not bool:
+            raise ValueError('errors_advisory must be boolean')
+        self.errors_advisory = errors_advisory
+        self.can_error_count = 0
         self.node_id = node_id
         self.timeout_ns = timeout_ns
         self.max_skew_ns = max_skew_ns
@@ -105,13 +109,17 @@ class RemdeviceReceiver:
         self.reason = 'waiting for both PDOs'
 
     def overrun_is_advisory(self):
-        # Only this observed communication-only diagnostic is eligible.
-        # Collision, hardware, voltage and unknown errors remain blocking.
+        # Legacy narrow policy. The PDO-based policy separately covers all
+        # diagnostics without changing control acquisition or physical checks.
         return (self.can_overrun_advisory and self.emergency_code == 0x8110
                 and self.emergency_register == 0x11)
 
     def has_blocking_error(self):
-        return bool(self.emergency_code or self.emergency_register) and not self.overrun_is_advisory()
+        return (bool(self.emergency_code or self.emergency_register)
+                and not self.errors_advisory and not self.overrun_is_advisory())
+
+    def diagnostic_is_advisory(self):
+        return bool(self.emergency_code or self.emergency_register) and not self.has_blocking_error()
 
     def invalidate(self, reason, now_ns, *, preserve_physical=False):
         if not preserve_physical:
@@ -139,31 +147,39 @@ class RemdeviceReceiver:
 
         Call snapshot() on the publishing timer too, so total bus loss expires
         state even when no receive callback runs. Malformed relevant traffic
-        invalidates the pair. Boot-up/non-operational NMT or EMCY also clears it.
+        invalidates the pair. Boot-up/non-operational NMT also clears it.
+        Advisory diagnostics never clear or renew the control PDO samples.
         """
         self._tick(now_ns)
         if is_error:
-            self.invalidate('CAN error frame', now_ns)
+            self.can_error_count += 1
+            if not self.errors_advisory:
+                self.invalidate('CAN error frame', now_ns)
             return False
         relevant = {self.digital_id, self.analog_id, self.heartbeat_id, self.emergency_id}
         if is_extended or is_rtr or cob_id not in relevant:
             return False
         expected = 1 if cob_id == self.heartbeat_id else 8
+        diagnostic_only = cob_id == self.emergency_id and self.errors_advisory
         if type(dlc) is not int or dlc != expected:
-            self.invalidate(f'invalid DLC: expected {expected}, received {dlc}', now_ns)
+            if not diagnostic_only:
+                self.invalidate(f'invalid DLC: expected {expected}, received {dlc}', now_ns)
             return False
         if type(stamp_ns) is not int or stamp_ns <= 0:
-            self.invalidate('invalid acquisition timestamp', now_ns)
+            if not diagnostic_only:
+                self.invalidate('invalid acquisition timestamp', now_ns)
             return False
         if not 0 <= now_ns - stamp_ns <= self.timeout_ns:
             age_ms = (now_ns - stamp_ns) / 1_000_000
-            self.invalidate(f'CAN acquisition age {age_ms:.1f} ms outside '
-                            f'0..{self.timeout_ns / 1_000_000:.1f} ms', now_ns)
+            if not diagnostic_only:
+                self.invalidate(f'CAN acquisition age {age_ms:.1f} ms outside '
+                                f'0..{self.timeout_ns / 1_000_000:.1f} ms', now_ns)
             return False
         try:
             payload = _payload(data, expected)
         except (TypeError, ValueError):
-            self.invalidate('invalid CAN payload', now_ns)
+            if not diagnostic_only:
+                self.invalidate('invalid CAN payload', now_ns)
             return False
         if stamp_ns <= self.last_stamps.get(cob_id, -1):
             return False
@@ -171,8 +187,8 @@ class RemdeviceReceiver:
             # EMCYs describe receiver state in acquisition order. A fault and its
             # zero-code reset can both be queued before the first callback runs;
             # the PDO cutoff (callback time) must not hide either newer event.
-            # Keep that cutoff for motion: recovery still needs fresh PDOs and
-            # neutral rearm after processing the event.
+            # Under strict policy, recovery needs fresh PDOs and neutral rearm.
+            # Under PDO-based policy, diagnostics leave this cutoff untouched.
             self.last_stamps[cob_id] = stamp_ns
             was_blocking = self.has_blocking_error()
             self.emergency_code = int.from_bytes(payload[:2], 'little')
@@ -253,6 +269,7 @@ class RemdeviceReceiver:
         if consume:
             self.consumed = {cob: self.samples[cob][0] for cob in (self.digital_id, self.analog_id)}
         self.reason = ('receiver EMCY is uncleared' if self.has_blocking_error() else
+                       'fresh PDO pair; receiver diagnostic advisory' if self.errors_advisory and self.diagnostic_is_advisory() else
                        'fresh PDO pair; CAN overrun advisory' if self.overrun_is_advisory() else
                        'fresh PDO pair')
         return PdoSample(min(digital_stamp, analog_stamp), decode_digital(digital), tuple(analog))

@@ -1,0 +1,16 @@
+
+cd /home/mobotic/Downloads/MoboTerra-main
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=42
+
+ros2 launch mobotic_bringup moboterra.launch.py \
+  stack_type:=hardware \
+  robot_name:=moboterra \
+  platform_config:=/etc/moboterra/platform.yaml \
+  can_interface:=can0 \
+  battery_can_interface:=can1 \
+  start_scanners:=true \
+  driver_parameters_file:=/etc/moboterra/physical-driver.yaml \
+  supervisor_parameters_file:=/etc/moboterra/physical-supervisor.yaml \
+  manual_parameters_file:=/etc/moboterra/physical-manual.yaml

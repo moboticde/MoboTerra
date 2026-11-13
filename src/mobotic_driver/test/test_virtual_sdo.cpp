@@ -4,6 +4,7 @@
 #include <chrono>
 #include <iostream>
 #include <thread>
+#include <utility>
 
 void require(bool condition, const char* message)
 { if (!condition) { throw std::runtime_error(message); } }
@@ -77,14 +78,19 @@ int main(int argc, char** argv)
       Operation operation; operation.header.stamp = bus->now(); operation.supervisor_instance = state.supervisor_instance;
       operation.authority_generation = 1; operation.enable = true; operations->publish(operation);
     });
-    for (const std::string key : {"traction_pdo_enabled", "telemetry_pdo_enabled"})
+    for (const auto& flags : {std::pair<bool, bool>{true, false}, {false, true}, {true, true}})
     {
-      auto invalid = options; invalid.append_parameter_override(key, true);
-      bool rejected = false;
-      try { auto unsupported = std::make_shared<MoboticDriver>(invalid); }
-      catch (const std::invalid_argument&) { rejected = true; }
-      require(rejected, "removed PDO transports must be rejected at the driver boundary");
+      auto requested = options;
+      requested.append_parameter_override("traction_pdo_enabled", flags.first);
+      requested.append_parameter_override("telemetry_pdo_enabled", flags.second);
+      auto accepted = std::make_shared<MoboticDriver>(requested);
+      require(accepted->get_parameter("traction_pdo_enabled").as_bool() == flags.first &&
+              accepted->get_parameter("telemetry_pdo_enabled").as_bool() == flags.second,
+              "both PDO flags must be declared and preserve their requested values");
     }
+    // Exercise the existing SDO lifecycle even when both PDO flags are requested.
+    options.append_parameter_override("traction_pdo_enabled", true);
+    options.append_parameter_override("telemetry_pdo_enabled", true);
     auto driver = std::make_shared<MoboticDriver>(options);
     rclcpp::executors::SingleThreadedExecutor executor;
     executor.add_node(bus); executor.add_node(driver);

@@ -263,7 +263,8 @@ def validate_platform(platform):
         operator = platform.get('operator', {'source': 'usb'})
         _record(operator, ('source', 'mapping', 'usb_driver', 'usb_mapping_verified',
                            'require_enable_interlock', 'require_neutral_rearm',
-                           'receiver_can_overrun_advisory', 'receiver_auto_communication_reset'),
+                           'receiver_can_overrun_advisory', 'receiver_errors_advisory',
+                           'receiver_auto_communication_reset'),
                 'operator', required=('source',))
         if operator.get('source') not in ('usb', 'remdevice'):
             raise ConfigurationError('operator.source must be usb or remdevice')
@@ -271,7 +272,7 @@ def validate_platform(platform):
             raise ConfigurationError('operator.usb_driver must be joy_node or game_controller_node')
         if 'usb_mapping_verified' in operator and type(operator['usb_mapping_verified']) is not bool:
             raise ConfigurationError('operator.usb_mapping_verified must be boolean')
-        for key in ('require_enable_interlock', 'require_neutral_rearm', 'receiver_can_overrun_advisory',
+        for key in ('require_enable_interlock', 'require_neutral_rearm', 'receiver_can_overrun_advisory', 'receiver_errors_advisory',
                     'receiver_auto_communication_reset'):
             if key in operator and type(operator[key]) is not bool:
                 raise ConfigurationError(f'operator.{key} must be boolean')
@@ -483,6 +484,7 @@ class Configuration:
         if operator['source'] == 'remdevice':
             manual['remdevice_mapping'] = json.dumps(operator['mapping'], sort_keys=True)
             manual['receiver_can_overrun_advisory'] = operator.get('receiver_can_overrun_advisory', False)
+            manual['receiver_errors_advisory'] = operator.get('receiver_errors_advisory', False)
             manual['receiver_auto_communication_reset'] = operator.get('receiver_auto_communication_reset', False)
         supervisor.update({'max_direct_' + key.removeprefix('max_'): value for key, value in joint_limits.items()})
         participants = p['battery']['participants']
@@ -662,8 +664,6 @@ class Configuration:
             raise ConfigurationError('fault_feedback_timeout must exceed diagnostic_sdo_period')
         if supervisor['control_period'] >= min(driver['watchdog_timeout'], driver['supervisor_timeout']):
             raise ConfigurationError('supervisor control_period must fit inside driver command and management timeouts')
-        if driver['traction_pdo_enabled'] or driver['telemetry_pdo_enabled']:
-            raise ConfigurationError('miControl driver supports SDO transport only; PDO options must be false')
         if not 0 < driver['sample_skew_budget'] <= driver['motion_feedback_timeout']:
             raise ConfigurationError('sample_skew_budget must fit inside the motion feedback timeout')
         if not 0 < driver['physical_sample_skew_budget'] <= driver['motion_feedback_timeout']:

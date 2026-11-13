@@ -4,56 +4,37 @@
       "battery1",
       "battery2"
     ],
-    "batteries.status_pgns": [
-      "0xF197",
-      "0xF1A6"
-    ],
     "batteries.soc_pgns": [
-      "0xF192",
-      "0xF1A1"
-    ],
-    "batteries.voltage_pgns": [
-      "0xF191",
-      "0xF1A0"
+      "0xF091",
+      "0xF091"
     ],
     "batteries.source_addresses": [
-      "0xF4",
-      "0xF5"
+      "0xF3",
+      "0xF4"
+    ],
+    "batteries.status_pgns": [
+      "0xF096",
+      "0xF096"
+    ],
+    "batteries.voltage_pgns": [
+      "0xF090",
+      "0xF090"
     ],
     "primary_battery_id": "battery1",
-    "telemetry_timeout": 0.5,
-    "publish_period": 0.1
+    "publish_period": 0.1,
+    "require_not_charging": true,
+    "require_operational_status": false,
+    "telemetry_timeout": 0.5
+  },
+  "diagnostics": {
+    "odometry_timeout": 0.55,
+    "publish_period": 0.5,
+    "scanner_timeout": 0.5
   },
   "driver": {
-    "can_node_id": "0x0A",
-    "feedback_request_period": 0.02,
-    "can_heartbeat_period": 0.01,
-    "watchdog_timeout": 0.1,
-    "supervisor_timeout": 0.3,
-    "motion_feedback_timeout": 0.3,
-    "status_feedback_timeout": 0.3,
-    "fault_feedback_timeout": 2.5,
-    "diagnostic_sdo_period": 1,
-    "traction_pdo_enabled": true,
-    "telemetry_pdo_enabled": true,
-    "telemetry_pdo_sync_divider": 1,
-    "traction_pdo_period": 0.02,
-    "sample_skew_budget": 0.005,
-    "max_steering_velocity": 4.32,
-    "max_traction_velocity": 11.12,
-    "traction_max_profile_velocity": 116053,
-    "traction_profile_accel": 32093,
-    "traction_profile_decel": 32093,
-    "drives.names": [
-      "front_left_steering",
-      "front_left_traction",
-      "front_right_steering",
-      "front_right_traction",
-      "rear_left_steering",
-      "rear_left_traction",
-      "rear_right_steering",
-      "rear_right_traction"
-    ],
+    "can_heartbeat_period": 0.1,
+    "can_node_id": "0x0B",
+    "diagnostic_sdo_period": 1.0,
     "drives.can_node_ids": [
       "0x01",
       "0x02",
@@ -64,85 +45,25 @@
       "0x05",
       "0x06"
     ],
-    "drives.modes": [
-      "position",
-      "velocity",
-      "position",
-      "velocity",
-      "position",
-      "velocity",
-      "position",
-      "velocity"
-    ],
-    "drives.resolutions": [
-      4096,
-      4096,
-      4096,
-      4096,
-      4096,
-      4096,
-      4096,
-      4096
-    ],
-    "drives.min_steering_velocities": [
-      -5000,
-      -1700,
-      -5000,
-      -1700,
-      -5000,
-      -1700,
-      -5000,
-      -1700
-    ],
-    "drives.max_steering_velocities": [
-      5000,
-      1700,
-      5000,
-      1700,
-      5000,
-      1700,
-      5000,
-      1700
-    ],
-    "drives.min_traction_velocities": [
-      -5000,
-      -116053,
-      -5000,
-      -116053,
-      -5000,
-      -116053,
-      -5000,
-      -116053
-    ],
-    "drives.max_traction_velocities": [
-      5000,
-      116053,
-      5000,
-      116053,
-      5000,
-      116053,
-      5000,
-      116053
+    "drives.controller_types": [
+      "micontrol",
+      "micontrol",
+      "micontrol",
+      "micontrol",
+      "micontrol",
+      "micontrol",
+      "micontrol",
+      "micontrol"
     ],
     "drives.gear_ratios": [
-      121,
-      16,
-      121,
-      16,
-      121,
-      16,
-      121,
-      16
-    ],
-    "drives.min_currents": [
-      -4000,
-      -4000,
-      -4000,
-      -4000,
-      -4000,
-      -4000,
-      -4000,
-      -4000
+      121.0,
+      16.0,
+      121.0,
+      16.0,
+      121.0,
+      16.0,
+      121.0,
+      16.0
     ],
     "drives.max_currents": [
       4000,
@@ -154,6 +75,91 @@
       4000,
       4000
     ],
+    "drives.max_steering_velocities": [
+      5000,
+      1700,
+      5000,
+      1700,
+      5000,
+      1700,
+      5000,
+      1700
+    ],
+    "drives.max_traction_velocities": [
+      5000,
+      1700,
+      5000,
+      1700,
+      5000,
+      1700,
+      5000,
+      1700
+    ],
+    "drives.min_currents": [
+      -4000,
+      -4000,
+      -4000,
+      -4000,
+      -4000,
+      -4000,
+      -4000,
+      -4000
+    ],
+    "drives.min_steering_velocities": [
+      -5000,
+      -1700,
+      -5000,
+      -1700,
+      -5000,
+      -1700,
+      -5000,
+      -1700
+    ],
+    "drives.min_traction_velocities": [
+      -5000,
+      -1700,
+      -5000,
+      -1700,
+      -5000,
+      -1700,
+      -5000,
+      -1700
+    ],
+    "drives.modes": [
+      "position",
+      "velocity",
+      "position",
+      "velocity",
+      "position",
+      "velocity",
+      "position",
+      "velocity"
+    ],
+    "drives.names": [
+      "front_left_steering",
+      "front_left_traction",
+      "front_right_steering",
+      "front_right_traction",
+      "rear_left_steering",
+      "rear_left_traction",
+      "rear_right_steering",
+      "rear_right_traction"
+    ],
+    "drives.resolutions": [
+      121,
+      4096,
+      121,
+      4096,
+      121,
+      4096,
+      121,
+      4096
+    ],
+    "fault_feedback_timeout": 2.5,
+    "feedback_request_period": 0.1,
+    "max_steering_velocity": 1.2,
+    "max_traction_current": 4.0,
+    "max_traction_velocity": 2.0,
     "modules.names": [
       "front_left",
       "front_right",
@@ -171,27 +177,57 @@
       "front_right_traction",
       "rear_left_traction",
       "rear_right_traction"
-    ]
+    ],
+    "motion_feedback_timeout": 0.35,
+    "physical_sample_skew_budget": 0.1,
+    "sample_skew_budget": 0.005,
+    "startup_timeout": 15.0,
+    "status_feedback_timeout": 0.35,
+    "steering_align_on_enable": true,
+    "steering_alignment_timeout": 12.5,
+    "steering_alignment_velocity": 1.2,
+    "supervisor_timeout": 0.3,
+    "telemetry_pdo_enabled": false,
+    "telemetry_pdo_sync_divider": 1,
+    "traction_pdo_enabled": false,
+    "traction_pdo_period": 0.05,
+    "watchdog_timeout": 0.1,
+    "wheel_radius": 0.325
   },
   "kinematics": {
+    "cmd_vel_timeout": 0.5,
+    "joint_feedback_timeout": 0.35,
+    "max_steering_velocity": 0.3,
+    "max_traction_current": 4.0,
+    "max_traction_velocity": 2.0,
+    "minimum_linear_speed": 0.001,
     "module_names": [
       "front_left",
       "front_right",
       "rear_left",
       "rear_right"
     ],
+    "output_frame_id": "base_link",
     "steering_joint_names": [
       "front_left_steering",
       "front_right_steering",
       "rear_left_steering",
       "rear_right_steering"
     ],
+    "traction_control_mode": "velocity",
     "traction_joint_names": [
       "front_left_traction",
       "front_right_traction",
       "rear_left_traction",
       "rear_right_traction"
     ],
+    "wheel_mount_angles": [
+      0.0,
+      3.14152,
+      0.0,
+      3.14152
+    ],
+    "wheel_radius": 0.325,
     "wheels_x": [
       0.845,
       0.845,
@@ -203,118 +239,122 @@
       -0.495,
       0.495,
       -0.495
-    ],
-    "wheel_mount_angles": [
-      0,
-      3.14152,
-      0,
-      3.14152
-    ],
-    "wheel_radius": 0.325,
-    "max_steering_velocity": 4.32,
-    "max_traction_velocity": 11.12,
-    "max_traction_current": 4,
-    "traction_control_mode": "velocity",
-    "cmd_vel_timeout": 0.5,
-    "joint_feedback_timeout": 0.3,
-    "minimum_linear_speed": 0.001,
-    "output_frame_id": "base_link"
+    ]
   },
   "manual": {
-    "axis_speed": 3,
     "axis_crab": 2,
+    "axis_crab_sign": 1,
+    "axis_speed": 3,
+    "axis_speed_sign": 1,
     "axis_steer": 0,
+    "axis_steer_sign": 1,
+    "button_mode_switch": 4,
     "buttons_boost": [
       9,
       10
     ],
-    "button_mode_switch": 4,
-    "mode_switch_type": "toggle",
-    "mode_switch_manual_value": 0,
-    "mode_switch_autonomous_value": 1,
-    "mode_state_timeout": 0.5,
-    "max_velocity_linear": 1.25,
-    "max_velocity_angular": 1.51,
-    "max_acceleration_linear": 0.5,
-    "max_acceleration_angular": 0.52,
-    "scale_linear": 0.4,
-    "scale_angular": 0.4,
+    "frame_id": "base_link",
     "joystick_timeout": 0.25,
-    "publish_period": 0.02,
-    "frame_id": "base_link"
+    "max_acceleration_angular": 0.52,
+    "max_acceleration_linear": 0.5,
+    "max_velocity_angular": 1.51,
+    "max_velocity_linear": 2.0,
+    "mode_state_timeout": 0.5,
+    "mode_switch_autonomous_value": 1,
+    "mode_switch_manual_value": 0,
+    "mode_switch_type": "toggle",
+    "publish_period": 0.05,
+    "receiver_auto_communication_reset": true,
+    "receiver_can_overrun_advisory": true,
+    "receiver_errors_advisory": true,
+    "receiver_transmit_enabled": true,
+    "remdevice_mapping": "{\"axes\": {\"crab\": {\"channel\": 4, \"full_scale\": 255, \"invert\": false, \"zero\": 0}, \"speed\": {\"channel\": 3, \"full_scale\": 255, \"invert\": false, \"zero\": 0}, \"steer\": {\"channel\": 2, \"full_scale\": 255, \"invert\": false, \"zero\": 0}}, \"buttons\": {\"boost\": {\"active_high\": true, \"signal\": \"SP3\"}, \"mode\": {\"active_high\": false, \"signal\": \"U5\"}, \"reset\": {\"active_high\": true, \"signal\": \"SP4\"}, \"scanner_override\": {\"active_high\": true, \"signal\": \"D5\"}}, \"node_id\": 10, \"verified\": true}",
+    "require_neutral_rearm": false,
+    "scale_angular": 0.4,
+    "scale_linear": 0.5,
+    "steering_geometry": "{\"wheels_x\": [0.845, 0.845, -0.845, -0.845], \"wheels_y\": [0.495, -0.495, 0.495, -0.495], \"steering_joint_names\": [\"front_left_steering\", \"front_right_steering\", \"rear_left_steering\", \"rear_right_steering\"], \"traction_joint_names\": [\"front_left_traction\", \"front_right_traction\", \"rear_left_traction\", \"rear_right_traction\"], \"wheel_mount_angles\": [0.0, 3.14152, 0.0, 3.14152], \"max_steering_velocity\": 0.3, \"steering_position_tolerances\": [0.017453292519943295, 0.017453292519943295, 0.017453292519943295, 0.017453292519943295], \"steering_position_resolutions\": [121.0, 121.0, 121.0, 121.0], \"steering_angle_limits_enabled\": false, \"steering_return_home_on_neutral\": true, \"steering_neutral_home_velocity\": 1.2}"
   },
   "odometry": {
-    "odom_frame_id": "odom",
     "base_frame_id": "base_link",
-    "publish_tf": true,
-    "feedback_timeout": 0.3,
-    "max_integration_interval": 0.3,
+    "feedback_timeout": 0.35,
+    "gap_variance_rates": [
+      1.0,
+      1.0,
+      1.0
+    ],
     "initial_pose": [
-      0,
-      0,
-      0
+      0.0,
+      0.0,
+      0.0
     ],
     "initial_pose_variances": [
       0.01,
       0.01,
       0.01
     ],
-    "twist_variances": [
-      0.01,
-      0.01,
-      0.01
-    ],
+    "max_angular_speed": 5.0,
+    "max_integration_interval": 0.3,
+    "max_linear_speed": 5.0,
+    "odom_frame_id": "odom",
     "process_variance_rates": [
       0.001,
       0.001,
       0.001
     ],
-    "gap_variance_rates": [
-      1,
-      1,
-      1
+    "publish_tf": true,
+    "twist_variances": [
+      0.01,
+      0.01,
+      0.01
     ],
-    "unobserved_variance": 1000000,
-    "max_linear_speed": 5,
-    "max_angular_speed": 5
+    "unobserved_variance": 1000000.0
   },
   "safety": {
-    "bind_address": "0.0.0.0",
-    "port": 9100,
-    "telegram_size": 15,
-    "status_byte_offset": 14,
     "accept_timeout": 0.5,
-    "status_timeout": 0.25,
-    "publish_period": 0.05,
-    "front_protective_ossd_mask": 3,
-    "rear_protective_ossd_mask": 12,
+    "bind_address": "0.0.0.0",
     "emergency_stop_mask": 16,
-    "safety_override_mask": 32,
-    "rear_warning_mask": 64,
+    "estop_implies_sto": true,
+    "front_protective_ossd_mask": 3,
     "front_warning_mask": 128,
+    "port": 9100,
+    "publish_period": 0.05,
+    "rear_protective_ossd_mask": 12,
+    "rear_warning_mask": 64,
     "safety_enable_mask": 0,
+    "safety_override_mask": 32,
+    "status_byte_offset": 14,
+    "status_timeout": 0.25,
     "sto_mask": 0,
-    "estop_implies_sto": true
+    "telegram_size": 15
   },
   "scanners": {
-    "interface_ip": "0.0.0.0",
-    "host_udp_port": 0,
+    "angle_end": 0.0,
+    "angle_start": 0.0,
+    "application_io_data": true,
     "channel": 0,
     "channel_enabled": true,
-    "skip": 0,
-    "angle_start": 0,
-    "angle_end": 0,
-    "time_offset": 0,
-    "general_system_state": true,
     "derived_settings": true,
-    "measurement_data": true,
+    "general_system_state": true,
+    "host_udp_port": 0,
+    "interface_ip": "0.0.0.0",
     "intrusion_data": true,
-    "application_io_data": true,
-    "use_persistent_config": false,
-    "min_intensities": 0
+    "measurement_data": true,
+    "min_intensities": 0.0,
+    "skip": 0,
+    "time_offset": 0.0,
+    "use_persistent_config": false
   },
   "supervisor": {
-    "initial_mode": "manual",
+    "autonomy_timeout": 0.25,
+    "battery_timeout": 0.6,
+    "control_period": 0.05,
+    "direct_steering_encoder_resolutions": [
+      121.0,
+      121.0,
+      121.0,
+      121.0
+    ],
+    "direct_traction_control_mode": "current",
     "expected_module_names": [
       "front_left",
       "front_right",
@@ -333,40 +373,40 @@
       "rear_left_traction",
       "rear_right_traction"
     ],
-    "direct_traction_control_mode": "velocity",
-    "require_operator_interlock": false,
-    "direct_steering_encoder_resolutions": [
-      4096,
-      4096,
-      4096,
-      4096
-    ],
-    "startup_grace": 10.0,
-    "reset_timeout": 5.0,
-    "required_health_sources": ["kinematics"],
+    "health_input_timeout": 0.55,
     "health_timeout": 0.3,
-    "control_period": 0.02,
+    "initial_mode": "manual",
+    "kinematicoff_current_supported": true,
+    "manual_steering_geometry": "{\"wheels_x\": [0.845, 0.845, -0.845, -0.845], \"wheels_y\": [0.495, -0.495, 0.495, -0.495], \"steering_joint_names\": [\"front_left_steering\", \"front_right_steering\", \"rear_left_steering\", \"rear_right_steering\"], \"traction_joint_names\": [\"front_left_traction\", \"front_right_traction\", \"rear_left_traction\", \"rear_right_traction\"], \"wheel_mount_angles\": [0.0, 3.14152, 0.0, 3.14152], \"max_steering_velocity\": 0.3, \"steering_position_tolerances\": [0.017453292519943295, 0.017453292519943295, 0.017453292519943295, 0.017453292519943295], \"steering_position_resolutions\": [121.0, 121.0, 121.0, 121.0], \"steering_angle_limits_enabled\": false, \"steering_return_home_on_neutral\": true, \"steering_neutral_home_velocity\": 1.2}",
+    "manual_timeout": 0.25,
+    "max_acceleration_angular": 0.52,
+    "max_acceleration_linear": 0.5,
+    "max_direct_steering_velocity": 0.3,
+    "max_direct_traction_current": 4.0,
+    "max_direct_traction_velocity": 2.0,
+    "max_velocity_angular": 1.51,
+    "max_velocity_linear": 2.0,
+    "minimum_battery_percentage": 0.2,
     "mode_transition_stop_duration": 0.25,
-    "mode_transition_timeout": 10,
-    "velocity_feedback_timeout": 0.3,
-    "standstill_linear_velocity": 0.02,
+    "mode_transition_timeout": 10.0,
+    "operator_scanner_override_enabled": true,
+    "output_frame_id": "base_link",
+    "override_speed_scale": 0.2,
+    "require_flexisoft_telemetry": false,
+    "require_operator_interlock": false,
+    "required_health_sources": [
+      "kinematics"
+    ],
+    "reset_timeout": 20.0,
+    "safety_source": "flexisoft",
+    "safety_timeout": 0.3,
     "standstill_angular_velocity": 0.02,
     "standstill_joint_velocity": 0.1,
-    "manual_timeout": 0.25,
-    "autonomy_timeout": 0.25,
-    "safety_timeout": 0.3,
-    "battery_timeout": 0.6,
-    "wheel_status_timeout": 0.3,
-    "minimum_battery_percentage": 0.2,
-    "max_velocity_linear": 1.25,
-    "max_velocity_angular": 1.51,
-    "max_acceleration_linear": 0.5,
-    "max_acceleration_angular": 0.52,
-    "warning_speed_scale": 0.3,
-    "override_speed_scale": 0.2,
-    "max_direct_steering_velocity": 4.32,
-    "max_direct_traction_velocity": 11.12,
-    "max_direct_traction_current": 4,
-    "output_frame_id": "base_link"
+    "standstill_linear_velocity": 0.02,
+    "startup_grace": 10.0,
+    "velocity_feedback_timeout": 0.35,
+    "warning_speed_limit": 0.3,
+    "wheel_radius": 0.325,
+    "wheel_status_timeout": 0.35
   }
 }

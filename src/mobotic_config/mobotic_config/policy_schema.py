@@ -31,6 +31,7 @@ POLICY_TYPES = {
         "minimum_linear_speed": "number"
     },
     "manual": {
+        "receiver_transmit_enabled": "boolean",
         "axis_speed": "integer",
         "axis_crab": "integer",
         "axis_steer": "integer",

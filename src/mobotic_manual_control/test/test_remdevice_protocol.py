@@ -192,6 +192,42 @@ class FreshnessTest(unittest.TestCase):
         self.assertEqual(self.rx.snapshot(self.now).stamp_ns, original_stamp)
         self.assertIsNone(self.rx.snapshot(original_stamp + 251_000_000))
 
+    def test_pdo_based_policy_preserves_controls_through_faults_and_clears(self):
+        self.rx.errors_advisory = True
+        self.pair()
+        original = self.rx.snapshot(self.now)
+        epoch = self.rx.epoch_ns
+        for code, register in ((0x8110, 0x11), (0x8150, 0x11), (0x6000, 1),
+                               (0x2320, 0x15), (0, 0x11), (0, 0)):
+            self.send(self.rx.emergency_id, [code & 255, code >> 8, register, 0, 0, 0, 0, 0], dt=1_000_000)
+            self.assertEqual((self.rx.emergency_code, self.rx.emergency_register), (code, register))
+            self.assertFalse(self.rx.has_blocking_error())
+            self.assertEqual(self.rx.snapshot(self.now), original)
+            self.assertEqual(self.rx.epoch_ns, epoch)
+        self.assertIsNone(self.rx.snapshot(original.stamp_ns + 251_000_000))
+
+    def test_pdo_based_policy_ignores_bad_diagnostics_but_rejects_bad_pdos(self):
+        self.rx.errors_advisory = True
+        self.pair()
+        original = self.rx.snapshot(self.now)
+        for data, stamp in (([0], self.now), ([0] * 8, 0),
+                            ([0] * 8, self.now - 251_000_000), ([-1] * 8, self.now)):
+            self.send(self.rx.emergency_id, data, stamp=stamp, dt=1_000_000)
+            self.assertEqual(self.rx.snapshot(self.now), original)
+        self.send(0x20000040, is_error=True, dt=1_000_000)
+        self.assertEqual(self.rx.can_error_count, 1)
+        self.assertEqual(self.rx.snapshot(self.now), original)
+        self.send(self.rx.analog_id, [0], dt=1_000_000)
+        self.assertIsNone(self.rx.snapshot(self.now))
+
+    def test_pdo_based_policy_error_burst_cannot_renew_missing_analog(self):
+        self.rx.errors_advisory = True
+        self.pair()
+        for _ in range(6):
+            self.send(self.rx.emergency_id, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0], dt=49_000_000)
+            self.send(data=[0] * 7 + [0x28], dt=1_000_000)
+        self.assertIsNone(self.rx.snapshot(self.now))
+
     def test_advisory_overrun_cannot_renew_a_missing_analog_pdo(self):
         self.rx.can_overrun_advisory = True
         self.pair()

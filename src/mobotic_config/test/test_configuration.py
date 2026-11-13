@@ -127,6 +127,7 @@ class ConfigurationTest(unittest.TestCase):
     def test_homing_can_run_twice_as_fast_as_manual_steering(self):
         platform = copy.deepcopy(self.cfg.platform)
         platform['motion_limits']['max_steering_velocity'] = 0.3
+        platform['motion_limits']['steering_return_home_on_neutral'] = False
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         path = Path(directory.name) / 'slow-manual.yaml'
@@ -192,6 +193,7 @@ class ConfigurationTest(unittest.TestCase):
     def test_homing_speed_can_double_to_1_2_without_changing_manual_speed(self):
         platform=copy.deepcopy(self.cfg.platform)
         platform['motion_limits']['max_steering_velocity']=.3
+        platform['motion_limits']['steering_return_home_on_neutral']=False
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'homing.yaml'
             path.write_text(yaml.safe_dump(platform))
@@ -229,59 +231,12 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(Configuration(path).parameters('driver')['drives.controller_types'],
                              ['micontrol'] * 8)
 
-    def test_every_previous_parameter_is_preserved(self):
+    def test_actual_configuration_preserves_pre_migration_effective_parameters(self):
+        # Captured from the commissioned profile and its native overrides
+        # before centralization; all nine component configurations must agree.
         baseline = json.loads(Path(__file__).with_name('baseline_parameters.json').read_text())
-        # Hardware profile now selects CAN; unrelated USB policy/drive limits stay intact.
-        baseline['manual']['remdevice_mapping'] = json.dumps(
-            {'verified': False, 'node_id': 9, 'axes': {}, 'buttons': {}}, sort_keys=True)
-        baseline['supervisor']['require_operator_interlock'] = True
-        baseline['supervisor']['operator_scanner_override_enabled'] = False
-        baseline['manual']['require_neutral_rearm'] = True
-        baseline['manual']['receiver_can_overrun_advisory'] = False
-        baseline['manual']['receiver_auto_communication_reset'] = False
-        baseline['supervisor']['safety_source'] = 'flexisoft'
-        baseline['supervisor']['require_flexisoft_telemetry'] = False
-        baseline['supervisor'].pop('warning_speed_scale')
-        baseline['supervisor']['warning_speed_limit'] = 0.3
-        baseline['supervisor']['wheel_radius'] = 0.325
-        # Sixteen motion reads span at least 75 ms with the shared 5 ms gap.
-        baseline['driver']['physical_sample_skew_budget'] = 0.1
-        baseline['driver']['startup_timeout'] = 15.0
-        baseline['driver'].update(steering_align_on_enable=False, steering_alignment_velocity=0.6,
-                                  steering_alignment_timeout=12.5)
-        baseline['driver']['drives.controller_types'] = ['micontrol'] * 8
-        # Installed steering objects use motor-revolution user units. Traction
-        # retains its independent raw encoder scale.
-        baseline['driver']['drives.resolutions'] = [121, 4096] * 4
-        baseline['supervisor']['direct_steering_encoder_resolutions'] = [121] * 4
-        baseline['driver']['traction_pdo_enabled'] = False
-        baseline['driver']['telemetry_pdo_enabled'] = False
-        for key in ('traction_max_profile_velocity', 'traction_profile_accel', 'traction_profile_decel'):
-            baseline['driver'].pop(key)
-        baseline['driver']['drives.min_traction_velocities'] = [-5000, -1700] * 4
-        baseline['driver']['drives.max_traction_velocities'] = [5000, 1700] * 4
-        baseline['driver']['max_traction_current'] = 4.0
-        baseline['supervisor']['direct_traction_control_mode'] = 'current'
-        baseline['supervisor']['kinematicoff_current_supported'] = True
-        baseline['supervisor']['reset_timeout'] = 20.0
-        baseline['supervisor']['health_input_timeout'] = 0.5
-        baseline['manual'].update(axis_speed_sign=1, axis_crab_sign=1, axis_steer_sign=1)
-        # ROS traction commands and feedback now use contact m/s. Native CAN
-        # limits keep their rpm/increments/s values.
-        for component in ('driver', 'kinematics'):
-            baseline[component]['max_traction_velocity'] = 3.614
-        baseline['supervisor']['max_direct_traction_velocity'] = 3.614
-        baseline['driver']['wheel_radius'] = .325
-        geometry_data = {key: self.cfg.parameters('kinematics')[key] for key in (
-            'wheels_x', 'wheels_y', 'steering_joint_names', 'traction_joint_names',
-            'wheel_mount_angles', 'max_steering_velocity')}
-        geometry_data['steering_position_tolerances'] = [math.radians(1.)] * 4
-        geometry_data['steering_position_resolutions'] = [121.] * 4
-        geometry = json.dumps(geometry_data)
-        baseline['manual']['steering_geometry'] = geometry
-        baseline['supervisor']['manual_steering_geometry'] = geometry
-        for component, values in baseline.items():
-            self.assertEqual(self.cfg.parameters(component), values, component)
+        actual = {component: self.cfg.parameters(component) for component in self.cfg._parameters}
+        self.assertEqual(actual, baseline)
 
     def test_component_input_deadline_tracks_health_producer_override(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -291,7 +246,7 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(cfg.parameters('supervisor')['health_input_timeout'], .65)
             self.assertEqual(cfg.parameters('diagnostics')['odometry_timeout'], .65)
             self.assertEqual(cfg.parameters('supervisor')['health_timeout'], .3)
-            self.assertEqual(cfg.parameters('supervisor')['velocity_feedback_timeout'], .3)
+            self.assertEqual(cfg.parameters('supervisor')['velocity_feedback_timeout'], .35)
 
     def test_battery_filters_preserve_telemetry_priorities_and_charging_guards(self):
         filters = []
@@ -353,6 +308,8 @@ class ConfigurationTest(unittest.TestCase):
                     self.assertEqual(len(battery['batteries.' + key]), len(identifiers))
                 self.assertEqual(battery['primary_battery_id'], 'battery1')
                 self.assertEqual(cfg.platform['can']['battery'],
+                                 {'interface': 'can0', 'bitrate': 500000, 'listen_only': False}
+                                 if path == self.cfg.path else
                                  {'interface': 'can1', 'bitrate': 500000, 'listen_only': True})
 
     def test_integrated_and_standalone_battery_launch_follow_selected_pack_count(self):
@@ -395,7 +352,7 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_invalid_runtime_timing_and_speed_scale_fail_before_launch(self):
         for component, override in (
-                ('driver', {'feedback_request_period': .3}),
+                ('driver', {'feedback_request_period': .35}),
                 ('driver', {'fault_feedback_timeout': .5}),
                 ('supervisor', {'control_period': .2}),
                 ('supervisor', {'warning_speed_limit': 0}),
@@ -433,6 +390,24 @@ class ConfigurationTest(unittest.TestCase):
                 supervisor = next(a for a in actions if a.kind == 'Node' and
                                   a.kwargs['executable'] == 'mobotic_supervisor')
                 self.assertTrue(supervisor.kwargs['parameters'][0]['operator_scanner_override_enabled'])
+
+    def test_manual_hardware_requires_scanners_and_wires_their_timeout(self):
+        launch = PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py'
+        overrides = {'platform_config': str(self.verified_path), 'stack_type': 'hardware',
+                     'control_mode': 'manual_only', 'start_scanners': 'false'}
+        with self.assertRaisesRegex(ValueError, 'requires start_scanners:=true'):
+            resolve(factory(launch)(), overrides)
+        overrides['start_scanners'] = 'true'
+        actions, context = resolve(factory(launch)(), overrides)
+        nodes = [a for a in actions if a.kind == 'Node']
+        authority = next(a for a in nodes if a.kwargs['executable'] == 'manual_drive_control')
+        self.assertFalse(any(a.kwargs['executable'] == 'mobotic_supervisor' for a in nodes))
+        adapter = next(a for a in nodes if a.kwargs['executable'] == 'scanner_safety_adapter')
+        self.assertTrue(adapter.kwargs['condition'].perform(context))
+        self.assertEqual(authority.kwargs['parameters'][0]['scanner_timeout'],
+                         adapter.kwargs['parameters'][0]['status_timeout'])
+        self.assertEqual(sum(a.kwargs['executable'] == 'sick_safetyscanners2_node'
+                             and a.kwargs['condition'].perform(context) for a in nodes), 2)
 
     def test_retired_safety_source_is_rejected(self):
         profile = copy.deepcopy(self.cfg.platform)
@@ -546,9 +521,18 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual(node.kwargs['parameters'][0]['can_node_id'],
                          self.cfg.platform['modules'][0]['steering']['can_node_id'])
 
-    def test_sdo_profile_rejects_pdo_requests_and_invalid_skew(self):
-        for overrides in ({'traction_pdo_enabled': True}, {'telemetry_pdo_enabled': True},
-                          {'sample_skew_budget': 0}, {'sample_skew_budget': 0.31}):
+    def test_profile_accepts_pdo_requests(self):
+        for traction, telemetry in ((True, False), (False, True), (True, True)):
+            with self.subTest(traction=traction, telemetry=telemetry):
+                cfg = Configuration()
+                cfg.apply_overrides('driver', {'traction_pdo_enabled': traction,
+                                               'telemetry_pdo_enabled': telemetry})
+                cfg._validate_policy()
+                self.assertEqual(cfg.parameters('driver')['traction_pdo_enabled'], traction)
+                self.assertEqual(cfg.parameters('driver')['telemetry_pdo_enabled'], telemetry)
+
+    def test_profile_rejects_invalid_skew(self):
+        for overrides in ({'sample_skew_budget': 0}, {'sample_skew_budget': 0.36}):
             cfg = Configuration()
             cfg.apply_overrides('driver', overrides)
             with self.subTest(overrides=overrides), self.assertRaises(ConfigurationError):
@@ -564,7 +548,7 @@ class ConfigurationTest(unittest.TestCase):
         cfg._validate_policy()
         self.assertFalse(cfg.parameters('driver')['traction_pdo_enabled'])
         self.assertFalse(cfg.parameters('driver')['telemetry_pdo_enabled'])
-        cfg.apply_overrides('driver', {'physical_sample_skew_budget': 0.31})
+        cfg.apply_overrides('driver', {'physical_sample_skew_budget': 0.36})
         with self.assertRaises(ConfigurationError):
             cfg._validate_policy()
 
@@ -573,7 +557,7 @@ class ConfigurationTest(unittest.TestCase):
                      lambda p: p['geometry'].update(wheel_radius=float('nan')),
                      lambda p: p['modules'][0]['traction'].update(can_node_id='0x01'),
                      lambda p: p['modules'].reverse(),
-                     lambda p: p['can']['battery'].update(interface='can0'),
+                     lambda p: p['can']['battery'].update(interface=p['can']['drives']['interface'], listen_only=True),
                      lambda p: p['can']['battery'].update(listen_only='false'),
                      lambda p: p['motion_limits'].update(max_traction_velocity=1000),
                      lambda p: p['safety'].pop('emergency_stop_mask'),
@@ -613,6 +597,7 @@ class ConfigurationTest(unittest.TestCase):
     def test_battery_ack_mode_requires_an_explicit_boolean(self):
         for value in (True, False):
             profile = copy.deepcopy(self.cfg.platform)
+            profile['can']['battery']['interface'] = 'can1'
             profile['can']['battery']['listen_only'] = value
             validate_platform(profile)
         for value in ('false', 'true', 0, 1, None):
@@ -632,10 +617,10 @@ class ConfigurationTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, 'conflicts'):
             self.cfg.apply_overrides('kinematics', {'wheel_radius': 0.1125})
         with self.assertRaisesRegex(ConfigurationError, 'cannot exceed'):
-            self.cfg.apply_overrides('manual', {'max_velocity_linear': 2.0})
+            self.cfg.apply_overrides('manual', {'max_velocity_linear': 3.0})
         self.cfg.apply_overrides('manual', {'max_velocity_linear': 0.75})
         self.assertEqual(self.cfg.parameters('manual')['max_velocity_linear'], 0.75)
-        self.assertEqual(self.cfg.parameters('supervisor')['max_velocity_linear'], 1.25)
+        self.assertEqual(self.cfg.parameters('supervisor')['max_velocity_linear'], 2.0)
         self.cfg.apply_overrides('driver', {'drives.can_node_ids': [1, 2, 3, 4, 7, 8, 5, 6]})
 
     def test_custom_profile_propagates_to_all_consumers(self):
@@ -656,7 +641,7 @@ class ConfigurationTest(unittest.TestCase):
     def test_integrated_and_standalone_effective_parameters_match(self):
         actions, context = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')())
         self.assertEqual(context['robot_name'], 'moboterra')
-        self.assertEqual((context['can_interface'], context['battery_can_interface']), ('can0', 'can1'))
+        self.assertEqual((context['can_interface'], context['battery_can_interface']), ('can0', 'can0'))
         env = environment()
         executable = {'driver': 'mobotic_driver',
                       'manual': 'remdevice_control', 'supervisor': 'mobotic_supervisor',
@@ -697,7 +682,7 @@ class ConfigurationTest(unittest.TestCase):
             self.assertEqual(nodes[1]['name'], 'operator')
 
     def test_can_operator_rejects_node_collision_and_unknown_bus_setting(self):
-        for mutation in (lambda p: p['operator']['mapping'].update(node_id=10),
+        for mutation in (lambda p: p['operator']['mapping'].update(node_id=int(p['can']['master_node_id'], 0)),
                          lambda p: p['operator']['mapping'].update(node_id=1),
                          lambda p: p['operator'].update(interface='can2')):
             p = copy.deepcopy(self.cfg.platform)
@@ -709,6 +694,7 @@ class ConfigurationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             p = copy.deepcopy(self.cfg.platform)
             p['operator']['source'] = 'usb'
+            p['operator']['mapping']['buttons'].pop('scanner_override', None)
             path = Path(directory) / 'pail-usb.yaml'
             path.write_text(yaml.safe_dump(p))
             cfg = Configuration(path)
@@ -725,6 +711,7 @@ class ConfigurationTest(unittest.TestCase):
         for change in (dict(usb_driver='unknown'), dict(usb_mapping_verified='true'),
                        dict(require_enable_interlock='false'), dict(require_neutral_rearm=1),
                        dict(receiver_can_overrun_advisory='true'),
+                       dict(receiver_errors_advisory='true'),
                        dict(receiver_auto_communication_reset='false')):
             p = copy.deepcopy(self.cfg.platform)
             p['operator'].update(change)
@@ -744,6 +731,21 @@ class ConfigurationTest(unittest.TestCase):
             self.assertTrue(Configuration(path).parameters('manual')['receiver_can_overrun_advisory'])
             self.assertTrue(Configuration(path).parameters('manual')['receiver_auto_communication_reset'])
 
+    def test_pail_pdo_based_diagnostic_policy_reaches_operator_and_launch(self):
+        cfg = Configuration(self.verified_path)
+        self.assertFalse(cfg.parameters('manual')['receiver_errors_advisory'])
+        platform = copy.deepcopy(cfg.platform)
+        platform['operator']['receiver_errors_advisory'] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'pdo-policy.json'
+            path.write_text(json.dumps(platform))
+            self.assertTrue(Configuration(path).parameters('manual')['receiver_errors_advisory'])
+            actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                                 {'platform_config': str(path)})
+            operator = next(action for action in actions if action.kind == 'Node'
+                            and action.kwargs.get('executable') == 'remdevice_control')
+            self.assertTrue(operator.kwargs['parameters'][0]['receiver_errors_advisory'])
+
     def test_namespace_root_and_endpoint_overrides(self):
         desc = factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')()
         actions, context = resolve(desc, {'robot_name': '', 'can_interface': 'vcan0',
@@ -752,7 +754,7 @@ class ConfigurationTest(unittest.TestCase):
         scanner = next(a for a in actions if a.kind == 'Node' and a.kwargs['name'] == 'front_left_scanner')
         self.assertEqual(scanner.kwargs['parameters'][0]['sensor_ip'], '10.60.20.54')
         with self.assertRaises(ConfigurationError):
-            resolve(desc, {'battery_can_interface': 'can0'})
+            resolve(desc, {'battery_can_interface': 'invalid/interface'})
 
     def test_tf_auto_respects_yaml_and_explicit_override(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -6,10 +6,10 @@
     required_health_sources: ['kinematics']
     health_timeout: 0.3
     initial_mode: "manual"
-    control_period: 0.02
+    control_period: 0.05
     mode_transition_stop_duration: 0.25
     mode_transition_timeout: 10
-    velocity_feedback_timeout: 0.3
+    velocity_feedback_timeout: 0.35
     standstill_linear_velocity: 0.02
     standstill_angular_velocity: 0.02
     standstill_joint_velocity: 0.1
@@ -17,7 +17,7 @@
     autonomy_timeout: 0.25
     safety_timeout: 0.3
     battery_timeout: 0.6
-    wheel_status_timeout: 0.3
+    wheel_status_timeout: 0.35
     minimum_battery_percentage: 0.2  # Warning threshold only;
     warning_speed_limit: 0.3  # m/s, absolute planar/individual-wheel limit
     override_speed_scale: 0.2  # Legacy compatibility only; reduced speed uses the absolute 0.3 m/s cap.

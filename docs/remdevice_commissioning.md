@@ -423,12 +423,31 @@ fresh sustained standstill or confirmed native disabled-drive states. The
 supervisor clears drive faults and initializes/enables at zero targets; acceptance
 is not completion. Observe `vehicle/mode` for verified recovery.
 
-### CAN overrun advisory policy
+### PDO-based receiver readiness
+
+The supplied default platform enables `operator.receiver_errors_advisory: true`.
+Receiver EMCYs (including `0x8110` and `0x8150`), current error-register values,
+their clears and CAN-error notifications remain diagnostics. They do not
+invalidate a fresh joystick PDO pair or start an automatic communication reset.
+Malformed or stale diagnostic messages also cannot invalidate the controls.
+The normal PDO acquisition-age limit (250 ms), pair/skew checks, axis validation,
+physical LINK/EMGY/STOP and supervisor/hardware interlocks remain authoritative.
+Both digital and analog PDOs must stay valid: a stream of diagnostics or just
+one repeating PDO cannot renew an old control sample. A real input loss still
+stops motion and invokes the existing B2 recovery policy.
+
+The setting defaults to false in profiles that omit it. Set it to false to
+restore error-based inhibition. Error reports remain available in `operator/raw`;
+healthy diagnostic changes do not replace operator status or generate warning/error
+logs. Actual PDO, STOP and link failures are still reported. This policy changes application behavior and does
+not correct a bus fault or establish the identity of a CAN producer.
+
+### CAN overrun advisory policy (without PDO-based readiness)
 
 The optional platform setting `operator.receiver_can_overrun_advisory: true`
 makes only receiver EMCY `0x8110` with error register exactly `0x11` advisory.
-It is enabled in this machine's `platform-can0-500k-micontrol.yaml`; other
-profiles default to strict fault inhibition. With the setting enabled, a new
+It is enabled alongside PDO-based readiness in the supplied default platform;
+profiles omitting both settings use strict fault inhibition. With only this setting enabled, a new
 overrun or its zero-code clear does not invalidate an otherwise fresh PDO pair
 or manufacture a receiver disconnection. The original acquisition timestamps
 remain authoritative: the diagnostic cannot renew controls or bypass the
@@ -445,12 +464,39 @@ collision can mean another producer is using the receiver's identifiers; fresh
 payloads alone do not establish their source. This setting changes the
 application response to overrun; it does not repair the underlying CAN fault.
 
+### Temporary receive-only operation
+
+Set `receiver_transmit_enabled: false` in the manual parameter overlay to stop
+all receiver-directed CAN transmissions from `remdevice_control`: automatic and
+explicit NMT starts, current-error-register SDO polling and communication resets.
+PDOs, heartbeat, EMCY and physical STOP/link monitoring remain active, as do B2
+requests to the drive authority. Input freshness and fault inhibition are unchanged.
+The receiver must already be operational and publishing PDOs; this mode cannot
+start or reset it. Without polling, a fault missed before subscription is not
+discovered through an error-register baseline, and cached faults can clear only
+through received device events. Drive and master-heartbeat traffic remains on
+the shared CAN bus.
+
+The setting is in `src/mobotic_config/config/manual_control.yaml`.
+Both local launchers read that setting and skip the startup receiver-clear utility when false. The standalone
+clear utility also refuses to transmit while that setting is false. Changes take
+effect after restarting the ROS stack. To restore the previous receiver behavior,
+set the value to `true` and restart. The repository default remains `true`.
+`operator/raw.receiver_transmit_enabled` reports the selected runtime setting.
+
+After the receive-only experiment on 12 November 2026, this Pi restored
+`receiver_transmit_enabled: true` and explicitly enabled
+`operator.receiver_auto_communication_reset: true` in its local commissioned
+platform profile. Startup clearing and health polling are enabled again. Runtime
+communication resets retain the disabled-drive, neutral-input and retry guards
+described below and never automatically re-enable drives.
+
 B2 never sends receiver SDO requests, clears the receiver error latch, or sends
 NMT reset-communication. Error monitoring is independent of B2 and defaults
 to enabled (`receiver_auto_recovery: true`) for verified mappings. It reads
 `0x1001:0` at most once per second; only a fresh response matching the pending
 request and current EMCY event may clear a fault when the device reports zero.
-Automatic receiver communication resets default to disabled. The current profile
+Automatic receiver communication resets default to disabled. The reference profile
 explicitly sets `operator.receiver_auto_communication_reset: false`. Read-only
 monitoring never writes `0x1001`, clears the historical archive `0x1003`, saves
 EEPROM or resets the receiver. A confirmed zero register clears only the software

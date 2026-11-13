@@ -61,11 +61,13 @@ status and fault polling continues after failure. A new supervised B2 reset
 transaction is required to rearm. Encoder origin and controller ramps are never
 rewritten. See [startup and B2 recovery](../../docs/drive_startup.md).
 
-`traction_pdo_enabled` and `telemetry_pdo_enabled` accept only false for existing
-SDO override compatibility; true is rejected. No drive PDO configuration,
-NMT transaction, RPDO command or SYNC is generated. Incoming drive PDOs cannot
-update feedback, freshness or availability. The final shared sender still
-supports the separate operator receiver's NMT traffic.
+`traction_pdo_enabled` and `telemetry_pdo_enabled` accept either boolean value.
+Setting either flag to true logs a startup warning: drive PDO transport is not
+implemented, and commands and feedback still use SDOs. These flags alone do not
+reduce CAN traffic. No drive PDO configuration, NMT transaction, RPDO command or
+SYNC is generated. Incoming drive PDOs cannot update feedback, freshness or
+availability. The final shared sender still supports the separate operator
+receiver's NMT traffic.
 
 Each validated SDO sample retains its acquisition timestamp and per-field replay
 watermark. Heartbeats, acknowledgements, current and unrelated objects cannot

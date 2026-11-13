@@ -290,14 +290,22 @@ RP1 mode requests and direct-current control are not accepted. Driver limits,
 feedback checks and watchdogs are unchanged.
 
 Manual-only body and final wheel speeds are capped at **0.3 m/s**, including
-boosted input and rotation, because this authority has no scanner-zone evidence.
+boosted input and rotation, as a fixed commissioning ceiling even with clear fields.
 Body limits apply one common scale to forward, lateral and yaw velocity. Reduced
 speed therefore preserves Ackermann turning radius and crab heading, including
 partial steering and reverse travel, rather than tightening a turn as speed falls.
 Use supervised operation for the active robot's 1 m/s normal and 2 m/s boosted
 green-zone travel. Yellow zones and Safety Disabled remain capped at 0.3 m/s.
 
-This explicitly omits supervisor scanner and battery ROS gates. Keep the
+Both scanner field streams are mandatory, including during B2 recovery and
+neutral steering homing. A red protective field, unknown/invalid state or stale
+stream withdraws drive permission immediately and requires B2 after the cause
+clears. Warning fields allow motion within the existing 0.3 m/s ceiling. The
+manual authority reports the scanner and condition in `vehicle/mode.status_message`.
+It does not implement the supervised RP2 scanner override: scanners remain
+mandatory regardless of RP2. Hardware `manual_only` rejects `start_scanners:=false`.
+
+This mode omits the supervisor, FlexiSoft and battery ROS gates. Keep the
 independent hardware scanner/stop circuit working; software tests do not verify
 its physical effectiveness. The robot-local wrapper preserves the original
 launcher's collision, CAN and port checks and original romb kinematics:
@@ -306,8 +314,11 @@ launcher's collision, CAN and port checks and original romb kinematics:
 /home/mobotic/start_ros2_manual_only.sh
 ```
 
-The wrapper omits ROS scanner/safety/battery, odometry and description nodes. It
-never reconfigures scanner hardware. Drives remain disabled until neutral controls
+Both local launchers force `start_scanners:=true`, starting both SICK drivers,
+the evaluation projection and scanner status adapter. The manual wrapper omits
+FlexiSoft/battery, odometry and description nodes. It never changes persistent
+scanner configuration. Drives remain disabled until fresh clear protective fields,
+known warning states, neutral controls
 and B2 (or `wheel_modules/enable_drives`). Recovery clears faults and initializes
 at zero targets, then requires acknowledged enabled feedback and 250 ms measured
 joint standstill. Neutral controls are required to request B2 recovery. Once
@@ -324,7 +335,7 @@ or clock discrepancies discard cached commands; up to 40 ms of ROS clock skew
 command ordering and the independent 100 ms driver motion watchdog still apply.
 Large clock changes can still invalidate input freshness.
 
-Operator STOP/loss, stale or faulted drive feedback, a sustained monotonic control
+Scanner protective stop/loss, operator STOP/loss, stale or faulted drive feedback, a sustained monotonic control
 gap or another mode authority still latches disable. Correct the cause, return to
 neutral and press B2 again. The manual authority does not respawn or automatically
 re-enable.
@@ -392,3 +403,18 @@ preflight and before ROS nodes start. The manual-only wrapper inherits this
 behavior. Keep sticks neutral and B2 released. All eight drives must already
 report disabled. A failed reset or nonzero verification aborts launch; runtime
 PAIL faults still inhibit and require correction/rearm.
+
+Temporary receive-only mode is selected by `receiver_transmit_enabled: false`
+in `src/mobotic_config/config/manual_control.yaml`. In this mode the
+launcher skips receiver clearing and the operator node sends no receiver NMT,
+SDO polling or resets. The standalone clear utility refuses to transmit too.
+Joystick PDO/status reception, STOP/link checks and B2 drive-enable requests
+remain active. Restore the setting to `true` and restart to restore the prior
+receiver behavior. The receiver must already be publishing PDOs in receive-only
+mode; missed historical faults cannot be checked through an initial SDO read.
+
+## Optional RViz
+
+`start_rviz:=true` adds RViz to the launch lifecycle. `rviz_config` selects a display configuration; an empty value uses RViz defaults. The viewer runs in the robot namespace and remaps `/tf` and `/tf_static` to that namespace. Closing RViz does not stop the stack.
+
+On the Pi, `scripts/start_ros2_four_micontrol.sh` selects `config/raspberry-pi/live.rviz` and enables robot description, measured-wheel odometry and RViz by default. The manual-only wrapper inherits those defaults. Use `start_rviz:=false` for a headless launch. See [Pi settings](../../docs/pi-settings.md) for feedback availability and startup commands.

@@ -248,7 +248,20 @@ Held/reconnected B2 does not retry: release and press again. After a response,
 motion requires new neutral input. Blocking receiver faults remain inhibited;
 the stack stays running. See [B2 drive enable](../../docs/remdevice_commissioning.md#b2-drive-enabledisable).
 RP2/STOP retain their independent safety functions.
-For a verified PAIL profile, `operator.receiver_can_overrun_advisory: true`
+For a verified PAIL profile, `operator.receiver_errors_advisory: true` makes
+receiver EMCY codes, current error-register values and CAN-error indications
+diagnostic only. The supplied default platform enables this PDO-based policy.
+Diagnostic reports and their clears do not discard controls, reset the
+receiver or require joystick rearm. Readiness follows a fresh, valid digital
+and analog PDO pair, including acquisition age, skew, axis validation and
+LINK/EMGY/STOP. Missing or invalid controls still stop motion; the supervisor's
+250 ms operator timeout and drive recovery policy remain active. Raw diagnostics
+retain the receiver code/register, policy flag and CAN-error indication count.
+Healthy diagnostics stay in `operator/raw`; they do not replace normal operator
+status or generate warning/error logs. Actual PDO/STOP/link failures are still reported.
+This setting does not repair receiver faults or verify a CAN frame's producer.
+
+Without that policy, `operator.receiver_can_overrun_advisory: true`
 allows only `0x8110` / register `0x11` to remain a visible warning while fresh
 validated controls continue. The default is `false`. This does not renew input
 timestamps or bypass stale/missing PDOs, invalid axes, STOP, LINK/EMGY, CAN-error
@@ -276,12 +289,12 @@ missed EMCY reset and discards old controls for blocking-fault recovery.
 read-only and never clears receiver history or resets the device. B2 only calls
 the supervisor's drive-enable service; it cannot trigger either a receiver read
 or a receiver reset. If communication reset is explicitly enabled in the profile,
-for `0x8150` with register `0x11`, it can reset the mapped receiver only, with fresh neutral
+for a blocking `0x8150` with register `0x11`, it can reset the mapped receiver only, with fresh neutral
 radio inputs, a current supervisor report confirming disabled drives and no
 pending enable/toggle. It waits 500 ms before targeted NMT start. Resets are
 limited to three per process and spaced at least five seconds apart. Motion
 requires new neutral inputs after recovery; drive enable remains supervisor
-owned. Persistent faults, including EEPROM errors, stay inhibited. No EEPROM,
+owned. Under strict policy, persistent faults, including EEPROM errors, stay inhibited. No EEPROM,
 PDO mapping, node-ID or bitrate writes are performed. Set this parameter to
 `false` to retain passive receiver-fault handling.
 

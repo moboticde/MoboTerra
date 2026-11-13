@@ -1,0 +1,5 @@
+/**:
+  ros__parameters:
+    scanner_timeout: 0.5
+    odometry_timeout: 0.5
+    publish_period: 0.5

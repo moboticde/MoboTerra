@@ -100,9 +100,14 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
   this->declare_parameter("motion_feedback_timeout", 0.3);
   this->declare_parameter("status_feedback_timeout", 0.3);
   this->declare_parameter("fault_feedback_timeout", 2.5);
-  if (this->declare_parameter("traction_pdo_enabled", false) ||
-      this->declare_parameter("telemetry_pdo_enabled", false))
-  { throw std::invalid_argument("this driver supports miControl SDO transport only"); }
+  const bool traction_pdo_requested = this->declare_parameter("traction_pdo_enabled", false);
+  const bool telemetry_pdo_requested = this->declare_parameter("telemetry_pdo_enabled", false);
+  if (traction_pdo_requested || telemetry_pdo_requested)
+  {
+    RCLCPP_WARN(this->get_logger(),
+                "PDO flags are accepted, but drive PDO transport is not implemented; "
+                "commands and feedback still use SDOs.");
+  }
   this->declare_parameter("virtual_position_source", false);
   this->declare_parameter("sample_skew_budget", 0.005);
   this->declare_parameter("physical_sample_skew_budget", 0.1);

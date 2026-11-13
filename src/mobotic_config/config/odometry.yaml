@@ -2,7 +2,7 @@
 /**:
   ros__parameters:
     publish_tf: true
-    feedback_timeout: 0.3
+    feedback_timeout: 0.35
     max_integration_interval: 0.3
     initial_pose: [0,0,0]
     initial_pose_variances: [0.01,0.01,0.01]

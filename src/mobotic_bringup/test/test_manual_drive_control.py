@@ -8,7 +8,7 @@ import pytest
 import rclpy
 from rclpy.time import Time
 from mobotic_bringup.manual_drive_control import ManualDriveControl
-from mobotic_interfaces.msg import OperatorState, WheelModuleStatus, WheelModuleStatusArray
+from mobotic_interfaces.msg import OperatorState, ScannerSafetyState, WheelModuleStatus, WheelModuleStatusArray
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
@@ -36,6 +36,12 @@ def node():
 
 def seed(n, enabled=False):
     stamp = Time(seconds=n.test_now).to_msg()
+    for name in ('front_left', 'rear_right'):
+        scanner = ScannerSafetyState()
+        scanner.header.stamp, scanner.scanner_id = copy.deepcopy(stamp), name
+        scanner.communication_ok = scanner.protective_state_known = scanner.warning_state_known = True
+        scanner.protective_field_clear = scanner.warning_field_clear = True
+        n._receive('scanner/' + name, scanner)
     operator = OperatorState()
     operator.header.stamp = stamp
     operator.connected = operator.command_active = operator.controls_neutral = True
@@ -166,7 +172,7 @@ def test_ackermann_cap_preserves_partial_steering_through_final_wheel_command(no
 
 
 @pytest.mark.parametrize('limit', [.15, 2.])
-def test_manual_only_caps_body_speed_without_scanner_zone_evidence(node, limit):
+def test_manual_only_retains_commissioning_body_speed_cap_with_clear_scanners(node, limit):
     node.max_velocity_linear = limit
     node.max_traction_velocity = 2.
     node.phase = 'enabled'
@@ -179,6 +185,112 @@ def test_manual_only_caps_body_speed_without_scanner_zone_evidence(node, limit):
     cap = min(limit, .3)
     assert math.hypot(velocity.linear.x, velocity.linear.y) == pytest.approx(cap)
     assert velocity.angular.z == pytest.approx(node.max_velocity_angular * cap / math.hypot(2., 2.))
+
+
+@pytest.mark.parametrize('name', ['front_left', 'rear_right'])
+@pytest.mark.parametrize('fault', ['missing', 'stale', 'communication_ok', 'protective_state_known',
+                                  'warning_state_known', 'protective_field_clear'])
+def test_scanner_fault_blocks_initial_enable(node, name, fault):
+    seed(node)
+    key = 'scanner/' + name
+    if fault == 'missing':
+        node.samples.pop(key)
+    elif fault == 'stale':
+        node.samples[key][0].header.stamp.sec -= 1
+    else:
+        setattr(node.samples[key][0], fault, False)
+    response = node._enable(None, Trigger.Response())
+    assert not response.success and name in response.message
+    assert node.phase == 'disabled'
+
+
+@pytest.mark.parametrize('name', ['front_left', 'rear_right'])
+@pytest.mark.parametrize('phase', ['recovering', 'enabled'])
+@pytest.mark.parametrize('fault', ['communication_ok', 'protective_state_known',
+                                  'warning_state_known', 'protective_field_clear'])
+def test_scanner_callback_immediately_latches_stop_during_motion_or_homing(node, name, phase, fault):
+    seed(node, True)
+    node.phase = phase
+    node.recovery_started = node.test_now
+    msg = copy.deepcopy(node.samples['scanner/' + name][0])
+    node.test_now += .02
+    msg.header.stamp = Time(seconds=node.test_now).to_msg()
+    setattr(msg, fault, False)
+    node._receive_scanner(name, msg)
+    assert node.phase == 'disabled'
+    mode = node.mode_pub.publish.call_args.args[0]
+    assert mode.safety_stop_active and not mode.motion_permitted and not mode.ready_to_drive
+    assert name in mode.status_message and 'SCANNER_NOT_READY' in mode.reason_codes
+    assert not node.operation_pub.publish.call_args.args[0].enable
+    assert node.velocity_pub.publish.call_args.args[0].twist.linear.x == 0.
+    assert not node.ledger
+    tick(node)
+    assert node.phase == 'disabled'  # clear fields do not automatically re-enable
+
+
+def test_scanner_staleness_uses_its_own_deadline_and_latches_stop(node):
+    node.scanner_timeout = .1
+    seed(node, True)
+    node.phase = 'enabled'
+    node.test_now += .11
+    node._tick()
+    assert node.phase == 'disabled'
+    assert 'scanner field data unavailable' in node.reason
+    assert not node.operation_pub.publish.call_args.args[0].enable
+
+
+def test_same_acquisition_loss_is_accepted_but_clear_replay_cannot_restore(node):
+    seed(node, True)
+    node.phase = 'enabled'
+    clear = copy.deepcopy(node.samples['scanner/front_left'][0])
+    lost = copy.deepcopy(clear)
+    lost.communication_ok = False
+    node._receive_scanner('front_left', lost)
+    assert node.phase == 'disabled'
+    node.test_now += .01
+    node._receive_scanner('front_left', clear)
+    assert not node.samples['scanner/front_left'][0].communication_ok
+    assert not node._scanner_gate()[0]
+
+
+@pytest.mark.parametrize('name', ['front_left', 'rear_right'])
+def test_scanner_warning_keeps_motion_capped_and_reports_source(node, name):
+    seed(node, True)
+    node.phase = 'enabled'
+    msg = copy.deepcopy(node.samples['scanner/' + name][0])
+    node.test_now += .02
+    msg.header.stamp = Time(seconds=node.test_now).to_msg()
+    msg.warning_field_clear = False
+    node._receive_scanner(name, msg)
+    node.samples['command'][0].twist.linear.x = 2.
+    node._tick()
+    mode = node.mode_pub.publish.call_args.args[0]
+    assert node.phase == 'enabled' and mode.motion_permitted and not mode.safety_stop_active
+    assert name + ' scanner warning field active' in mode.status_message
+    assert node.velocity_pub.publish.call_args.args[0].twist.linear.x == pytest.approx(.3)
+
+
+def test_scanner_fault_rejects_pending_candidate_before_next_tick(node):
+    node.phase = 'enabled'
+    joints = seed(node, True)
+    node._tick()
+    joints.header = copy.deepcopy(node.velocity_pub.publish.call_args.args[0].header)
+    node.samples['scanner/rear_right'][0].protective_field_clear = False
+    node._candidate(joints)
+    node.command_pub.publish.assert_not_called()
+
+
+def test_wrong_scanner_identity_and_replays_cannot_refresh_clear_fields(node):
+    seed(node, True)
+    clear = copy.deepcopy(node.samples['scanner/front_left'][0])
+    received = node.samples['scanner/front_left'][1]
+    node.test_now += .1
+    node._receive_scanner('front_left', clear)
+    assert node.samples['scanner/front_left'][1] == received
+    clear.header.stamp = Time(seconds=node.test_now).to_msg()
+    clear.scanner_id = 'rear_right'
+    node._receive_scanner('front_left', clear)
+    assert node.samples['scanner/front_left'][1] == received
 
 
 @pytest.mark.parametrize('speed', [-2., 2.])

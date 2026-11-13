@@ -3,6 +3,11 @@
 One configuration directory for MoboTerra. This package validates configuration
 and derives the existing ROS node parameters; it is not a runtime control node.
 
+`config/platform.yaml` and the component YAML files contain the actual native
+MoboTerra configuration. The native physical launcher, its manual-only wrapper,
+the shared-CAN compatibility launcher and receiver recovery use these defaults
+directly, without physical component override files.
+
 ## Ownership
 
 | File in `config/` | Owns |
@@ -30,9 +35,11 @@ deadline in the diagnostics policy so producer and consumer agree. The separate
 supervisor `health_timeout` bounds health-report romb and producer liveness;
 it does not replace acquisition-age validation or motion watchdogs.
 
-The defaults preserve the four-module layout (1.69 m / 0.99 m, 0.325 m radius),
-CAN0 drives/CAN1 receive-only battery, reference drive IDs, scanner addresses and
-current manual controls. Raw traction profile values are preserved commissioning
+The defaults preserve the commissioned four-module layout (1.69 m / 0.99 m,
+0.325 m radius), shared CAN0 drive/battery traffic, master node 11, node-10
+REMdevice mapping and the actual scanner addresses. Driver feedback/heartbeat
+periods are 0.1 s, supervisor/operator periods are 0.05 s, manual linear scaling
+is 0.5, and B2 steering alignment uses 1.2 rad/s. Raw traction profile values are preserved commissioning
 settings, not automatically recalculated from a geometry edit. Recalibrate them
 when changing gearing, resolution or tyre dimensions. Software ceilings must fit
 the controller's raw velocity/current ceilings.

@@ -39,8 +39,10 @@ class RemdeviceControl(ManualControl):
                 raise ValueError('Complete finite wheel geometry is required for stationary steering')
             self.steering_publisher = self.create_publisher(JointState, 'operator/steering_setpoints', 1)
         self.declare_parameter('receiver_can_overrun_advisory', False)
+        self.declare_parameter('receiver_errors_advisory', False)
         self.decoder = RemdeviceReceiver(self.mapping.node_id, timeout_ns=int(self.joystick_timeout * 1e9),
-            can_overrun_advisory=bool(self.get_parameter('receiver_can_overrun_advisory').value))
+            can_overrun_advisory=bool(self.get_parameter('receiver_can_overrun_advisory').value),
+            errors_advisory=bool(self.get_parameter('receiver_errors_advisory').value))
         # Homing observes live physical inputs independently of diagnostic EMCY
         # invalidation. This channel never authorizes joystick motion or B2.
         self.homing_decoder = RemdeviceReceiver(self.mapping.node_id,
@@ -62,6 +64,8 @@ class RemdeviceControl(ManualControl):
         self.drive_toggle_status = ''
         self.input_error = ''
         self.last_start_ns = None
+        self.declare_parameter('receiver_transmit_enabled', True)
+        self.receiver_transmit_enabled = bool(self.get_parameter('receiver_transmit_enabled').value)
         self.declare_parameter('receiver_auto_recovery', True)
         self.receiver_auto_recovery = bool(self.get_parameter('receiver_auto_recovery').value)
         self.declare_parameter('receiver_auto_communication_reset', False)
@@ -91,18 +95,31 @@ class RemdeviceControl(ManualControl):
             QoSProfile(depth=32, reliability=ReliabilityPolicy.BEST_EFFORT))
         if not self.mapping.verified:
             self.get_logger().warning('PAIL mapping unverified: capture only; motion, mode and reset requests inhibited.')
+        if not self.receiver_transmit_enabled:
+            self.get_logger().warning('PAIL receive-only: receiver NMT, SDO polling and communication resets disabled.')
+
+    def _send_receiver_frame(self, frame):
+        if not self.receiver_transmit_enabled:
+            return False
+        self.can_publisher.publish(frame)
+        return True
 
     def _send_start(self):
         frame = Frame()
         frame.header.stamp = self.get_clock().now().to_msg()
         frame.id, frame.dlc = 0, 2
         frame.data = [1, self.mapping.node_id, 0, 0, 0, 0, 0, 0]
-        self.can_publisher.publish(frame)
+        if not self._send_receiver_frame(frame):
+            return False
         self.last_start_ns = self.get_clock().now().nanoseconds
+        return True
 
     def _start_receiver(self, request, response):
         # Explicit commissioning operation; never broadcast NMT or modify SDOs.
-        self._send_start()
+        if not self._send_start():
+            response.success = False
+            response.message = 'Receiver transmit disabled; receive-only mode sends no NMT start.'
+            return response
         response.success = True
         response.message = f'Targeted NMT start sent to receiver {self.mapping.node_id}; verify PDO reception.'
         return response
@@ -118,7 +135,7 @@ class RemdeviceControl(ManualControl):
                 and sample is not None and self._reset_sample_neutral(sample))
 
     def _receiver_recovery_tick(self, now):
-        if not self.receiver_auto_recovery or not self.mapping.verified:
+        if not self.receiver_transmit_enabled or not self.receiver_auto_recovery or not self.mapping.verified:
             return
         if self.receiver_reset_ns is not None:
             # Allow reset-communication to finish before starting ONLY this
@@ -149,14 +166,14 @@ class RemdeviceControl(ManualControl):
         # EMCY sent before this subscriber started may have been missed.
         # Upload the one-byte CANopen error register, object 0x1001:0.
         frame.data = [0x40, 0x01, 0x10, 0, 0, 0, 0, 0]
-        self.can_publisher.publish(frame)
+        self._send_receiver_frame(frame)
         self.receiver_poll_ns = now.nanoseconds
         self.receiver_read = (now.nanoseconds,
             self.decoder.last_stamps.get(self.decoder.emergency_id))
 
     def _receiver_error_response(self, frame, now):
         pending = self.receiver_read
-        if (not self.receiver_auto_recovery or not self.mapping.verified or pending is None
+        if (not self.receiver_transmit_enabled or not self.receiver_auto_recovery or not self.mapping.verified or pending is None
                 or frame.is_error or frame.is_extended or frame.is_rtr or frame.dlc != 8):
             return
         try:
@@ -203,6 +220,7 @@ class RemdeviceControl(ManualControl):
             elif first_read:
                 self.get_logger().info('Receiver current error register verified zero (read-only startup baseline)')
         elif (self.receiver_auto_communication_reset
+                and self.decoder.has_blocking_error()
                 and self.decoder.emergency_code == 0x8150 and data[4] == 0x11
                 and self.receiver_reset_attempts < 3 and self._receiver_reset_allowed(now)
                 and (self.receiver_reset_ns is None)
@@ -212,7 +230,7 @@ class RemdeviceControl(ManualControl):
             reset.header.stamp = now.to_msg()
             reset.id, reset.dlc = 0, 2
             reset.data = [0x82, self.mapping.node_id, 0, 0, 0, 0, 0, 0]
-            self.can_publisher.publish(reset)
+            self._send_receiver_frame(reset)
             self.receiver_reset_ns = self.receiver_last_reset_ns = now.nanoseconds
             self.receiver_reset_attempts += 1
             self.decoder.invalidate('receiver communication recovery in progress', now.nanoseconds)
@@ -361,6 +379,9 @@ class RemdeviceControl(ManualControl):
             return
         now = self.get_clock().now()
         if frame.is_error:
+            if self.decoder.errors_advisory:
+                self.decoder.update(frame.id, frame.dlc, [], 0, now.nanoseconds, is_error=True)
+                return
             if hasattr(self, 'homing_decoder'):
                 self.homing_decoder.invalidate('CAN error frame', now.nanoseconds)
             self.decoder.invalidate('CAN error frame', now.nanoseconds)
@@ -370,6 +391,8 @@ class RemdeviceControl(ManualControl):
         try:
             stamp = Time.from_msg(frame.header.stamp).nanoseconds
         except (TypeError, ValueError, OverflowError):
+            if self.decoder.errors_advisory and frame.id == self.decoder.emergency_id:
+                return
             if not frame.is_extended and frame.id in {
                     self.decoder.digital_id, self.decoder.analog_id,
                     self.decoder.heartbeat_id, self.decoder.emergency_id}:
@@ -505,14 +528,15 @@ class RemdeviceControl(ManualControl):
         physical = self.decoder.physical_snapshot(now.nanoseconds)
         digital = physical[1] if physical is not None else None
         known = self.mapping.verified and digital is not None
-        # A receiver fault withdraws drive readiness so recovery requires B2.
-        # Preserve independently known physical STOP evidence during that wait.
+        # In PDO-based policy, diagnostics do not withdraw drive readiness.
+        # Preserve independently known physical STOP evidence in every policy.
         # An incomplete motion pair or neutral rearm does not fabricate radio loss.
         state.connected = bool(known and digital['LINK'] and digital['EMGY']
                                and not digital['STOP'] and self.receiver_reset_ns is None
                                and not (self.decoder.has_blocking_error() or self.input_error))
-        advisory = self.decoder.overrun_is_advisory()
-        if advisory and not self._healthy(now):
+        advisory = self.decoder.diagnostic_is_advisory()
+        warn_advisory = advisory and not self.decoder.errors_advisory
+        if (self.decoder.errors_advisory or advisory) and not self._healthy(now):
             state.connected = False
         # Clearing cached motion for B2/authority changes does not change the
         # physical sticks. Keep their fresh neutral proof across that boundary
@@ -542,16 +566,18 @@ class RemdeviceControl(ManualControl):
                 state.status_message = self._receiver_fault_message()
             else:
                 state.status_message = self.input_error or self.decoder.reason
-        if advisory and state.connected:
+        if warn_advisory and state.connected:
             state.status_message = ('Joystick CAN receive-overrun warning: EMCY=0x8110, register=0x11; '
                                     'fresh validated controls available')
-        if self.drive_toggle_status and state.connected and not advisory:
+        if self.drive_toggle_status and state.connected and not warn_advisory:
             state.status_message = self.drive_toggle_status
         # Report the first lost-input cause even without another B2 press.
         # A pending enable response must never hide a live receiver fault.
-        key = (state.connected, state.status_message if not state.connected or advisory else '')
+        # PDO-based policy keeps healthy receiver diagnostics in operator/raw.
+        # Changing EMCY codes must not replace control status or churn logs.
+        key = (state.connected, state.status_message if not state.connected or warn_advisory else '')
         if key != getattr(self, 'last_receiver_connection', None):
-            if state.connected and advisory:
+            if state.connected and warn_advisory:
                 self.get_logger().warning(state.status_message)
             elif state.connected:
                 self.get_logger().info('Joystick receiver input available; drive enabling still requires B2 and ready interlocks')
@@ -577,9 +603,9 @@ class RemdeviceControl(ManualControl):
         now = self.get_clock().now()
         self._receiver_recovery_tick(now)
         now = self.get_clock().now()
-        if (self.mapping.verified and self.decoder.nmt_state in (None, 0, 4, 127)
+        if (self.receiver_transmit_enabled and self.mapping.verified and self.decoder.nmt_state in (None, 0, 4, 127)
                 and self.receiver_reset_ns is None
-                and not (self.decoder.emergency_code or self.decoder.emergency_register)
+                and not self.decoder.has_blocking_error()
                 and (self.last_start_ns is None or now.nanoseconds - self.last_start_ns >= 1_000_000_000
                      or now.nanoseconds < self.last_start_ns)):
             self._send_start()
@@ -606,10 +632,13 @@ class RemdeviceControl(ManualControl):
             'receiver_nmt_state': self.decoder.nmt_state,
             'receiver_nmt_stamp_ns': self.decoder.nmt_stamp_ns,
             'receiver_error_blocking': self.decoder.has_blocking_error(),
+            'receiver_errors_advisory': self.decoder.errors_advisory,
+            'receiver_can_error_count': self.decoder.can_error_count,
             'receiver_can_overrun_advisory': self.decoder.overrun_is_advisory(),
             'reset_status': self.drive_toggle_status,
             'receiver_recovery_pending': self.receiver_reset_ns is not None,
             'receiver_reset_attempts': self.receiver_reset_attempts,
+            'receiver_transmit_enabled': self.receiver_transmit_enabled,
         }, sort_keys=True)
         self.raw_publisher.publish(raw)
 

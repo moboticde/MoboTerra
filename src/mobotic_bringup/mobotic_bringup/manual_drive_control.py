@@ -1,7 +1,7 @@
 """Explicit manual-only commissioning authority; independent hardware safety required.
 
 Uses the driver's existing leases and reset protocol without changing watchdogs.
-No supervisor, autonomy, ROS scanner policy or battery readiness gates.
+Requires both scanner field streams; no supervisor, autonomy or battery gates.
 """
 import copy
 import json
@@ -12,7 +12,7 @@ import uuid
 
 import rclpy
 from geometry_msgs.msg import TwistStamped
-from mobotic_interfaces.msg import (OperatorState, VehicleModeState, WheelModuleCommand,
+from mobotic_interfaces.msg import (OperatorState, ScannerSafetyState, VehicleModeState, WheelModuleCommand,
     WheelModuleCommandArray, WheelModuleOperationCommand, WheelModuleStatusArray)
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -27,7 +27,7 @@ def stamp_ns(stamp):
 
 
 class ManualDriveControl(Node):
-    # This authority has no scanner-zone input, even with a faster robot profile.
+    # Retain the commissioning speed ceiling even with clear scanner fields.
     SPEED_LIMIT = 0.3
 
     def __init__(self):
@@ -38,6 +38,7 @@ class ManualDriveControl(Node):
             'traction_joint_names': ['front_left_traction'], 'output_frame_id': 'base_link',
             'control_period': 0.02, 'manual_timeout': 0.25, 'feedback_timeout': 0.3,
             'candidate_timeout': 0.1, 'reset_timeout': 20.0,
+            'scanner_timeout': 0.3,
             'control_gap_timeout': 0.3, 'clock_skew_tolerance': 0.04,
             'max_velocity_linear': 1.25, 'max_velocity_angular': 1.51,
             'max_steering_velocity': 1.0, 'max_traction_velocity': 1.25,
@@ -60,7 +61,7 @@ class ManualDriveControl(Node):
             raise ValueError('limits and timeouts must be finite and positive')
         if self.control_period >= min(self.manual_timeout, self.candidate_timeout):
             raise ValueError('control period must be shorter than command lifetimes')
-        if self.clock_skew_tolerance >= min(self.manual_timeout, self.feedback_timeout):
+        if self.clock_skew_tolerance >= min(self.manual_timeout, self.feedback_timeout, self.scanner_timeout):
             raise ValueError('clock skew tolerance must be shorter than input lifetimes')
         if self.control_gap_timeout < self.candidate_timeout:
             raise ValueError('control gap timeout cannot be shorter than candidate timeout')
@@ -84,17 +85,26 @@ class ManualDriveControl(Node):
                 ('status', WheelModuleStatusArray, 'wheel_modules/status'),
                 ('joints', JointState, 'joint_states'))]
         self.inputs.append(self.create_subscription(JointState, 'kinematics/joint_setpoints', self._candidate, 1))
+        for name in ('front_left', 'rear_right'):
+            self.inputs.append(self.create_subscription(
+                ScannerSafetyState, f'scanner/{name}/safety_zone_status',
+                lambda msg, name=name: self._receive_scanner(name, msg), 1))
         self.control_services = [self.create_service(Trigger, topic, callback) for topic, callback in (
             ('wheel_modules/enable_drives', self._enable),
             ('wheel_modules/clear_errors', self._enable),
             ('wheel_modules/disable_drives', self._disable_service))]
         self.timer = self.create_timer(self.control_period, self._tick)
-        self.get_logger().warning('MANUAL-ONLY TEST: no supervisor/scanner/battery ROS gates. '
+        self.get_logger().warning('MANUAL-ONLY TEST: both scanners required; no supervisor/battery ROS gates. '
                                  'Independent hardware safety required. B2 enables; autonomy unavailable.')
+
+    def _sample_timeout(self, key):
+        if key.startswith('scanner/'):
+            return self.scanner_timeout
+        return self.manual_timeout if key in ('operator', 'command', 'homing') else self.feedback_timeout
 
     def _receive(self, key, msg):
         stamp = stamp_ns(msg.header.stamp)
-        limit = self.manual_timeout if key in ('operator', 'command', 'homing') else self.feedback_timeout
+        limit = self._sample_timeout(key)
         age = self.get_clock().now().nanoseconds - stamp
         if stamp <= 0 or not -self.clock_skew_tolerance * 1e9 <= age <= limit * 1e9:
             return
@@ -108,10 +118,43 @@ class ManualDriveControl(Node):
         if entry is None:
             return None
         msg, received = entry
-        limit = self.manual_timeout if key in ('operator', 'command', 'homing') else self.feedback_timeout
+        limit = self._sample_timeout(key)
         age = self.get_clock().now().nanoseconds - stamp_ns(msg.header.stamp)
         return msg if (-self.clock_skew_tolerance * 1e9 <= age <= limit * 1e9
                        and 0 <= time.monotonic() - received <= limit) else None
+
+    def _receive_scanner(self, name, msg):
+        key = 'scanner/' + name
+        if msg.scanner_id != name:
+            return
+        previous = self.samples.get(key)
+        if previous and stamp_ns(msg.header.stamp) == stamp_ns(previous[0].header.stamp):
+            # The adapter's explicit loss transition retains acquisition time.
+            # Accept a same-stamp loss, never a replayed clear or warning state.
+            if msg.communication_ok or not previous[0].communication_ok:
+                return
+            self.samples[key] = (msg, time.monotonic())
+        else:
+            self._receive(key, msg)
+        ready, reason = self._scanner_gate()
+        if not ready and self.phase != 'disabled':
+            self._disable(reason)
+            self._tick()
+
+    def _scanner_gate(self):
+        warnings = []
+        for name in ('front_left', 'rear_right'):
+            state = self._fresh('scanner/' + name)
+            if (state is None or not state.communication_ok or not state.protective_state_known
+                    or not state.warning_state_known):
+                return False, f'{name} scanner field data unavailable'
+            if not state.protective_field_clear:
+                return False, f'{name} scanner red protective field active'
+            if not state.warning_field_clear:
+                warnings.append(name)
+        if warnings:
+            return True, f'{", ".join(warnings)} scanner warning field active; manual speed limited to 0.3 m/s'
+        return True, 'scanner fields clear; manual commissioning speed limited to 0.3 m/s'
 
     def _operator(self, neutral=False):
         state = self._fresh('operator')
@@ -191,6 +234,8 @@ class ManualDriveControl(Node):
             response.success, response.message = True, 'already enabled or recovering; unchanged'
         elif not self._operator(neutral=True):
             response.success, response.message = False, 'fresh connected operator with neutral controls required'
+        elif not self._scanner_gate()[0]:
+            response.success, response.message = False, self._scanner_gate()[1]
         elif not self._disabled_feedback():
             response.success, response.message = False, 'fresh native disabled feedback required for every drive'
         elif self._fresh('joints') is not None and not self._stationary():
@@ -207,7 +252,7 @@ class ManualDriveControl(Node):
 
     def _motion_source(self):
         command, state = self._fresh('command'), self._fresh('operator')
-        if (self.phase != 'enabled' or not self._ready() or not self._operator()
+        if (self.phase != 'enabled' or not self._ready() or not self._operator() or not self._scanner_gate()[0]
                 or not state.command_active or command is None
                 or stamp_ns(command.header.stamp) <= self.boundary
                 or command.header.frame_id != self.output_frame_id):
@@ -238,6 +283,9 @@ class ManualDriveControl(Node):
             self._disable('another vehicle authority detected; stop the other stack')
         if self.phase != 'disabled' and not self._operator():
             self._disable('operator lost or STOP asserted')
+        scanner_ready, scanner_reason = self._scanner_gate()
+        if self.phase != 'disabled' and not scanner_ready:
+            self._disable(scanner_reason)
         modules = self._modules()
         accepted = bool(self.phase == 'recovering' and modules
                         and stamp_ns(self._fresh('status').header.stamp) > self.recovery_stamp
@@ -272,12 +320,14 @@ class ManualDriveControl(Node):
                 and stamp_ns(state.header.stamp) >= stamp_ns(source.header.stamp)
                 and all(v == 0.0 for v in (source.twist.linear.x, source.twist.linear.y, source.twist.angular.z))):
             self.steering_policy.release_crab_boundary()
-        mode.safety_stop_active = bool(state and state.estop_pressed)
+        mode.safety_stop_active = bool(state and state.estop_pressed) or not scanner_ready
         mode.readiness_known = modules is not None
         mode.drives_enabled = bool(modules and all(m.enabled for m in modules))
-        mode.ready_to_drive = self.phase == 'enabled' and self._ready()
+        mode.ready_to_drive = self.phase == 'enabled' and self._ready() and scanner_ready
         mode.reason_codes = ['MANUAL_ONLY_TEST'] + ([] if mode.ready_to_drive else ['B2_ENABLE_REQUIRED'])
-        mode.status_message = self.reason
+        if not scanner_ready:
+            mode.reason_codes.append('SCANNER_NOT_READY')
+        mode.status_message = self.reason + '; ' + scanner_reason
         self.mode_pub.publish(mode)
         operation = WheelModuleOperationCommand()
         operation.header.stamp = now.to_msg()

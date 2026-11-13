@@ -1,0 +1,181 @@
+# Prepared test profile; NOT applied to the running robot.
+schema_version: 1
+robot_name: moboterra
+frames:
+  base: base_link
+  odom: odom
+reference_corners:
+- name: vehicle_front_left_corner
+  xyz:
+  - 1.2667297363
+  - 0.9228179321
+  - 0.0
+- name: vehicle_front_right_corner
+  xyz:
+  - 1.2667297363
+  - -0.9203035278
+  - 0.0
+- name: vehicle_rear_left_corner
+  xyz:
+  - -1.2671105957
+  - 0.9228179321
+  - 0.0
+- name: vehicle_rear_right_corner
+  xyz:
+  - -1.2671105957
+  - -0.9203035278
+  - 0.0
+can:
+  master_node_id: '0x0B'
+  drives:
+    interface: can0
+    bitrate: 250000
+  battery:
+    interface: can1
+    bitrate: 500000
+    listen_only: false
+geometry:
+  wheel_radius: 0.325
+  wheel_width: 0.31
+actuators:
+  steering:
+    resolution: 4096
+    gear_ratio: 121.0
+    mode: position
+    min_steering_velocity: -5000
+    max_steering_velocity: 5000
+    min_traction_velocity: -5000
+    max_traction_velocity: 5000
+    min_current: -4000
+    max_current: 4000
+  traction:
+    resolution: 4096
+    gear_ratio: 16.0
+    mode: velocity
+    min_steering_velocity: -1700
+    max_steering_velocity: 1700
+    min_traction_velocity: -116053
+    max_traction_velocity: 116053
+    min_current: -4000
+    max_current: 4000
+traction_profile:
+  max_velocity: 116053
+  acceleration: 32093
+  deceleration: 32093
+motion_limits:
+  max_velocity_linear: 0.3
+  max_velocity_angular: 1.51
+  max_acceleration_linear: 0.5
+  max_acceleration_angular: 0.52
+  max_steering_velocity: 4.32
+  max_traction_velocity: 0.9230769230769229
+  max_traction_current: 4.0
+modules:
+- name: front_right
+  cad_steering_xyz:
+  - 0.845
+  - -0.495
+  - 0.749910934
+  mounting_yaw: 3.14152
+  steering:
+    joint: front_right_steering
+    can_node_id: '0x03'
+  traction:
+    joint: front_right_traction
+    can_node_id: '0x04'
+- name: rear_left
+  cad_steering_xyz:
+  - -0.845
+  - 0.495
+  - 0.749955467
+  mounting_yaw: 0.0
+  steering:
+    joint: rear_left_steering
+    can_node_id: '0x07'
+  traction:
+    joint: rear_left_traction
+    can_node_id: '0x08'
+usb_joystick:
+  device_id: 0
+  autorepeat_rate: 20.0
+  deadzone: 0.08
+  sticky_buttons: false
+operator:
+  require_enable_interlock: false
+  require_neutral_rearm: false
+  source: remdevice
+  usb_driver: joy_node
+  usb_mapping_verified: false
+  mapping:
+    verified: true
+    node_id: 10
+    axes:
+      speed:
+        channel: 3
+        zero: 0
+        full_scale: 255
+        invert: false
+      steer:
+        channel: 2
+        zero: 0
+        full_scale: 255
+        invert: false
+      crab:
+        channel: 4
+        zero: 0
+        full_scale: 255
+        invert: false
+    buttons:
+      mode:
+        signal: U5
+        active_high: false
+      boost:
+        signal: SP3
+        active_high: true
+      reset:
+        signal: SP4
+        active_high: true
+      deadman: null
+      scanner_override:
+        signal: D5
+        active_high: true
+scanners:
+  host_ip: 10.60.20.250
+  units:
+  - name: front_left
+    sensor_ip: 10.60.20.52
+    frame_id: front_left_scan
+    cad_xyz:
+    - 1.207101125
+    - 0.863406899
+    - 0.249261344
+    yaw: 0.7853981633974483
+  - name: rear_right
+    sensor_ip: 10.60.20.53
+    frame_id: rear_right_scan
+    cad_xyz:
+    - -1.207482061
+    - -0.860892491
+    - 0.249261344
+    yaw: -2.356194490192345
+safety:
+  source: hardwired_sto
+battery:
+  primary_id: parallel_battery_controller
+  participants:
+  - id: parallel_battery_controller
+    source_address: '0xF3'
+    status_pgn: '0xF096'
+    soc_pgn: '0xF091'
+    voltage_pgn: '0xF090'
+  readiness:
+    require_operational_status: false
+    require_not_charging: true
+commissioning_pending:
+- Verify drive IDs, encoder zero/sign, gearing, current and mechanical travel limits.
+- Verify actual battery participants and CAN telegram mapping.
+- Confirm FlexiSoft/ELMO independent STO and enable bit mapping.
+- Calibrate scanner extrinsics, wheel odometry and uncertainty.
+- Capture PAIL controls and verify axis calibration, RP1/B1/B2/STOP and radio-loss
+  behavior.
+- Configure CAN interfaces and host NIC externally; this package does not do so.

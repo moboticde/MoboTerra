@@ -16,8 +16,8 @@ CAN bindings and reference mounting offsets still require hardware checks.
 Only the complete four-module layout is supported. See the
 [four-module setup guide](docs/four_module_setup.md). Both `platform.yaml` and
 `platform-four-micontrol.yaml` contain all four modules; source operator mappings
-remain unverified until commissioned. The native robot launcher retains its
-existing installed host configuration and overrides.
+remain unverified until commissioned. The Pi launchers and commissioned settings live in `scripts/` and
+`config/raspberry-pi/` in this checkout. See [Pi settings and startup](docs/pi-settings.md).
 
 ## Control architecture
 
