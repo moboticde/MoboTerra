@@ -4,6 +4,9 @@ import math
 
 
 class ManualSteering:
+    TRACTION_FULL_ERROR = math.radians(6.)
+    TRACTION_STOP_ERROR = math.radians(30.)
+
     def __init__(self, geometry):
         self.geometry = geometry
         self.max_yaw = math.inf
@@ -41,6 +44,13 @@ class ManualSteering:
                 or not all(type(v) in (int, float) and math.isfinite(v) and v >= 1.
                            and v == math.floor(v) for v in self.position_resolutions)):
             raise ValueError('positive integer per-wheel steering position resolutions required')
+        self.boost_velocity = float(geometry.get('steering_boost_velocity', geometry.get('max_steering_velocity', .3)))
+        if not math.isfinite(self.boost_velocity) or self.boost_velocity < geometry.get('max_steering_velocity', .3):
+            raise ValueError('steering boost velocity must be finite and at least the normal velocity')
+        self.traction_acceleration = geometry.get('max_acceleration_linear')
+        if self.traction_acceleration is not None and (
+                not math.isfinite(self.traction_acceleration) or self.traction_acceleration <= 0.):
+            raise ValueError('positive finite traction acceleration required')
         self.reset()
         self.reset_alignment()
 
@@ -58,6 +68,8 @@ class ManualSteering:
         self.crab_blocked = False
         self.neutral_home_targets = None
         self.neutral_home_feedback_ns = None
+        self.traction_peak = 0.
+        self.traction_stamp_ns = None
 
     def release_crab_boundary(self):
         # Call only for a confirmed operator stop, not a zero command
@@ -155,8 +167,8 @@ class ManualSteering:
         bound = min(abs(vx) * self.curvature_limit, self.max_yaw)
         return vx, 0., max(-bound, min(bound, yaw))
 
-    def align(self, candidate, feedback, body, *, neutral=False):
-        """Bound headings while allowing traction and steering concurrently.
+    def align(self, candidate, feedback, body, *, neutral=False, boost=False):
+        """Bound headings and scale traction by the worst measured steering error.
 
         Right modules mounted at pi may need opposite traction sign. Compare
         actual controller targets, not raw left/right encoder equality.
@@ -176,6 +188,8 @@ class ManualSteering:
             self.home_references = {name: round(actual[name]/(2*math.pi))*2*math.pi for name in steering}
             self.steering_targets = {name: actual[name] for name in steering}
         if max(map(abs, body)) <= 1e-9:
+            self.traction_peak = 0.
+            self.traction_stamp_ns = None
             if neutral and self.return_home_on_neutral:
                 return self._neutral_home(out, feedback, ids, actual)
             self.neutral_home_targets = None
@@ -290,12 +304,35 @@ class ManualSteering:
             errors.append(0.0 if error <= tolerance + 1e-12 else error)
         # Like the example, every moving steering motor uses the same profile
         # limit in the single all-wheel command. Stop each motor at its target.
+        profile = self.boost_velocity if boost else g['max_steering_velocity']
         for error, name in zip(errors, steering):
-            out.velocity[ids[name]] = g['max_steering_velocity'] if error else 0.0
+            out.velocity[ids[name]] = profile if error else 0.0
+        self._scale_traction(out, ids, max(errors))
         self.steering_targets = {name: out.position[ids[name]] for name in steering}
         self.crab_heading = shared_heading
         self.crab_blocked = blocked
         return out
+
+    def _scale_traction(self, out, ids, error):
+        scale = max(0., min(1., (self.TRACTION_STOP_ERROR - error) /
+                            (self.TRACTION_STOP_ERROR - self.TRACTION_FULL_ERROR)))
+        traction = self.geometry['traction_joint_names']
+        peak = max(abs(out.velocity[ids[name]]) for name in traction)
+        if self.traction_acceleration is not None:
+            stamp = out.header.stamp
+            stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+            dt = (max(0., min(.1, (stamp_ns - self.traction_stamp_ns) * 1e-9))
+                  if self.traction_stamp_ns is not None else 0.)
+            # Remember the emitted speed, so a held joystick cannot wind up
+            # the upstream ramp while steering holds/reduces traction.
+            ceiling = self.traction_peak + self.traction_acceleration * dt
+            if peak:
+                scale = min(scale, ceiling / peak)
+            if self.traction_stamp_ns is None or stamp_ns > self.traction_stamp_ns:
+                self.traction_stamp_ns = stamp_ns
+        self.traction_peak = peak * scale
+        for name in traction:
+            out.velocity[ids[name]] *= scale
 
     def _neutral_home(self, out, feedback, ids, actual):
         g = self.geometry

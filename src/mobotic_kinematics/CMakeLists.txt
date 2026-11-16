@@ -11,7 +11,7 @@ install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  foreach(test_name test_romb_kinematics_contract test_steering_command_cadence test_exclusive_manual_steering test_neutral_home)
+  foreach(test_name test_romb_kinematics_contract test_steering_command_cadence test_exclusive_manual_steering test_neutral_home test_traction_alignment)
     ament_add_pytest_test(${test_name} test/${test_name}.py
       APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   endforeach()

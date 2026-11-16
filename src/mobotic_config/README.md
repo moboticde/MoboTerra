@@ -36,7 +36,7 @@ supervisor `health_timeout` bounds health-report romb and producer liveness;
 it does not replace acquisition-age validation or motion watchdogs.
 
 The defaults preserve the commissioned four-module layout (1.69 m / 0.99 m,
-0.325 m radius), shared CAN0 drive/battery traffic, master node 11, node-10
+0.325 m radius, 42:1 traction reduction), shared CAN0 drive/battery traffic, master node 11, node-10
 REMdevice mapping and the actual scanner addresses. Driver feedback/heartbeat
 periods are 0.1 s, supervisor/operator periods are 0.05 s, manual linear scaling
 is 0.5, and B2 steering alignment uses 1.2 rad/s. Raw traction profile values are preserved commissioning
@@ -53,6 +53,12 @@ ROMB, supervisor, odometry, description and virtual drives. See the
 Each module's `controller` may be `miControl` (case insensitive). Omitting
 it defaults to miControl for both roles. Other controller families are rejected.
 Both hardware and virtual stacks use SDO transport.
+
+The active native profile sets `motion_limits.steering_boost_velocity: 0.6`
+rad/s for B1-held steering, compared with the normal 0.3 rad/s. The setting is
+optional and defaults to normal steering speed. It must be at least the normal
+speed and fit every steering motor's native RPM limits. It raises the driver's
+steering ceiling when needed; neutral homing retains its independent speed.
 
 The supplied profiles use **121 native user position units per steering output
 revolution** for the installed miControl `0x3762` feedback and `0x3790` absolute
@@ -76,8 +82,8 @@ modules:
       joint: front_left_traction
       can_node_id: '0x02'
       controller: miControl
-      min_traction_velocity: -1700  # miControl motor rpm
-      max_traction_velocity: 1700
+      min_traction_velocity: -2469  # miControl motor rpm
+      max_traction_velocity: 2469
 ```
 
 `platform-four-micontrol.yaml` prepares all four modules with miControl steering

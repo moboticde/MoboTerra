@@ -54,12 +54,12 @@ actuators:
     max_current: 4000
   traction:
     resolution: 4096
-    gear_ratio: 16.0
+    gear_ratio: 42.0
     mode: velocity
     min_steering_velocity: -1700
     max_steering_velocity: 1700
-    min_traction_velocity: -116053
-    max_traction_velocity: 116053
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469 # motor RPM for the 2.0 m/s software cap at 42:1
     min_current: -4000
     max_current: 4000
 traction_profile:
@@ -67,12 +67,12 @@ traction_profile:
   acceleration: 32093
   deceleration: 32093
 motion_limits:
-  max_velocity_linear: 1.25
+  max_velocity_linear: 2.0
   max_velocity_angular: 1.51
   max_acceleration_linear: 0.5
   max_acceleration_angular: 0.52
   max_steering_velocity: 4.32
-  max_traction_velocity: 3.614 # wheel-contact m/s
+  max_traction_velocity: 2.0 # wheel-contact m/s
   max_traction_current: 4.0
 modules:
 - name: front_left
@@ -89,8 +89,8 @@ modules:
     joint: front_left_traction
     can_node_id: '0x02'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 - name: front_right
   cad_steering_xyz:
   - 0.845
@@ -105,8 +105,8 @@ modules:
     joint: front_right_traction
     can_node_id: '0x04'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 - name: rear_left
   cad_steering_xyz:
   - -0.845
@@ -121,8 +121,8 @@ modules:
     joint: rear_left_traction
     can_node_id: '0x08'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 - name: rear_right
   cad_steering_xyz:
   - -0.845
@@ -137,8 +137,8 @@ modules:
     joint: rear_right_traction
     can_node_id: '0x06'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 usb_joystick:
   device_id: 0
   autorepeat_rate: 20.0

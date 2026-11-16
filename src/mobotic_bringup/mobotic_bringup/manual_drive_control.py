@@ -362,18 +362,19 @@ class ManualDriveControl(Node):
                 or not 0 <= now.nanoseconds - stamp_ns(entry[1]) <= self.manual_timeout * 1e9
                 or not self._joint_valid(msg)):
             return
-        home = False
+        home = boost = False
         if self.steering_policy:
             feedback = self._fresh('joints')
             if feedback is None:
                 return
             state = self._fresh('operator')
+            boost = bool(state and state.connected and state.command_active and state.turbo_active)
             stopped = all(v == 0.0 for v in (source.twist.linear.x, source.twist.linear.y, source.twist.angular.z))
             home = bool(stopped and self.steering_policy.return_home_on_neutral
                         and state and state.connected and state.command_active and state.controls_neutral
                         and stamp_ns(state.header.stamp) >= stamp_ns(source.header.stamp))
             try:
-                msg = self.steering_policy.align(msg, feedback, (0., 0., 0.) if stopped else entry[3], neutral=home)
+                msg = self.steering_policy.align(msg, feedback, (0., 0., 0.) if stopped else entry[3], neutral=home, boost=boost)
             except ValueError:
                 return
         indices = {n: i for i, n in enumerate(msg.name)}
@@ -386,7 +387,11 @@ class ManualDriveControl(Node):
             record.name, record.steering_position = name, msg.position[indices[steering]]
             record.steering_profile_velocity = msg.velocity[indices[steering]]
             record.traction_velocity = msg.velocity[indices[traction]]
-            steering_limit = max(self.max_steering_velocity, self.steering_policy.neutral_home_velocity) if home else self.max_steering_velocity
+            steering_limit = self.max_steering_velocity
+            if home:
+                steering_limit = max(steering_limit, self.steering_policy.neutral_home_velocity)
+            elif boost:
+                steering_limit = max(steering_limit, self.steering_policy.boost_velocity)
             if (not 0 <= record.steering_profile_velocity <= steering_limit
                     or abs(record.traction_velocity) > self.max_traction_velocity):
                 return

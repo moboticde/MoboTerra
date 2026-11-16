@@ -112,6 +112,44 @@ class ConfigurationTest(unittest.TestCase):
                 for name in steering:
                     self.assertEqual(virtual[name]['encoder_resolution'], resolutions[name])
 
+    def test_installed_traction_uses_confirmed_42_to_one_reduction(self):
+        directory = Path(__file__).resolve().parents[1] / 'config'
+        for path in {directory / 'platform.yaml', directory / 'platform-four-micontrol.yaml', self.cfg.path}:
+            with self.subTest(profile=path):
+                cfg = Configuration(path)
+                driver = cfg.parameters('driver')
+                self.assertEqual(driver['drives.gear_ratios'][1::2], [42.0] * 4)
+                self.assertEqual(driver['drives.min_traction_velocities'][1::2], [-2469] * 4)
+                self.assertEqual(driver['drives.max_traction_velocities'][1::2], [2469] * 4)
+                radius = driver['wheel_radius']
+                self.assertAlmostEqual(1000 * 2 * math.pi * radius / (60 * 42), 0.8103314384)
+                rpm_at_cap = driver['max_traction_velocity'] * 60 * 42 / (2 * math.pi * radius)
+                self.assertLessEqual(rpm_at_cap, 2469)
+                virtual = dict(cfg.virtual_drives())
+                for name in cfg.parameters('supervisor')['expected_traction_joint_names']:
+                    self.assertEqual(virtual[name]['gear_ratio'], 42.0)
+
+    def test_steering_boost_is_bounded_by_each_native_motor_limit(self):
+        for value in (0., .1, True, float('nan'), float('inf'), 6.):
+            with self.subTest(value=value):
+                platform = copy.deepcopy(self.cfg.platform)
+                platform['motion_limits']['steering_boost_velocity'] = value
+                with self.assertRaises(ConfigurationError):
+                    validate_platform(platform)
+
+    def test_boost_reaches_shared_manual_geometry_and_driver_without_neutral_homing(self):
+        platform = copy.deepcopy(self.cfg.platform)
+        platform['motion_limits'].update(max_steering_velocity=.3, steering_boost_velocity=.6,
+                                         steering_return_home_on_neutral=False)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'platform.yaml'
+            path.write_text(yaml.safe_dump(platform))
+            cfg = Configuration(path)
+            self.assertEqual(cfg.parameters('driver')['max_steering_velocity'], .6)
+            self.assertEqual(cfg.parameters('kinematics')['max_steering_velocity'], .3)
+            for component, key in [('manual', 'steering_geometry'), ('supervisor', 'manual_steering_geometry')]:
+                self.assertEqual(json.loads(cfg.parameters(component)[key])['steering_boost_velocity'], .6)
+
     def test_one_degree_cap_keeps_finer_encoder_tolerances(self):
         platform = four_module_platform()
         for module, resolution in zip(platform['modules'], [121, 4096, 720, 8192]):
@@ -128,6 +166,7 @@ class ConfigurationTest(unittest.TestCase):
         platform = copy.deepcopy(self.cfg.platform)
         platform['motion_limits']['max_steering_velocity'] = 0.3
         platform['motion_limits']['steering_return_home_on_neutral'] = False
+        platform['motion_limits'].pop('steering_boost_velocity', None)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         path = Path(directory.name) / 'slow-manual.yaml'
@@ -194,6 +233,7 @@ class ConfigurationTest(unittest.TestCase):
         platform=copy.deepcopy(self.cfg.platform)
         platform['motion_limits']['max_steering_velocity']=.3
         platform['motion_limits']['steering_return_home_on_neutral']=False
+        platform['motion_limits'].pop('steering_boost_velocity', None)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'homing.yaml'
             path.write_text(yaml.safe_dump(platform))
@@ -208,7 +248,7 @@ class ConfigurationTest(unittest.TestCase):
         cfg = Configuration(path)
         self.assertEqual(len(cfg.platform['modules']), 4)
         self.assertEqual(cfg.parameters('driver')['drives.controller_types'], ['micontrol'] * 8)
-        self.assertEqual(cfg.parameters('driver')['drives.max_traction_velocities'][1::2], [1700] * 4)
+        self.assertEqual(cfg.parameters('driver')['drives.max_traction_velocities'][1::2], [2469] * 4)
         self.assertEqual(cfg.parameters('supervisor')['direct_traction_control_mode'], 'current')
         self.assertTrue(cfg.parameters('supervisor')['kinematicoff_current_supported'])
         self.assertEqual(cfg.parameters('driver')['max_traction_current'], 4.0)

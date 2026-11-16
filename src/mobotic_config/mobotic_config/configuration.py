@@ -154,7 +154,7 @@ def validate_platform(platform):
         motion_keys = ('max_velocity_linear', 'max_velocity_angular', 'max_acceleration_linear',
                        'max_acceleration_angular', 'max_steering_velocity', 'max_traction_velocity', 'max_traction_current')
         _record(platform['motion_limits'], (*motion_keys, 'max_crab_angle', 'steering_angle_limits_enabled',
-                                          'steering_return_home_on_neutral', 'steering_neutral_home_velocity'),
+                                          'steering_return_home_on_neutral', 'steering_neutral_home_velocity', 'steering_boost_velocity'),
                 'motion_limits', required=motion_keys)
         if type(platform['motion_limits'].get('steering_angle_limits_enabled', True)) is not bool:
             raise ConfigurationError('steering_angle_limits_enabled must be boolean')
@@ -163,6 +163,10 @@ def validate_platform(platform):
         _number(platform['motion_limits'].get('steering_neutral_home_velocity',
                                             platform['motion_limits']['max_steering_velocity']),
                 'steering_neutral_home_velocity', positive=True)
+        boost = _number(platform['motion_limits'].get('steering_boost_velocity',
+                        platform['motion_limits']['max_steering_velocity']), 'steering_boost_velocity', positive=True)
+        if boost < platform['motion_limits']['max_steering_velocity']:
+            raise ConfigurationError('steering boost velocity cannot be below normal steering velocity')
         crab_angle = _number(platform['motion_limits'].get('max_crab_angle', math.pi / 2), 'max_crab_angle')
         if not math.pi / 2 <= crab_angle <= math.pi:
             raise ConfigurationError('max_crab_angle must be between pi/2 and pi radians')
@@ -252,7 +256,8 @@ def validate_platform(platform):
                     if ticks > ceiling or limits['max_traction_current'] * 1000 > min(drive['max_current'], -drive['min_current']):
                         raise ConfigurationError(f'{joint}: software traction limits exceed controller limits')
                 else:
-                    velocity = limits['max_steering_velocity']
+                    velocity = max(limits['max_steering_velocity'],
+                                   limits.get('steering_boost_velocity', limits['max_steering_velocity']))
                     if limits.get('steering_return_home_on_neutral', False):
                         velocity = max(velocity, limits.get('steering_neutral_home_velocity', velocity))
                     rpm = velocity * drive['gear_ratio'] * 60 / (2 * math.pi)
@@ -437,6 +442,8 @@ class Configuration:
                                                             'max_acceleration_linear', 'max_acceleration_angular')}
         joint_limits = {key: float(limits[key]) for key in ('max_steering_velocity', 'max_traction_velocity', 'max_traction_current')}
         driver.update({key: joint_limits[key] for key in ('max_steering_velocity', 'max_traction_velocity', 'max_traction_current')})
+        driver['max_steering_velocity'] = max(driver['max_steering_velocity'],
+            float(limits.get('steering_boost_velocity', limits['max_steering_velocity'])))
         if limits.get('steering_return_home_on_neutral', False):
             driver['max_steering_velocity'] = max(driver['max_steering_velocity'],
                 float(limits.get('steering_neutral_home_velocity', limits['max_steering_velocity'])))
@@ -466,11 +473,12 @@ class Configuration:
         steering_geometry_data['steering_position_tolerances'] = [
             min(math.radians(1.0), 2.0 * math.pi / resolution) for resolution in resolutions]
         steering_geometry_data['steering_position_resolutions'] = resolutions
+        steering_geometry_data['max_acceleration_linear'] = vehicle_limits['max_acceleration_linear']
         if 'max_crab_angle' in limits:
             steering_geometry_data['max_crab_angle'] = float(limits['max_crab_angle'])
         if 'steering_angle_limits_enabled' in limits:
             steering_geometry_data['steering_angle_limits_enabled'] = limits['steering_angle_limits_enabled']
-        for key in ('steering_return_home_on_neutral', 'steering_neutral_home_velocity'):
+        for key in ('steering_return_home_on_neutral', 'steering_neutral_home_velocity', 'steering_boost_velocity'):
             if key in limits:
                 steering_geometry_data[key] = limits[key]
         steering_geometry = json.dumps(steering_geometry_data)

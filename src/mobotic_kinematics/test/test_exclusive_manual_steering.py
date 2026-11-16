@@ -24,6 +24,13 @@ def model(g, body):
     return sample(g,angles,[math.hypot(x,y) for x,y in vectors])
 
 
+def full_traction(g, body, targets):
+    # Signed rolling speeds when the measured wheels have reached these targets.
+    vx, vy, yaw = body
+    return [(vx-yaw*y)*math.cos(angle+mount) + (vy+yaw*x)*math.sin(angle+mount)
+            for x, y, angle, mount in zip(g['wheels_x'], g['wheels_y'], targets, g['wheel_mount_angles'])]
+
+
 @pytest.mark.parametrize('body', [(1.,0.,.22827042), (-1.,0.,-.22827042), (2.,0.,-.7),
                                   (.1,0.,.02), (0.,1.,0.), (.6,-.8,0.), (0.,0.,.4), (0.,0.,0.)])
 @pytest.mark.parametrize('limits', [(.3,.2265), (.15,.1), (2.,1.51), (.3,.01)])
@@ -95,11 +102,11 @@ def test_ackermann_left_only_after_releasing_speed_has_no_yaw():
 
 
 @pytest.mark.parametrize('body',[(.3,0.,.2),(-.3,0.,-.2),(0.,.3,0.),(0.,-.3,0.)])
-def test_traction_runs_while_steering_and_mounting_signs_stay_correct(body):
+def test_large_turn_holds_traction_then_preserves_mounting_signs(body):
     g=geometry();p=ManualSteering(g);body=p.project(body)
     candidate=model(g,body);feedback=sample(g,[0.]*4)
     output=p.align(candidate,feedback,body)
-    assert any(abs(v)>.01 for v in output.velocity[4:])
+    assert output.velocity[4:]==[0.]*4
     assert any(v>0 for v in output.velocity[:4])
     feedback.position[:4]=output.position[:4]
     aligned=p.align(candidate,feedback,body)
@@ -165,7 +172,7 @@ def test_rounded_mounts_cannot_exceed_numeric_90_degree_command(direction):
     g=geometry();p=ManualSteering(g);body=(0.,direction*.3,0.)
     output=p.align(model(g,body),sample(g,[0.]*4),body)
     assert all(-math.pi/2<=x<=math.pi/2 for x in output.position[:4])
-    assert all(abs(v)>.01 for v in output.velocity[4:])
+    assert output.velocity[4:]==[0.]*4
 
 
 def test_reference_is_renewed_only_by_explicit_epoch_reset():
@@ -205,7 +212,7 @@ def test_held_full_stick_stops_each_steering_at_its_bounded_target(direction, fa
         assert output.position==first.position
         assert all(abs(a)<=limit for a in output.position[:4])
         assert output.velocity[:4]==[0.]*4
-        assert output.velocity[4:]==first.velocity[4:]
+        assert output.velocity[4:]==pytest.approx(full_traction(g,body,first.position[:4]),abs=3e-5)
 
 
 @pytest.mark.parametrize('direction', [-1., 1.])
@@ -242,7 +249,7 @@ def test_held_crab_reaches_native_target_and_stays_stopped(direction, home_turns
 
     assert stopped_at is not None and stopped_at < 500
     assert all(abs(target-position) <= 1 for target, position in zip(native_targets, native_positions))
-    assert output.velocity[4:] == first.velocity[4:]
+    assert output.velocity[4:] == pytest.approx(full_traction(g,body,first.position[:4]),abs=3e-5)
     neutral = policy.align(candidate, feedback, (0., 0., 0.))
     assert neutral.position[:4] == feedback.position[:4]
     assert neutral.velocity == [0.]*8
@@ -265,7 +272,7 @@ def test_held_limit_corrects_overshoot_and_allows_inward_input(direction, family
     assert endpoints
     corrected=p.align(candidate,feedback,body)
     assert corrected.position==first.position
-    assert corrected.velocity[4:]==first.velocity[4:]
+    assert corrected.velocity[4:]==pytest.approx(full_traction(g,body,first.position[:4]),abs=3e-5)
     for i in endpoints:
         assert corrected.velocity[i]>0.
     inward=(.3, direction*.1, 0.) if family=='crab' else (.3, 0., 0.)
@@ -302,7 +309,7 @@ def test_one_degree_corrects_native_drift_without_accumulating_target(limits_ena
         correcting = p.align(candidate, feedback, body)
         assert correcting.position == target.position
         assert correcting.velocity[:4] == [.3]*4
-        assert correcting.velocity[4:] == target.velocity[4:]
+        assert correcting.velocity[4:] == settled.velocity[4:]
 
 
 def test_one_degree_boundary_and_reachable_half_count_target():
@@ -368,10 +375,15 @@ def test_crab_reversal_keeps_all_four_targets_and_reverses_traction(direction):
         # follows the previous setpoint, not individual motor lag.
         output=p.align(model(g,body),feedback,body)
         assert output.position==pytest.approx(first.position)
-        for i,mount in enumerate(g['wheel_mount_angles']):
-            assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
-            assert abs(output.position[i])<=math.pi/2
+        assert output.velocity[4:]==[0.]*4
+        assert all(abs(a)<=math.pi/2 for a in output.position[:4])
         assert output.velocity[:4]==[g['max_steering_velocity']]*4
+    feedback.position[:4]=first.position[:4]
+    for direction in (1.,-1.):
+        body=(0.,direction*.3,0.)
+        output=p.align(model(g,body),feedback,body)
+        assert output.position==pytest.approx(first.position)
+        assert output.velocity[4:]==pytest.approx(full_traction(g,body,output.position[:4]),abs=3e-5)
 
 
 def test_previous_setpoints_survive_wrapping_feedback_lag_and_joint_reordering():
@@ -396,7 +408,7 @@ def test_all_moving_motors_share_the_example_profile_speed():
     feedback.position[:4]=first.position[:4]
     stopped=p.align(candidate,feedback,body)
     assert stopped.velocity[:4]==[0.]*4
-    assert stopped.velocity[4:]==first.velocity[4:]
+    assert stopped.velocity[4:]==pytest.approx(full_traction(g,body,first.position[:4]),abs=3e-5)
 
 
 @pytest.mark.parametrize('direction', [-1., 1.])
@@ -440,7 +452,7 @@ def test_sweep_past_sideways_stays_bounded_and_straight_reverse_returns_inward(d
     angle=direction*math.radians(80)
     body=(.3*math.cos(angle),.3*math.sin(angle),0.)
     resumed=p.align(model(g,body),feedback,body)
-    assert all(abs(v)>.01 for v in resumed.velocity[4:])
+    assert resumed.velocity[4:]==[0.]*4  # Steering accepts inward input before traction resumes.
     assert abs(resumed.position[0])<math.pi/2
     stop=p.align(model(g,(0.,0.,0.)),feedback,(0.,0.,0.))
     assert stop.position[:4]==feedback.position[:4]
@@ -482,10 +494,11 @@ def test_blocked_crab_accepts_straight_target_before_wheels_reach_old_limit(dire
     body=(speed,0.,0.)
     output=p.align(model(g,body),feedback,body)
     assert not p.crab_blocked
+    scale=max(0.,min(1.,(30-math.degrees(measured_angle))/24))
     for i,(home,mount) in enumerate(zip(homes,g['wheel_mount_angles'])):
         assert output.position[i]-home==pytest.approx(0.,abs=1e-4)
         assert output.velocity[i]==g['max_steering_velocity']
-        assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(speed,abs=3e-5)
+        assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(speed*scale,abs=6e-5)
     targets=output.position[:4]
     feedback.position[:4]=targets
     completed=p.align(model(g,body),feedback,body)
@@ -506,10 +519,11 @@ def test_blocked_crab_accepts_inward_reverse_diagonal_without_neutral(direction)
     output=p.align(model(g,body),feedback,body)
     assert not p.crab_blocked
     assert output.position[0]==pytest.approx(direction*math.atan(1/3))
+    scale=(30-math.degrees(math.atan(1/3)))/24
     for i,mount in enumerate(g['wheel_mount_angles']):
         assert abs(output.position[i])<math.pi/2
-        assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
-        assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+        assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0]*scale,abs=6e-5)
+        assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1]*scale,abs=6e-5)
 
 
 def test_interlock_hold_preserves_boundary_but_does_not_block_a_new_inward_request():
@@ -521,7 +535,10 @@ def test_interlock_hold_preserves_boundary_but_does_not_block_a_new_inward_reque
     output=p.align(model(g,body),feedback,body)
     assert not p.crab_blocked
     assert output.position[0]==pytest.approx(-math.pi/4)
-    assert all(abs(v)>.01 for v in output.velocity[4:])
+    assert output.velocity[4:]==[0.]*4
+    feedback.position[:4]=output.position[:4]
+    aligned=p.align(model(g,body),feedback,body)
+    assert all(abs(v)>.01 for v in aligned.velocity[4:])
 
 
 @pytest.mark.parametrize('direction', [-1.,1.])
@@ -544,6 +561,7 @@ def test_180_degree_crab_sweep_crosses_sideways_and_stays_in_fixed_home_range(di
         for i,mount in enumerate(g['wheel_mount_angles']):
             assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
             assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+        feedback.position[:4]=output.position[:4]
         previous=relative
     feedback.position[:4]=output.position[:4]
     held=p.align(model(g,body),feedback,body)
@@ -610,6 +628,7 @@ def test_unbounded_crab_keeps_continuity_through_multiple_turns(direction,home_t
         for i,mount in enumerate(g['wheel_mount_angles']):
             assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
             assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+        feedback.position[:4]=output.position[:4]
         previous=relative
     assert abs(output.position[0]-home)>5*math.pi
 
@@ -645,6 +664,9 @@ def test_unbounded_ackermann_uses_previous_targets_instead_of_home_angle_caps():
     body=(.3,0.,.1)
     output=p.align(model(g,body),feedback,body)
     assert all(abs(target)>math.pi for target in output.position[:4])
+    assert output.velocity[4:]==[0.]*4  # The previous unachieved targets remain far from feedback.
+    feedback.position[:4]=output.position[:4]
+    output=p.align(model(g,body),feedback,body)
     for i,mount in enumerate(g['wheel_mount_angles']):
         assert abs(output.position[i]-previous.position[i])<=math.pi/2+1e-4
         speed=output.velocity[4+i];angle=output.position[i]+mount
@@ -715,6 +737,7 @@ def test_unbounded_restart_near_half_turn_cannot_add_a_revolution(sign,turns):
         for i,mount in enumerate(g['wheel_mount_angles']):
             assert output.velocity[4+i]*math.cos(output.position[i]+mount)==pytest.approx(body[0],abs=3e-5)
             assert output.velocity[4+i]*math.sin(output.position[i]+mount)==pytest.approx(body[1],abs=3e-5)
+        feedback.position[:4]=output.position[:4]
         previous=output.position[:4]
     assert abs(previous[0]-angles[0])>2*math.pi  # Continuous travel remains unrestricted.
 

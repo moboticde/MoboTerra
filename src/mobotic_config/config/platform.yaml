@@ -54,12 +54,12 @@ actuators:
     max_current: 4000
   traction:
     resolution: 4096
-    gear_ratio: 16.0
+    gear_ratio: 42.0
     mode: velocity
     min_steering_velocity: -1700
     max_steering_velocity: 1700
-    min_traction_velocity: -116053
-    max_traction_velocity: 116053
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
     min_current: -4000
     max_current: 4000
 traction_profile:
@@ -72,6 +72,7 @@ motion_limits:
   max_acceleration_linear: 0.5
   max_acceleration_angular: 0.52
   max_steering_velocity: 0.3 # steering output rad/s
+  steering_boost_velocity: 0.6 # B1 held; steering output rad/s
   steering_angle_limits_enabled: false # Continuous targets, as in Terra Spiro
   steering_return_home_on_neutral: true
   steering_neutral_home_velocity: 1.2 # steering output rad/s; normal joystick stays 0.3
@@ -92,8 +93,8 @@ modules:
     joint: front_left_traction
     can_node_id: '0x02'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 - name: front_right
   cad_steering_xyz:
   - 0.845
@@ -108,8 +109,8 @@ modules:
     joint: front_right_traction
     can_node_id: '0x04'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 - name: rear_left
   cad_steering_xyz:
   - -0.845
@@ -124,8 +125,8 @@ modules:
     joint: rear_left_traction
     can_node_id: '0x08'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 - name: rear_right
   cad_steering_xyz:
   - -0.845
@@ -140,8 +141,8 @@ modules:
     joint: rear_right_traction
     can_node_id: '0x06'
     controller: miControl
-    min_traction_velocity: -1700
-    max_traction_velocity: 1700
+    min_traction_velocity: -2469
+    max_traction_velocity: 2469
 usb_joystick:
   device_id: 0
   autorepeat_rate: 20.0

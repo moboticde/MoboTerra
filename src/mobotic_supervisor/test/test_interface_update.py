@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
+import math
 import test_enable_gate as harness
 import test_mode_transition as transitions
 
@@ -207,6 +208,31 @@ class InterfaceUpdateTest(unittest.TestCase):
         self.node.joint_state = self.joints()
         self.node.joint_state.velocity = [0.] * 4
         self.node.joint_state_received = self.fixture.now
+
+    def test_manual_b1_steering_boost_requires_fresh_active_operator_state(self):
+        from mobotic_kinematics.manual_steering import ManualSteering
+        for held, fresh, expected in ((False, True, .3), (True, True, .6), (True, False, .3)):
+            with self.subTest(held=held, fresh=fresh):
+                self.setUp()
+                self.configure_neutral_home()
+                g = dict(self.node.manual_steering_policy.geometry, steering_boost_velocity=.6)
+                self.node.manual_steering_policy = ManualSteering(g)
+                self.node.manual_stationary_steering_enabled = False
+                self.node.manual_state.controls_neutral = False
+                self.node.manual_state.turbo_active = held
+                if not fresh:
+                    self.node.manual_state_received = harness.Time(9.)
+                self.node.manual_command.twist.linear.y = .3
+                self.node.joint_state.position = [0.]*4
+                msg = self.joints()
+                msg.position = [math.pi/2, math.pi/2, 0., 0.]
+                msg.velocity = [.3]*4
+                self.node.velocity_ledger[msg.header.stamp] = (7, harness.WheelModuleCommandArray.MOTION,
+                    self.node.manual_command.header.stamp, False, True, (0., .3, 0.))
+                self.node._kinematics_candidate_callback(msg)
+                output = self.node.final_command_publisher.messages[-1]
+                self.assertEqual([m.steering_profile_velocity for m in output.modules], [expected]*2)
+                self.assertEqual([m.traction_velocity for m in output.modules], [0.]*2)
 
     def neutral_candidate(self, purpose=None):
         msg = self.joints()

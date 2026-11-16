@@ -112,8 +112,10 @@ supervisor's acceleration ramps still take time to follow changing input.
 
 Final manual wheel commands are checked in both authorities, for native and romb
 backends. Targets use the nearest full-turn home and account for pi-mounted right
-units and their traction polarity. Traction follows the requested travel command while steering moves; there is
-no wait-for-heading traction gate. Like the example project, steering headings
+units and their traction polarity. Traction shares one worst-wheel alignment
+scale: full through 6 degrees of error, reduced linearly to zero at 30 degrees.
+Steering continues while traction is held; recovery uses the existing platform
+acceleration limit from the last emitted wheel-speed peak. Like the example project, steering headings
 use the previous requested positions for continuity. An equivalent heading that
 would need more than 90 degrees of steering instead reverses traction. Reversing
 full sideways Crab therefore keeps the four steering targets and reverses travel,
@@ -191,8 +193,10 @@ ramps, CAN delivery and motor response still apply. Existing drive watchdogs and
 STOP/E-stop remain active.
 
 The supervisor still applies planar speed and safety limits. L1 or R1 boosts while
-held; pressing both does not stack the boost. Boost changes travel speed, not the
-45/90-degree steering ceilings, and cannot bypass platform limits.
+held; pressing both does not stack the boost. B1 also selects the active profile's
+steering boost: 0.6 rad/s while held, returning to 0.3 rad/s on release. This
+changes steering speed; configured angle limits and the traction-alignment gate
+remain enforced. Neutral homing retains its separate 1.2 rad/s profile.
 
 The supervisor requires fresh `connected` and `command_active` flags. The existing
 `OperatorState.deadman_pressed` and `deadman_state_known` fields remain false for

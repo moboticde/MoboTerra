@@ -382,7 +382,7 @@ def test_homing_diagnostic_channel_only_applies_to_active_recovery(node):
     assert not node._operator()  # never grants joystick motion
 
 
-def test_final_manual_command_keeps_traction_running_while_steering(node):
+def test_final_manual_command_holds_traction_during_a_large_turn(node):
     import math
     from mobotic_kinematics.manual_steering import ManualSteering
     node.steering_policy=ManualSteering({'wheels_x':[1.], 'wheels_y':[.5],
@@ -397,7 +397,7 @@ def test_final_manual_command_keeps_traction_running_while_steering(node):
     joints.velocity=[.3,.1]
     node._candidate(joints)
     final=node.command_pub.publish.call_args.args[0].modules[0]
-    assert final.traction_velocity==.1 and final.steering_profile_velocity==.3
+    assert final.traction_velocity==0. and final.steering_profile_velocity==.3
     assert final.steering_position==math.pi/4
 
 
@@ -539,3 +539,77 @@ def test_manual_only_neutral_homing_uses_faster_profile_with_zero_traction(node)
         assert result.steering_profile_velocity == (0. if i == 0 else 1.2)
         if i:
             assert result.steering_position == 0.
+
+
+def test_alignment_hold_and_accelerated_recovery_reach_the_final_manual_command(node):
+    from mobotic_kinematics.manual_steering import ManualSteering
+    node.steering_policy = ManualSteering({
+        'wheels_x': [.845], 'wheels_y': [.495],
+        'steering_joint_names': node.steering_joint_names,
+        'traction_joint_names': node.traction_joint_names,
+        'wheel_mount_angles': [0.], 'max_steering_velocity': .3,
+        'steering_position_resolutions': [121.], 'max_acceleration_linear': .5})
+    node.phase = 'enabled'
+    previous = 0.
+    for k in range(10):
+        node.test_now = 100.+k*.05
+        joints = seed(node, True)
+        node.samples['operator'][0].controls_neutral = False
+        source = node.samples['command'][0]
+        source.twist.linear.x, source.twist.linear.y = 0., .3
+        if k >= 4:
+            joints.position[0] = 30*2*math.pi/121  # Fresh feedback reaches the native sideways target.
+        node._tick()
+        candidate = copy.deepcopy(joints)
+        candidate.header = copy.deepcopy(node.velocity_pub.publish.call_args.args[0].header)
+        candidate.position[0] = math.pi/2
+        candidate.velocity = [.3, .3]
+        node._candidate(candidate)
+        command = node.command_pub.publish.call_args.args[0].modules[0]
+        assert command.steering_position == pytest.approx(math.pi/2)
+        if k < 4:
+            assert command.traction_velocity == 0.
+            assert command.steering_profile_velocity == .3
+        else:
+            assert command.steering_profile_velocity == 0.
+            assert command.traction_velocity == pytest.approx(previous+.025)
+        previous = command.traction_velocity
+    assert node.phase == 'enabled'
+    # Fresh candidate alone cannot bypass stale measured steering feedback.
+    node.test_now += .05
+    seed(node, True)
+    node.samples['operator'][0].controls_neutral = False
+    node._tick()
+    candidate.header = copy.deepcopy(node.velocity_pub.publish.call_args.args[0].header)
+    node.samples['joints'][0].header.stamp = Time(seconds=node.test_now-1.).to_msg()
+    count = node.command_pub.publish.call_count
+    node._candidate(candidate)
+    assert node.command_pub.publish.call_count == count
+
+
+def test_b1_steering_boost_is_held_and_does_not_bypass_traction_alignment(node):
+    from mobotic_kinematics.manual_steering import ManualSteering
+    node.max_steering_velocity = .3
+    node.steering_policy = ManualSteering({
+        'wheels_x': [.845], 'wheels_y': [.495],
+        'steering_joint_names': node.steering_joint_names,
+        'traction_joint_names': node.traction_joint_names,
+        'wheel_mount_angles': [0.], 'max_steering_velocity': .3, 'steering_boost_velocity': .6})
+    node.phase = 'enabled'
+    for k, boost in enumerate((False, True, True, False)):
+        node.test_now = 100.+k*.05
+        joints = seed(node, True)
+        node.samples['operator'][0].controls_neutral = False
+        node.samples['operator'][0].turbo_active = boost
+        source = node.samples['command'][0]
+        source.twist.linear.x, source.twist.linear.y = 0., .1
+        node._tick()
+        candidate = copy.deepcopy(joints)
+        candidate.header = copy.deepcopy(node.velocity_pub.publish.call_args.args[0].header)
+        candidate.position[0] = math.pi/2
+        candidate.velocity = [.3, .1]
+        node._candidate(candidate)
+        final = node.command_pub.publish.call_args.args[0].modules[0]
+        assert final.steering_profile_velocity == (.6 if boost else .3)
+        assert final.traction_velocity == 0.
+        assert final.steering_position == pytest.approx(math.pi/2)

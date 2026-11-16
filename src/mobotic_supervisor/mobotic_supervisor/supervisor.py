@@ -2142,7 +2142,10 @@ class MoboticSupervisor(Node):
             if not self._message_fresh(self.joint_state, self.joint_state_received, self.wheel_status_timeout, now):
                 return
             try:
-                msg = self.manual_steering_policy.align(msg, self.joint_state, entry[5])
+                state = self.manual_state
+                boost = bool(state and state.connected and state.command_active and getattr(state, 'turbo_active', False)
+                             and self._message_fresh(state, self.manual_state_received, self.manual_timeout, now))
+                msg = self.manual_steering_policy.align(msg, self.joint_state, entry[5], boost=boost)
             except ValueError:
                 return
         self._emit_final(msg, entry[2], now, entry[1])

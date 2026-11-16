@@ -186,8 +186,9 @@ valid selected command source. Manual motion requires a fresh connected/active
 joystick source, but no held button in the default USB profile. Ackermann uses left steering plus right forward/reverse; crab uses only the right
 stick. The first steering input owns the family until neutral and measured stop;
 crab wins simultaneous input. Limits are +/-45 degrees in Ackermann and +/-90
-degrees in crab. Traction and steering run concurrently; steering profiles track
-individual targets without a wait-for-heading traction gate. The steering limit
+degrees in crab. Steering profiles track individual targets. All four traction speeds share
+one alignment scale: full through 6 degrees of worst-wheel error, tapered to
+zero at 30 degrees. Recovery follows the platform acceleration limit. The steering limit
 reference remains fixed during each homing/authority cycle. Either L1 or R1 boosts travel speed without stacking.
 Management lease loss (0.3 s) stops/disables independently of joint-command loss
 (0.1 s) and decoded CAN feedback loss.
