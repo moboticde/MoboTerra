@@ -1,4 +1,4 @@
-"""Run the software installer with simulated host/Docker commands in a temp root."""
+"""Exercise the actual shell/Python installer using fake host and Docker commands."""
 import json
 import os
 from pathlib import Path
@@ -8,151 +8,207 @@ import sys
 import tempfile
 import unittest
 
-
 DEPLOY = Path(__file__).resolve().parents[1]
 
+STUB = '''#!/usr/bin/python3
+import json,os,pathlib,sys
+name=pathlib.Path(sys.argv[0]).name
+args=sys.argv[1:]
+root=pathlib.Path(os.environ['TEST_ROOT'])
+with (root/'calls.jsonl').open('a') as f:f.write(json.dumps([name,*args])+'\\n')
+kind=os.environ.get('DOCKER_KIND','complete')
+if name=='dpkg':print('amd64')
+if name=='dpkg-query':
+ expected='docker.io' if kind=='distro' else 'docker-ce'
+ if kind!='missing' and args[-1]==expected:print('install ok installed')
+ else:sys.exit(1)
+if name=='apt-get' and 'install' in args:
+ if any(p in args for p in ['docker-ce','docker.io']):
+  target=root/'bin/docker';target.write_text(pathlib.Path(__file__).read_text());target.chmod(0o755)
+ for part,packages in [('compose',['docker-compose-plugin','docker-compose-v2']),('buildx',['docker-buildx-plugin','docker-buildx'])]:
+  if any(p in args for p in packages):(root/part).touch()
+if name=='curl':pathlib.Path(args[args.index('-o')+1]).write_text('fake signing key')
+if name=='docker':
+ if args[:2]==['compose','version'] and kind!='complete' and not (root/'compose').exists():sys.exit(1)
+ if args[:2]==['buildx','version'] and kind!='complete' and not (root/'buildx').exists():sys.exit(1)
+ if args[:2]==['buildx','build'] and os.environ.get('FAIL_BUILD'):sys.exit(1)
+ if args[:1]==['run'] and os.environ.get('FAIL_VERIFY'):sys.exit(1)
+ if args[:2]==['compose','--env-file'] and os.environ.get('FAIL_CONFIG'):sys.exit(1)
+ if args[:2]==['image','inspect']:
+  print(json.dumps([{'Id':'sha256:'+'a'*64,'Os':'linux','Architecture':os.environ.get('IMAGE_ARCH','amd64'),
+    'Config':{'Labels':{'com.mobotic.stack':'four-micontrol-bundled-romb-v1'}}}]))
+ if args[:2]==['info','--format']:print('linux/x86_64')
+if name=='systemctl':
+ if args[:1]==['is-active']:sys.exit(0 if os.environ.get('ACTIVE_STACK') and args[-1]=='moboterra-current-stack.service' else 3)
+ if args[:1]==['show']:print('not-found')
+'''
 
-class SoftwareInstallationTest(unittest.TestCase):
+
+@unittest.skipUnless(sys.platform == 'linux', 'Installer integration tests require Linux shell semantics')
+class InstallationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.deploy = self.root / 'repo' / 'deploy'
-        shutil.copytree(DEPLOY, self.deploy)
-        for folder in ('config', 'mobotic_config'):
-            shutil.copytree(DEPLOY.parent / 'src/mobotic_config' / folder,
-                            self.root / 'repo/src/mobotic_config' / folder)
-        text = (self.deploy / 'install.sh').read_text()
-        # Only the test copy bypasses root authentication; every filesystem write
-        # is redirected to this temporary root and external operations are fake.
-        text = text.replace('if [[ "${EUID}" -ne 0 ]]; then', 'if false; then')
-        for prefix in ('/etc/', '/opt/', '/usr/local/', '/var/lib/', '/run/'):
-            text = text.replace(prefix, str(self.root) + prefix)
-        (self.deploy / 'install.sh').write_text(text)
+        self.repo = self.root / 'repo'
+        self.deploy = self.repo / 'deploy'
+        self.deploy.mkdir(parents=True)
+        for filename in ('install.sh','bootstrap_host.sh','current_stack.py','compose.current-stack.yaml'):
+            shutil.copy2(DEPLOY / filename, self.deploy / filename)
+        shutil.copytree(DEPLOY / 'vendor', self.deploy / 'vendor')
+        (self.deploy / 'host').mkdir()
+        shutil.copy2(DEPLOY / 'host/moboterra_ctl.py', self.deploy / 'host/moboterra_ctl.py')
+        shutil.copytree(DEPLOY.parent / 'src/mobotic_config', self.repo / 'src/mobotic_config',
+                        ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache'))
+        # The optional WSL test runner has Python 3.8; the actual target is
+        # Ubuntu 24.04/Python 3.12. Preserve this fixed max_ derivation in its
+        # temporary fixture without changing the target's configuration module.
+        config_module = self.repo / 'src/mobotic_config/mobotic_config/configuration.py'
+        config_module.write_text(config_module.read_text()
+                                 .replace("key.removeprefix('max_')", 'key[4:]')
+                                 .replace("kind.removesuffix('_list')", 'kind[:-5]'))
+        (self.repo / 'config/raspberry-pi').mkdir(parents=True)
+        (self.repo / 'config/raspberry-pi/ros.env').write_text('export ROS_DOMAIN_ID=42\n')
         (self.root / 'etc').mkdir()
-        (self.root / 'etc/os-release').write_text('ID=ubuntu\nVERSION_ID=24.04\n')
+        (self.root / 'etc/os-release').write_text('ID=ubuntu\nVERSION_ID=24.04\nVERSION_CODENAME=noble\n')
+        (self.root / 'etc/apt/sources.list.d').mkdir(parents=True)
+        certificate = self.root / 'etc/ssl/certs/ca-certificates.crt'
+        certificate.parent.mkdir(parents=True)
+        certificate.touch()
+        for filename in ('install.sh','bootstrap_host.sh','current_stack.py'):
+            path = self.deploy / filename
+            text = path.read_text()
+            text = text.replace('[[ "$EUID" -eq 0 ]]', 'true')
+            text = text.replace('[[ "$EUID" -ne 0 ]]', 'false')
+            text = text.replace('if os.geteuid() != 0:', 'if False:')
+            if filename == 'bootstrap_host.sh':
+                text = text.replace('/etc/', str(self.root / 'etc') + '/')
+            if filename == 'current_stack.py':
+                text = text.replace("Path('/etc/systemd/system')", repr(str(self.root / 'etc/systemd/system')))
+                text = text.replace(repr(str(self.root / 'etc/systemd/system')), "Path("+repr(str(self.root / 'etc/systemd/system'))+")")
+                text = text.replace("Path('/usr/local/bin/moboterra-ctl')", "Path("+repr(str(self.root / 'usr/local/bin/moboterra-ctl'))+")")
+                text = 'def test_chown(*args): pass\n' + text.replace('os.chown(', 'test_chown(')
+            path.write_text(text)
         self.bin = self.root / 'bin'
         self.bin.mkdir()
-        # Exercise the installer with the same supported interpreter running
-        # these tests, even if the Linux host's default Python is older.
         (self.bin / 'python3').symlink_to(sys.executable)
-        self.calls = self.root / 'calls.jsonl'
-        stub = '''#!/usr/bin/python3
-import json, os, pathlib, sys
-name=pathlib.Path(sys.argv[0]).name
-args=sys.argv[1:]
-with open(os.environ['TEST_CALLS'], 'a') as f:
-    f.write(json.dumps([name, *args])+'\\n')
-if name == 'dpkg': print('arm64')
-if name == 'dpkg-query':
-    if args[-1] == os.environ.get('DOCKER_PACKAGE'): print('install ok installed')
-    else: sys.exit(1)
-if name == 'docker' and args[:2] == ['compose', 'version']:
-    if os.environ.get('DOCKER_PACKAGE') and not pathlib.Path(os.environ['PLUGIN_MARKER']).exists():
-        sys.exit(1)
-if name == 'apt-get' and 'install' in args:
-    pathlib.Path(os.environ['PLUGIN_MARKER']).touch()
-if name == 'docker' and args[:2] == ['image', 'inspect']:
-    print('ros@sha256:'+'a'*64)
-if name == 'docker' and args[:1] == ['pull'] and os.environ.get('FAIL_PULL'):
-    sys.exit(1)
-if name == 'docker' and args[:1] == ['build'] and os.environ.get('FAIL_BUILD'):
-    sys.exit(1)
-'''
-        for name in ('docker', 'dpkg', 'dpkg-query', 'systemctl', 'ip', 'udevadm',
-                     'candump', 'apt-get', 'modprobe', 'sleep'):
-            file = self.bin / name
-            file.write_text(stub)
-            file.chmod(0o755)
-        self.env = dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin',
-                        TEST_CALLS=str(self.calls), PLUGIN_MARKER=str(self.root / 'plugin-installed'))
+        for name in ('dpkg','dpkg-query','docker','systemctl','systemd-analyze','ip','candump','udevadm','modprobe','curl','apt-get'):
+            path = self.bin / name
+            path.write_text(STUB)
+            path.chmod(0o755)
+        self.env = dict(os.environ, PATH=str(self.bin)+':/usr/bin:/bin', TEST_ROOT=str(self.root))
+        self.env.pop('SUDO_USER', None)
+        self.env.pop('MOBOTERRA_ROMB_RUNTIME', None)
 
-    def run_installer(self, *args, **env):
-        return subprocess.run(['bash', str(self.deploy / 'install.sh'), *args],
-                              env=dict(self.env, **env), capture_output=True,
-                              text=True, timeout=15)
+    def invoke(self, *arguments, **environment):
+        if environment.get('DOCKER_KIND') == 'missing':
+            (self.bin / 'docker').unlink()
+        return subprocess.run(['bash', str(self.deploy / 'install.sh'), *arguments],
+                              env=dict(self.env, **environment), capture_output=True, text=True, timeout=40)
 
-    def recorded_calls(self):
-        return [json.loads(line) for line in self.calls.read_text().splitlines()]
+    def calls(self):
+        path = self.root / 'calls.jsonl'
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
-    def test_no_adapters_installs_all_images_without_robot_service(self):
-        result = self.run_installer('--software-only', '--ros-domain-id', '43')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        calls = self.recorded_calls()
-        builds = [call for call in calls if call[:2] == ['docker', 'build']]
-        self.assertEqual([call[call.index('--target') + 1] for call in builds],
-                         ['runtime', 'gui', 'tools'])
-        self.assertFalse(any(call[0] == 'modprobe' for call in calls))
-        self.assertFalse(any('moboterra-supervisor.service' in call for call in calls))
-        self.assertFalse((self.root / 'etc/moboterra/moboterra.env').exists())
-        self.assertFalse((self.root / 'opt/moboterra/current').exists())
-        config = (self.root / 'etc/moboterra/software.env').read_text()
-        self.assertIn('ROS_DOMAIN_ID=43', config)
-        self.assertIn('MOBOTERRA_TOOLS_IMAGE=', config)
-        release = self.root / 'opt/moboterra/software'
-        self.assertTrue(release.is_symlink())
-        self.assertIn('tools_image', json.loads((release / 'release.json').read_text()))
-        self.assertTrue((release / 'mobotic_config/configuration.py').is_file())
-        self.assertTrue((release / 'config/platform.yaml').is_file())
-        self.assertTrue((self.root / 'usr/local/bin/moboterra-tools').is_symlink())
+    def test_default_builds_bundled_stack_without_host_romb_or_ros(self):
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        calls = self.calls()
+        build = next(call for call in calls if call[:3] == ['docker','buildx','build'])
+        self.assertEqual(build[build.index('--target')+1], 'current-stack')
+        self.assertNotIn('--build-context', build)
+        env = (self.repo / 'runtime/docker-stack.env').read_text()
+        self.assertIn("MOBOTERRA_CURRENT_IMAGE='sha256:"+'a'*64+"'", env)
         self.assertTrue((self.root / 'usr/local/bin/moboterra-ctl').is_symlink())
+        self.assertTrue((self.root / 'etc/systemd/system/moboterra-current-stack.service').is_file())
+        self.assertIn(['systemctl','enable','moboterra-current-stack.service'], calls)
+        self.assertNotIn(['systemctl','start','moboterra-current-stack.service'], calls)
+        self.assertFalse(any(call[0] == 'apt-get' for call in calls))
+        for call in calls:
+            if call[:2] == ['docker','run']:
+                self.assertEqual(call[call.index('--network')+1], 'none')
 
-    def test_failed_build_does_not_publish_configuration_or_launchers(self):
-        result = self.run_installer('--software-only', FAIL_BUILD='1')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.root / 'etc/moboterra/software.env').exists())
-        self.assertFalse((self.root / 'usr/local/bin/moboterra-gui').exists())
+    def test_fresh_host_installs_engine_and_plugins_automatically(self):
+        result = self.invoke(DOCKER_KIND='missing')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        installs=[call for call in self.calls() if call[0]=='apt-get' and 'install' in call]
+        self.assertTrue(any('docker-ce' in call and 'docker-buildx-plugin' in call and 'docker-compose-plugin' in call for call in installs))
+        source=(self.root/'etc/apt/sources.list.d/docker.sources').read_text()
+        self.assertIn('https://download.docker.com/linux/ubuntu',source)
+        self.assertIn('Suites: noble',source)
+        self.assertFalse(any('remove' in call or 'purge' in call for call in self.calls()))
 
-    def test_software_install_preserves_existing_hardware_configuration(self):
-        hardware = self.root / 'etc/moboterra/moboterra.env'
-        hardware.parent.mkdir()
-        hardware.write_text('PLATFORM_CAN_SERIAL=real-platform\nBATTERY_CAN_SERIAL=real-battery\n')
-        current = self.root / 'opt/moboterra/current'
-        current.parent.mkdir(parents=True)
-        current.symlink_to('releases/existing-hardware')
-        result = self.run_installer('--software-only')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(hardware.read_text(),
-                         'PLATFORM_CAN_SERIAL=real-platform\nBATTERY_CAN_SERIAL=real-battery\n')
-        self.assertEqual(os.readlink(current), 'releases/existing-hardware')
+    def test_existing_distro_engine_gets_matching_plugins(self):
+        result=self.invoke(DOCKER_KIND='distro')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        installs=[call for call in self.calls() if call[0]=='apt-get' and 'install' in call]
+        self.assertTrue(any('docker-compose-v2' in call and 'docker-buildx' in call for call in installs))
+        self.assertFalse(any('docker-ce' in call for call in installs))
 
-    def test_missing_compose_installs_matching_package(self):
-        for installed, expected in (('docker-ce', 'docker-compose-plugin'),
-                                    ('docker.io', 'docker-compose-v2')):
-            with self.subTest(installed=installed):
-                marker = self.root / 'plugin-installed'
-                marker.unlink(missing_ok=True)
-                result = self.run_installer('--software-only', DOCKER_PACKAGE=installed)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                installs = [call for call in self.recorded_calls()
-                            if call[0] == 'apt-get' and 'install' in call]
-                self.assertIn(expected, installs[-1])
+    def test_failed_build_or_validation_does_not_publish_service_or_cli(self):
+        for fault in ('FAIL_BUILD','FAIL_VERIFY','FAIL_CONFIG'):
+            with self.subTest(fault=fault):
+                result=self.invoke(**{fault:'1'})
+                self.assertNotEqual(result.returncode,0)
+                self.assertFalse((self.repo/'runtime/docker-stack.env').exists())
+                self.assertFalse((self.root/'usr/local/bin/moboterra-ctl').exists())
+                self.assertFalse((self.root/'etc/systemd/system/moboterra-current-stack.service').exists())
 
-    def test_download_failure_is_bounded(self):
-        result = self.run_installer('--software-only', FAIL_PULL='1')
-        self.assertNotEqual(result.returncode, 0)
-        pulls = [call for call in self.recorded_calls() if call[:2] == ['docker', 'pull']]
-        self.assertEqual(len(pulls), 3)
-        self.assertFalse((self.root / 'etc/moboterra/software.env').exists())
+    def test_corrupt_vendor_package_fails_before_build(self):
+        (self.deploy/'vendor/agv_kinematics.deb').write_bytes(b'corrupted')
+        result=self.invoke()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('checksum',result.stderr)
+        self.assertFalse(any(call[:3]==['docker','buildx','build'] for call in self.calls()))
 
-    def test_reinstall_creates_distinct_releases(self):
-        for _ in range(2):
-            result = self.run_installer('--software-only')
-            self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(list((self.root / 'opt/moboterra/releases').iterdir())), 2)
+    def test_software_only_registers_cli_but_no_robot_service(self):
+        result=self.invoke('--software-only')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertTrue((self.root/'usr/local/bin/moboterra-ctl').is_symlink())
+        self.assertFalse((self.root/'etc/systemd/system/moboterra-current-stack.service').exists())
+        self.assertFalse(any(call[:2]==['systemctl','enable'] and 'moboterra-current-stack.service' in call for call in self.calls()))
+        self.assertFalse(any(call[0]=='modprobe' for call in self.calls()))
 
-    def test_reinstall_preserves_domain_and_accepts_decimal_leading_zero(self):
-        first = self.run_installer('--software-only', '--ros-domain-id', '08')
-        self.assertEqual(first.returncode, 0, first.stderr)
-        second = self.run_installer('--software-only')
-        self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertIn('ROS_DOMAIN_ID=8\n',
-                      (self.root / 'etc/moboterra/software.env').read_text())
+    def test_software_only_preserves_an_existing_deployment_selection(self):
+        first=self.invoke()
+        self.assertEqual(first.returncode,0,first.stdout+first.stderr)
+        environment=self.repo/'runtime/docker-stack.env'
+        previous=environment.read_bytes()
+        result=self.invoke('--software-only','--ros-domain-id','8')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual(environment.read_bytes(),previous)
+        self.assertEqual((self.repo/'config/raspberry-pi/ros.env').read_text(),'export ROS_DOMAIN_ID=42\n')
+        self.assertIn('Existing image selection and ROS domain retained',result.stdout)
 
-    def test_invalid_domain_stops_before_external_operations(self):
-        result = self.run_installer('--software-only', '--ros-domain-id', '233')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertTrue(all(call[0] == 'dpkg' for call in self.recorded_calls()))
+    def test_no_start_disables_boot_while_start_is_explicit(self):
+        result=self.invoke('--no-start')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn(['systemctl','disable','moboterra-current-stack.service'],self.calls())
+        result=self.invoke('--start')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn(['systemctl','start','moboterra-current-stack.service'],self.calls())
+        self.assertTrue((self.repo/'runtime/docker-stack.previous.env').is_file())
+
+    def test_prepared_image_skips_source_build(self):
+        result=self.invoke('--image','supplier/complete:tested')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertFalse(any(call[:3]==['docker','buildx','build'] for call in self.calls()))
+
+    def test_wrong_architecture_and_active_service_are_rejected(self):
+        for options in ({'IMAGE_ARCH':'arm64'},{'ACTIVE_STACK':'1'}):
+            with self.subTest(options=options):
+                result=self.invoke(**options)
+                self.assertNotEqual(result.returncode,0)
+                self.assertFalse((self.repo/'runtime/docker-stack.env').exists())
+
+    def test_domain_and_options_are_validated(self):
+        for arguments in [('--ros-domain-id','233'),('--no-start','--start'),('--romb-runtime','/old/native/path')]:
+            result=self.invoke(*arguments)
+            self.assertNotEqual(result.returncode,0)
+        self.assertEqual(self.calls(),[])
+        result=self.invoke('--ros-domain-id','8')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual((self.repo/'config/raspberry-pi/ros.env').read_text(),'export ROS_DOMAIN_ID=8\n')
 
 
 if __name__ == '__main__':

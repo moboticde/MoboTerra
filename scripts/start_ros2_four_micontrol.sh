@@ -40,7 +40,7 @@ if [[ "${1:-}" == "--check" ]]; then
   echo "Project configuration validated; no CAN access or robot startup performed."
   exit 0
 fi
-if systemctl is-active --quiet moboterra-supervisor.service; then
+if command -v systemctl >/dev/null && systemctl is-active --quiet moboterra-supervisor.service; then
   echo 'Stop the managed stack before starting the native stack.' >&2
   exit 1
 fi

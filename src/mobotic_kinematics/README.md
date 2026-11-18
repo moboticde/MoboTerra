@@ -17,6 +17,13 @@ launch/                              Two compatible launch filenames, both using
 test/                                Policy, adapter, integrity and real solver checks
 ```
 
+For the standard Docker installation, the unchanged original solver package is
+included at `deploy/vendor/agv_kinematics.deb`. The Docker build verifies its
+checksum and constructs the guest runtime and target emulator inside the image.
+Customers need no host ROMB runtime or native ROS installation; use
+`bash ./install.sh` and `moboterra-ctl`. The native-only paths below describe
+the optional engineering installation, not a customer prerequisite.
+
 The original `agv_kinematics` executable is delivered in
 `~/Desktop/mobotic_customer_delivery/agv_kinematics.deb`. It runs unchanged under
 QEMU because the supplied executable is amd64 and the host is ARM64. The runtime

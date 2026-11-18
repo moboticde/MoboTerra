@@ -1,28 +1,32 @@
 # mobotic_manual_control
 
 The default provider is the CAN `remdevice_control` node, named `operator`, for
-PAIL/Ecobox node 9 on can0 at 500 kbit/s. Its physical mapping is unverified, so
-it currently captures input and publishes zero motion. No hold-to-drive button
-is assigned. Follow the [capture and commissioning guide](../../docs/remdevice_commissioning.md).
+PAIL/Ecobox node 10 on shared can0 at 500 kbit/s, with CAN master 11. The active
+source mapping is marked verified: A3 speed, A2 steering, A4 crab, U5 mode,
+SP3 boost, SP4 B2 enable and D5 safety selector. No hold-to-drive button
+is assigned. Physical acceptance remains machine-specific. Follow the [capture and commissioning guide](../../docs/remdevice_commissioning.md).
 Select `operator.source: usb` and `operator.usb_driver: joy_node` for the PAIL's
 USB joystick connection. Raw input remains available with
 `operator.usb_mapping_verified: false`; verify the USB indices/polarities before
 enabling motion. Use `game_controller_node` for the Logitech profile described
 below. Launch starts exactly one provider. CAN and USB mappings are independent.
 
-Manual input uses neutral rearm and fresh commands. Hold-to-drive button support
+Manual input uses fresh commands. The current PAIL profile disables the
+provider neutral-rearm policy; B2 admission still requires neutral controls. Hold-to-drive button support
 has been removed from both USB and CAN input.
 
 Converts `sensor_msgs/msg/Joy` into a supervised `operator/cmd_vel` command source for the vehicle
 supervisor. It also publishes `mobotic_interfaces/msg/OperatorState` on `operator/state`.
 
-The node never calls drive services. A stale joystick or invalid joystick layout immediately produces
+The USB velocity-conversion node does not call drive services. The CAN
+provider forwards B2 to the supervisor enable service. A stale joystick or invalid joystick layout immediately produces
 a zero command and an inactive state. The supervisor remains the only component allowed to select this command
 source and authorize motion.
 
 For CAN, `operator/state.connected` requires fresh physical LINK/EMGY/STOP
-evidence and a receiver without an active EMCY/input fault. An EMCY withdraws
-drive readiness and reports its code with joystick/receiver restart guidance;
+evidence and valid inputs. The current profile treats receiver error-register
+reports as advisory; profiles without that override withdraw readiness on an EMCY
+and report its code with joystick/receiver restart guidance;
 the supervisor disables drives and waits for B2 after the fault is corrected.
 An incomplete PDO pair sets `command_active: false`, discards motion, and
 requires fresh neutral rearm without fabricating physical STOP state.
@@ -47,12 +51,12 @@ In MANUAL,
 stick input can command motion without pressing a button, subject to supervisor
 readiness and speed limits; keep sticks neutral during startup and mode changes.
 
-Joystick timeout/disconnection clears the stored velocity, turbo state,
-and acceleration timing. The callback also detects a receipt gap before accepting
-a reconnect message, so timer ordering cannot revive an old command. A neutral
-joystick remains at zero after reconnection. Held nonzero controls cannot rearm:
-fresh neutral input is required before subsequent stick movement is accepted.
-A backward clock jump, mode/authority change or safety recovery requires this same rearm.
+Joystick timeout/disconnection clears stored velocity, turbo state and
+acceleration timing. Receipt gaps and clock/authority changes invalidate cached
+commands. Profiles with `require_neutral_rearm: true` require fresh neutral input
+before accepting subsequent motion. The active PAIL profile sets this policy
+to false; do not assume held nonzero controls are blocked by a separate provider
+rearm latch. Supervisor readiness and neutral B2 admission remain separate checks.
 
 The temporary USB profile is for Logitech F310/F710, using the hardware XInput
 setting and `joy/game_controller_node`. It uses SDL's standardized ROS layout,
@@ -72,8 +76,9 @@ to operator command/state, not directly to `joy`.
 
 The measured PAIL CAN mapping uses A2 for left-stick steering and A3/A4 for
 right-stick forward/reverse and sideways translation. These channel numbers are
-independent of the USB indices below. Left-stick input alone does not steer or
-rotate the vehicle. Manual steering families are selected by the first qualifying
+independent of the USB indices below. The current supervised manual steering
+policy can steer at standstill when its readiness checks permit it; returning
+to neutral can also return steering home. Manual steering families are selected by the first qualifying
 steering input; crab wins if both qualify in the same acquisition sample.
 
 | Physical control | ROS index | Role |

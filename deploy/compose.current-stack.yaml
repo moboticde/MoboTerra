@@ -1,0 +1,58 @@
+name: moboterra-current
+
+services:
+  robot:
+    image: ${MOBOTERRA_CURRENT_IMAGE:?Run scripts/install_docker_autostart.sh first}
+    container_name: moboterra-current-stack
+    # Linux host networking exposes the existing SocketCAN and scanner links.
+    network_mode: host
+    # Match native DDS shared-memory communication with host ROS/RViz tools.
+    ipc: host
+    # Retain the launcher's native/orphan process checks on the same PC.
+    pid: host
+    user: ${MOBOTERRA_UID:?}:${MOBOTERRA_GID:?}
+    init: true
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      ROBOT_NAME: ${MOBOTERRA_ROBOT_NAME:?}
+    command: [bash, scripts/start_ros2_four_micontrol.sh, "start_rviz:=false"]
+    volumes:
+      - type: bind
+        source: ${MOBOTERRA_PROJECT_ROOT:?}/src/mobotic_config/config
+        target: /opt/moboterra/share/mobotic_config/config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MOBOTERRA_PROJECT_ROOT:?}/config/raspberry-pi/ros.env
+        target: /opt/moboterra-project/config/raspberry-pi/ros.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MOBOTERRA_PROJECT_ROOT:?}/runtime
+        target: /opt/moboterra-project/runtime
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+      - /run:rw,nosuid,nodev,size=16m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - source scripts/setup_ros.bash && /usr/local/bin/moboterra-healthcheck
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+    stop_grace_period: 45s

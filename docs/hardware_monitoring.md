@@ -1,31 +1,37 @@
 # Hardware monitoring and commissioning
 
 The updated contract is [supervisor_interfaces.md](supervisor_interfaces.md).
-Physical startup waits for external supervisor readiness, configures controller
-modes/PDOs/ramps and enables with zero targets before requiring position/velocity
-feedback. Actual fresh feedback then permits motion. Startup is bounded and
+Physical startup waits for a new B2 request and external supervisor readiness,
+configures miControl modes through SDOs and enables with zero traction before
+requiring complete position/velocity feedback and steering alignment. Installed
+ramps and drive PDO mappings remain unchanged. Startup is bounded and
 cancelled on lost permission. No external encoder-reference recovery is required.
 See [drive startup and B2 recovery](drive_startup.md). The durable recovery helper
 does not establish continuity across controller coordinate resets.
 Older test descriptions below are commissioning scenarios, not completed checks
 of the updated interface. Full Jazzy/ROS/SocketCAN validation remains required.
 
-ROS observes the hardware safety chain. ELMO/FlexiSoft perform physical STO;
+ROS observes the hardware safety chain. The miControl/FlexiSoft chain performs physical STO;
 none of the changes here implement or replace a safety-rated stop function.
 A driver/OS/CAN failure cannot be handled by a watchdog inside that failed process.
 Verify the independent hardware watchdog/STO and brake behavior on the machine.
 
 ## Reference configuration
 
-The local `terra_spiro` files were read as reference data; only MoboTerra was edited.
+The local `terra_spiro` files below are historical reference data. Their adapter,
+controller and network settings are not the active configuration. The current
+profile shares transmitting `can0` at 500000 bit/s between drives and batteries.
+Its scanner host is `192.168.1.200`; scanners are `192.168.1.5` and `192.168.1.6`.
+Use [the active configuration guide](four_module_setup.md) and
+[customer manual](customer_manual.md) for installed-machine procedures.
 
 - `mobotic_launch/launch/terraspiro.launch.py`: historical Vanguard controller/
   participant source addresses and status/SOC/electrical PGNs. These are
   reference data, not a verified mapping for the installed fixed packs.
 - `startup/README.md` and `vanguard_charge_monitor.launch.py`: separate 500 kbit/s
   CAN buses, `can0` for drives and `can1` for listen-only battery telemetry.
-  MoboTerra bringup now launches a receiver-only battery transport under
-  `battery_can`, remapping the monitor input to `battery_can/can_rx`. Neither
+  Current MoboTerra retains a receiver-only battery ROS transport under
+  `battery_can` on the shared physical `can0`, with monitor input `battery_can/can_rx`. Neither
   this change nor the read-only monitor adds operating-consent/HV commands.
 - `sick_flexisoft_eth_comm/src/sick_flexisoft_eth_comm.cpp`: 15-byte TCP telegram,
   port 9100, byte 14; OSSD masks 0x03/0x0C, estop 0x10, override 0x20, warning

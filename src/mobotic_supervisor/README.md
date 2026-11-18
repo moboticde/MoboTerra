@@ -62,7 +62,7 @@ recovery. Stick movement after acceptance is ignored while zero-target recovery
 runs; it does not request drive disable. Fresh neutral rearm is still required
 after recovery completes. Fresh matching driver transaction IDs permit zero-target initialization/enable while ERROR remains latched. Fault-clearance acknowledgements, healthy enabled feedback and a new sustained standstill proof are required before latch clearance. Reset acceptance is not proof of recovery. See [the recovery sequence](../../docs/drive_startup.md).
 
-Default command expiry is 250 ms, the control cycle 20 ms, startup grace 10 s and reset timeout 20 s (covering the 15 s drive startup attempt). Policies, module names and limits come from `mobotic_config`. Monitoring loss, actual drive/BMS faults and required component health are root fault inputs; protective stops and low SOC are not themselves system errors.
+Default command expiry is 250 ms, the current control cycle 50 ms, startup grace 10 s and reset timeout 20 s (covering the 15 s drive startup attempt). Policies, module names and limits come from `mobotic_config`. Monitoring loss, actual drive/BMS faults and required component health are root fault inputs; protective stops and low SOC are not themselves system errors.
 
 Fresh connected neutral operator evidence or an explicit fresh zero manual
 command cancels manual motion without a software deceleration ramp. It also replaces older in-flight kinematics results
@@ -181,7 +181,7 @@ a fresh RP2 Safety Enabled selector when the commissioned override is configured
 A faulted return to MANUAL requires fresh native disabled-drive proof and no
 observed movement; it preserves fault latches until explicit recovery completes.
 
-RP2/D5 scanner bypass is supported on both two- and four-module layouts with
+RP2/D5 scanner bypass is supported on the complete four-module layout with
 verified REMdevice mapping (`scanner_override: {signal: D5, active_high: true}`).
 D5 high permits only reduced-speed MANUAL (0.3 m/s); both AUTO modes require
 D5 low with fresh valid selector/operator samples. D5 low, stale or invalid input
@@ -210,8 +210,8 @@ immediately publishes stop authority and zero targets from the receiving callbac
 `vehicle/mode` reports SAFETY with `SAFETY_SELECTOR_MISMATCH`; this disagreement
 alone is not a latched ERROR, so normal signal propagation does not require a
 fault reset. It remains blocked while present. Old commands are discarded and
-fresh commands/manual rearming are required after agreement is restored. B2
-still permits disabling; it cannot enable through this interlock. Missing or stale
+fresh commands/manual rearming are required after agreement is restored. B2 cannot enable through this interlock and does not disable drives; use
+the approved stop controls. Missing or stale
 RP2 input cannot release the block while PLC override remains active. FlexiSoft
 is read-only: ROS blocks its own commands and does not modify PLC logic or STO.
 

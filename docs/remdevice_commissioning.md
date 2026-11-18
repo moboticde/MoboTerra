@@ -1,3 +1,19 @@
+# PAIL commissioning and historical test records
+
+For the current customer procedure use [the customer manual](customer_manual.md).
+The active profile is `src/mobotic_config/config/platform.yaml`: PAIL node 10,
+CAN master 11, shared `can0` at 500000 bit/s, A3 speed, A2 steering and A4 crab.
+Its mapping is marked verified; receiver errors are advisory in this source
+profile. B2 uses `wheel_modules/enable_drives` and is not a disable toggle.
+
+The records below preserve earlier capture profiles, bus rates, candidate
+mappings and troubleshooting trials. Node 9, unverified maps, 250 kbit/s and
+home-directory paths in those records are historical test settings. They are not
+installation instructions for the current machine. Use the active profile and
+record physical verification for the delivered vehicle.
+
+## Historical capture and troubleshooting records
+
 # PAIL / Ecobox CAN operator
 
 The hardware profile selects `remdevice`, receiver node **9**, sharing the drive
@@ -23,7 +39,7 @@ planned hardware profile, not its current settings. Virtual joystick testing
 does not require writing a new node ID or bitrate to the receiver.
 
 Use an isolated joystick CAN bus at 250000 bit/s and the separate virtual
-platform profile described in the [virtual CAN/RViz instructions](commands.md#pail-can-joystick-and-rviz-in-virtual-mode).
+platform profile described in the [isolated virtual CAN test](../src/mobotic_bringup/README.md#drive-the-virtual-platform-with-a-pail-can-joystick).
 The profile uses receiver node 10 and simulated master node 11; the optional
 operator receiver never forwards simulated drive commands to physical CAN.
 

@@ -1,3 +1,13 @@
+# Historical interface integration audit
+
+This audit is a retained engineering snapshot. It does not establish the current
+hardware configuration or release acceptance. Use [the current interface reference](ros_interface_manual.md)
+and [validation and handover](software_readiness.md) for the current source and
+target-machine requirements. Earlier Elmo and deployment constraints below refer
+to the audited implementation at that time.
+
+## Retained audit record
+
 # MoboTerra interface source audit
 
 The initial inspection on 19 October 2026 found an older checkout and the

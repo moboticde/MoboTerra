@@ -53,7 +53,7 @@ and fault-latch clearance remain blocked until recovery is verified.
 
 FlexiSoft Ethernet feedback has an explicit role in the shared profile.
 `safety.telemetry_required: false` selects monitoring only (the four-module
-default); the physical safety controller operates ELMO STO independently.
+default); the physical safety controller operates the drive STO chain independently.
 Ethernet safety messages do not affect supervisor control in that role. Direct
 scanner fields, operator STOP, battery/drive readiness, known active drive STO
 and watchdogs retain their checks. `true` selects the additional FlexiSoft

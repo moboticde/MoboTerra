@@ -1,3 +1,14 @@
+# Historical implementation plan
+
+This document preserves earlier design requirements and candidate hardware
+assumptions. It is not the current customer installation or operating manual.
+Use [the customer manual](customer_manual.md), [active hardware configuration](four_module_setup.md)
+and [current interface reference](ros_interface_manual.md) for the delivered
+four-miControl stack. Earlier Elmo, encoder-retention and deployment proposals
+below must not be treated as current implementation claims.
+
+## Retained design record
+
 # MoboTerra implementation plan
 
 Date: 14 October 2026. Revised after the customer-requirement audit and topic-naming clarification. Audience: MoboTerra development and commissioning team.

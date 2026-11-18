@@ -2,6 +2,9 @@
 .gitignore
 build
 install
+build-controller-types
+install-controller-types
+runtime
 log
 **/__pycache__
 **/*.pyc

@@ -1,39 +1,69 @@
-# Four-module MoboTerra setup
+# Four module hardware configuration
 
-The supported platform requires exactly four powered modules, ordered front_left,
-front_right, rear_left, rear_right. Each has steering and traction: eight drive
-joints total. Configuration rejects missing modules and partial layouts.
+The active hardware profile is `src/mobotic_config/config/platform.yaml`.
+It requires four powered wheel modules with eight miControl drives. Partial
+module lists are rejected. The current native launcher and current Docker
+deployment use this profile and the component YAML files beside it.
 
-| Module | Steering node | Traction node |
+| Module | Steering CAN node | Traction CAN node |
 | --- | --- | --- |
-| front_left | 1 | 2 |
-| front_right | 3 | 4 |
-| rear_left | 7 | 8 |
-| rear_right | 5 | 6 |
+| `front_left` | 1 | 2 |
+| `front_right` | 3 | 4 |
+| `rear_left` | 7 | 8 |
+| `rear_right` | 5 | 6 |
 
-Both source profiles, `platform.yaml` and `platform-four-micontrol.yaml`, contain
-all four modules. The latter supplies prepared miControl scaling and lower motion
-limits. The default profile contains this robot's commissioned operator mapping. Synthetic
-operator data in tests is not an installed hardware profile.
+Drives, the PAIL receiver at node 10 and both battery participants share
+transmitting `can0` at 500000 bit/s. The CAN master node is 11. The current
+deployment does not require a separate listen-only battery adapter.
 
-The robot uses `~/start_ros2_four_micontrol.sh` with the actual hardware profile
-and node policies in `src/mobotic_config/config/`, without component override
-files. It selects original ROMB kinematics and
-miControl SDO-only communication. All eight drive samples are required for
-complete feedback. Both battery participants and both scanners retain their
-configured bindings. Removing obsolete configurations does not recalibrate
-geometry, encoder units, wheel signs, gearing or installed controller settings.
+The host scanner NIC is configured as `192.168.1.200`; the front-left scanner
+is `192.168.1.5`, and the rear-right scanner is `192.168.1.6`. Host Ethernet
+configuration is an installation prerequisite and is not changed by the Docker
+installer. FlexiSoft telemetry is received through TCP port 9100.
 
-Validate the installed configuration without starting the robot:
+## Current behavior
+
+Original ROMB is the kinematics backend. The miControl driver uses serialized
+SDO control and feedback. It does not configure drive PDO mappings or transmit
+drive SYNC. All eight drives are required for complete feedback.
+
+Drive enable waits for a new B2 request after startup or a blocking readiness
+loss. The current profile enables nearest-home steering alignment at 1.2 rad/s;
+traction remains zero during recovery. Normal manual steering is 0.3 rad/s and
+B1 steering boost is 0.6 rad/s. Returning controls to neutral can command
+steering home after traction standstill. These are configured software values,
+not measured accuracy or physical stopping-time guarantees.
+
+The PAIL mapping is marked verified in source. No held deadman is configured;
+the source has `require_enable_interlock: false` and `require_neutral_rearm: false`.
+B2 admission still requires neutral controls. Confirm installed controls and
+radio-loss behavior during commissioning.
+
+Both scanners are checked when RP2 is Safety Enabled. The configured Safety
+Disabled position permits only reduced-speed MANUAL software scanner bypass,
+capped at 0.3 m/s. Both autonomous modes require a fresh Safety Enabled selector.
+Independent hardware safety wiring is unaffected by this software selection.
+
+FlexiSoft Ethernet is monitoring-only (`safety.telemetry_required: false`). Low
+SOC below 20% is advisory, as are receiver error-register reports under the
+current profile. Missing or invalid battery telemetry, charging/HV conditions,
+drive faults and applicable operator/sensor readiness still block their control
+paths. The machine handover must explicitly verify the configured policies.
+
+## Validate before operation
+
+After installation, validate the active configuration in an isolated container,
+without robot startup, hardware networking or CAN access:
 
 ```bash
-ros2 run mobotic_config check_config
+sudo moboterra-ctl check
 ```
 
-FlexiSoft is the only supported safety source. The legacy software STO-derived
-safety mode has been removed. The current FlexiSoft monitoring/interlock policy,
-two scanners and independent hardware safety remain unchanged.
+The Docker installer checks the image configuration separately. Neither check
+calibrates drive signs, encoder units, geometry, mechanical limits or scanner
+fields. Complete the active profile's `commissioning_pending` items on the
+delivered machine. Alternative profiles are service examples; do not substitute
+them for the active profile without a reviewed configuration change.
 
-See [startup](drive_startup.md), [configuration](../src/mobotic_config/README.md),
-[kinematics](../src/mobotic_kinematics/README.md) and the
-[four-module graph](moboterra_rqt_graph.md).
+See [the customer manual](customer_manual.md), [Docker installation](docker-autostart.md)
+and [drive startup](drive_startup.md).

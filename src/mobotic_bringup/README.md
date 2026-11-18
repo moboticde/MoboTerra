@@ -12,8 +12,9 @@ MANUAL/AUTONOMOUS; face buttons are unused. Terminal requests use
 `vehicle/set_mode`, the only API accepting KINEMATICOFF. Both first stop and verify standstill, then
 switch the sole selected mode. The driver enforces exclusive setpoint routing
 using fresh `vehicle/mode`; KINEMATICOFF needs no extra opt-in setting.
-The default `operator` node is `remdevice_control`: PAIL/Ecobox node 9, 500 kbit/s,
-on the drive CAN bus. Its unverified mapping permits capture only. Follow the
+The default `operator` node is `remdevice_control`: PAIL/Ecobox node 10, 500 kbit/s,
+on shared `can0`; the CAN master is node 11. Its active source mapping is marked
+verified. Confirm physical controls and stopping on the delivered machine. Follow the
 [REMdevice commissioning guide](../../docs/remdevice_commissioning.md).
 Selecting `operator.source: usb` starts the configured USB driver: generic
 `joy_node` for PAIL, or `game_controller_node` for standardized Logitech ordering.
@@ -37,12 +38,11 @@ bursts cannot displace control PDOs. Both preserve acquisition timestamps and
 CAN-error reception. A shared drive/operator interface still has one CAN sender;
 the extra event reader introduces no CAN transmissions.
 
-After building and sourcing the workspace:
+For hardware operation, use the guarded launcher from the project root after
+installing the native environment and configuring host CAN:
 
 ```bash
-ros2 launch mobotic_bringup moboterra.launch.py \
-  stack_type:=hardware robot_name:=moboterra \
-  can_interface:=can0 battery_can_interface:=can1
+bash scripts/start_ros2_four_micontrol.sh start_rviz:=false
 ```
 
 One launch starts the driver, kinematics, odometry, supervisor and platform diagnostics.
@@ -54,17 +54,17 @@ Wheel odometry does publish `odom -> base_link` on the namespaced `tf` topic.
 The shared [description](../mobotic_description/README.md) starts by default,
 including joint/static TF and CAD-envelope corner frames. Use start_description:=false
 if an external owner supplies it; do not start two robot_state_publishers.
-Physical startup waits for supervisor readiness, initializes modes/PDOs/ramps
-and enables with zero targets before requiring motion feedback. Actual fresh
-feedback then permits motion. B2 requests reset and zero-target re-enable.
+Physical startup waits for a new B2 press and supervisor readiness. It selects
+miControl modes through SDOs, enables with zero traction and aligns steering
+before permitting ordinary motion. Installed ramps and drive PDO mappings are
+preserved. B2 requests initialization/enable and never toggles the drives off.
 See [drive startup](../../docs/drive_startup.md); physical acceptance remains
 outstanding without hardware.
 
 Required external packages: `ros2_socketcan`, `joy`, `sick_safetyscanners2`.
 Bringup does not configure the OS CAN interfaces or PC network interface.
-Match the selected profile: drives use `can0`, battery telemetry uses `can1`.
-The four-module reference
-uses 500/500 kbit/s. Configure the battery adapter in listen-only mode in the OS.
+The active profile uses shared transmitting `can0` at 500000 bit/s for drives,
+operator and battery telemetry. Do not apply a listen-only setting to that link.
 Drive frames remain on `can_rx`/`can_tx`. Battery frames are isolated on
 `battery_can/can_rx`; the battery monitor remaps its input there. No battery
 sender is launched, and this does not implement operating-consent/HV control.
@@ -209,7 +209,7 @@ ros2 launch mobotic_bringup moboterra.launch.py \
   stack_type:=virtual robot_name:=moboterra start_manual_interface:=false
 ```
 
-With the default profile this starts the normal driver with the same PDO configuration as hardware mode, eight local
+With the default profile this starts the normal driver with the same SDO protocol configuration as hardware mode, eight local
 `virtual_mobotic_drive` nodes and `mock_platform_state` publishing ready safety
 and aggregate battery state. CAN topics are connected locally; no SocketCAN bridge,
 physical safety/battery monitor or scanner is launched. It does not command
@@ -223,7 +223,7 @@ represent physical motor, brake or safety behavior.
 ### Drive the virtual platform with a PAIL CAN joystick
 
 The confirmed receiver for this test is node 10 at 250 kbit/s. Use the separate
-virtual profile prepared in the [command guide](../../docs/commands.md#pail-can-joystick-and-rviz-in-virtual-mode),
+virtual profile at [config/raspberry-pi/platform-virtual-pail.yaml](../../config/raspberry-pi/platform-virtual-pail.yaml),
 with simulated master node 11 and the measured PAIL axis/button mapping.
 With its physical CAN interface already configured:
 
@@ -245,7 +245,9 @@ The option has no effect in hardware mode or when the manual interface is disabl
 Physical scanners, FlexiSoft and batteries are unnecessary for this virtual
 profile: mock readiness supplies those inputs. The generic scanner adapter
 reports the mock I/O status; it does not connect to scanners. An unverified PAIL
-mapping still inhibits joystick motion. See the [Docker and RViz commands](../../docs/commands.md#pail-can-joystick-and-rviz-in-virtual-mode).
+mapping still inhibits joystick motion. See the [RViz namespace example](../../docs/commands.md#native-maintenance-and-rviz)
+for the current display setup. This isolated 250-kbit/s test profile is separate
+from the active 500-kbit/s physical platform.
 
 ## Inspect the system
 

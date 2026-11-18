@@ -1,280 +1,116 @@
 # MoboTerra
 
-ROS 2 workspace for manual joystick driving and a supervised interface to external
-autonomy. Autonomous planning/navigation is outside this project's scope.
+MoboTerra is a ROS 2 Jazzy control stack for a vehicle with four powered wheel
+modules. Each module has one miControl steering drive and one miControl traction
+drive. The stack supports manual operation and supervised command inputs from an
+external autonomy system. It does not include autonomous navigation or planning.
 
-The implementation is present in `src/`; it is not yet hardware-commissioned.
-Offline Python checks and the standalone C++ motion-authority checks have passed.
-Full ROS 2 Jazzy build/integration and physical acceptance remain required before operation.
-The [software readiness review](docs/software_readiness.md) records the current
-checks, corrected startup dependencies and remaining target-machine validation.
-MoboTerra defaults to four powered steering/traction modules (`front_left`, `front_right`,
-`rear_left`, `rear_right`), eight actuator joints and no casters. User-confirmed
-spacing follows actual CAD axes: 1.69 m front–rear / 0.99 m left–right, with the
-old four-wheel radius 0.325 m and width 0.31 m. CAD Z=0 is confirmed as the floor.
-CAN bindings and reference mounting offsets still require hardware checks.
-Only the complete four-module layout is supported. See the
-[four-module setup guide](docs/four_module_setup.md). Both `platform.yaml` and
-`platform-four-micontrol.yaml` contain all four modules; source operator mappings
-remain unverified until commissioned. The Pi launchers and commissioned settings live in `scripts/` and
-`config/raspberry-pi/` in this checkout. See [Pi settings and startup](docs/pi-settings.md).
+Start with the [customer operating manual](docs/customer_manual.md). The Word
+edition is [MoboTerra_user_manual.docx](MoboTerra_user_manual.docx).
 
-## Control architecture
+## Current system
 
-- Operator/autonomous velocity: candidate -> supervisor -> `vehicle/cmd_vel` -> kinematics -> `kinematics/joint_setpoints` -> supervisor -> `wheel_modules/command` -> driver.
-- Autonomy with its own kinematics: `autonomy/joint_setpoints` -> supervisor -> the same final `wheel_modules/command` array -> driver.
-  KINEMATICOFF is mode 2: steering position and traction current [A], with miControl native current mode 2 / `0x3200`; velocity candidates have no motion effect there. Native control-mode changes require standstill and acknowledgement.
-- The supervisor contains the mode state machine and publishes `vehicle/mode`, including automatic SAFETY and latched ERROR. Operator inputs are separately published on `operator/state`.
-- Internal `wheel_modules/operation_command` manages enable/disable and explicit reset transactions for all units together. Public reset is supervisor-owned `wheel_modules/clear_errors`.
-- The driver publishes `joint_states` and `wheel_modules/status`. Missing required CAN feedback
-  blocks motion on all units; a new motion command is required after recovery.
+| Item | Configuration supplied in this project |
+| --- | --- |
+| Target computer | Ubuntu 24.04 with Linux Docker Engine; ROS 2 Jazzy in the image |
+| Wheel modules | `front_left`, `front_right`, `rear_left`, `rear_right`; eight drives |
+| Hardware launch | `scripts/start_ros2_four_micontrol.sh` |
+| Kinematics | Original ROMB solver, guest libraries, emulator and adapter included in Docker |
+| Robot CAN | Drives, PAIL receiver and batteries share `can0` at 500000 bit/s |
+| CAN node assignments | Drives 1–8; PAIL receiver 10; master 11 |
+| ROS namespace and domain | `/moboterra`; domain 42 in `config/raspberry-pi/ros.env` |
+| Scanner network | Host `192.168.1.200`; front left `192.168.1.5`; rear right `192.168.1.6` |
+| Configuration authority | `src/mobotic_config/config/platform.yaml` and component YAML files beside it |
+| Docker boot service | `moboterra-current-stack.service` |
+| Docker container | `moboterra-current-stack` |
 
-Physical startup follows this order: launch, initialize, then enable. The
-supervisor and driver perform this sequence automatically; there is no separate
-manual physical `initialize_all_drives` / `enable_all_drives` step. See the
-[startup sequence below](#physical-startup-and-recovery).
+These are source settings, not a record of commissioning on a delivered machine.
+The installer must complete successfully on the target computer. Boot behavior,
+CAN assignments, controls, steering travel and independent stopping must be
+verified on that machine before customer operation.
 
-All topic names above are relative to the robot namespace, normally `/moboterra`.
-The default four-module profile uses FlexiSoft Ethernet feedback for monitoring
-only (`safety.telemetry_required: false`); the physical controller operates drive
-STO independently. Scanner fields, operator STOP, drive feedback, faults and
-watchdogs still gate ROS motion. Set `safety.telemetry_required: true` to require
-both `safety/state` and `safety/io_state` as additional software interlocks.
-The four-module profile configures `battery1` and `battery2`. The monitor
-requires every configured participant and reports the minimum pack SOC.
-The retained reference source addresses/PGNs need verification for the installed
-packs; see [battery telemetry and commissioning](src/mobotic_vanguard_battery/README.md).
+## Docker installation and boot startup
 
-## Packages
-
-| Package | Responsibility |
-|:--|:--|
-| [mobotic_config](src/mobotic_config/README.md) | Validated shared platform data, node policies and launch adapters |
-| [mobotic_interfaces](src/mobotic_interfaces/README.md) | Shared messages and mode service |
-| [mobotic_driver](src/mobotic_driver/README.md) | CAN drive control, joint feedback, management lease and drive diagnostics |
-| [mobotic_kinematics](src/mobotic_kinematics/README.md) | Inverse kinematics and measured body velocity; not odometry |
-| [mobotic_odometry](src/mobotic_odometry/README.md) | Measured planar wheel odometry, covariance and optional odom-to-base TF |
-| [mobotic_manual_control](src/mobotic_manual_control/README.md) | PAIL CAN/USB operator input, velocity candidates, mode/reset requests and source state |
-| [mobotic_safety](src/mobotic_safety/README.md) | Direct SICK field monitoring, FlexiSoft TCP monitoring and ROS interlocks |
-| [mobotic_vanguard_battery](src/mobotic_vanguard_battery/README.md) | Read-only J1939 telemetry and aggregate readiness |
-| [mobotic_supervisor](src/mobotic_supervisor/README.md) | Source arbitration, scanner speed limits, readiness, startup/recovery and verified mode transitions |
-| [mobotic_bringup](src/mobotic_bringup/README.md) | Integrated launch, scanners and platform diagnostics |
-| [mobotic_description](src/mobotic_description/README.md) | CAD chassis/steering units, configured wheel modules and robot_state_publisher |
-
-## Configuration
-
-All runtime YAML files live in [mobotic_config/config](src/mobotic_config/config/).
-Edit `platform.yaml` for physical hardware, joint/CAN bindings, geometry, frames,
-network endpoints and shared limits. The smaller YAML files contain only node
-policies (timeouts, control mapping, odometry uncertainty, scanner acquisition).
-Bringup, standalone launches, virtual actuators and description use the same loader.
-See [configuration ownership, overrides and validation](src/mobotic_config/README.md).
-No legacy YAML copies are generated. The supervisor's `warning_speed_limit` is
-an absolute speed in m/s (default `0.3`); it replaces the former proportional
-`warning_speed_scale` policy.
-
-## Scanner fields and speed supervision
-
-The safety adapter reads each SICK microScan3's `RawMicroScanData` directly on
-`scanner/front_left/raw_data` and `scanner/rear_right/raw_data`, then publishes
-`scanner/<location>/safety_zone_status`. Both scanners must provide fresh, valid
-field status, on the four-module platform.
-
-| Scanner condition | Supervisor response |
-|:--|:--|
-| Yellow warning field occupied | Ramp down to a maximum of **0.3 m/s**; preserve any lower requested speed |
-| Red protective field occupied | Immediately command **0 m/s** and inhibit motion |
-| Both scanners clear | Remove the scanner speed cap; normal limits and readiness checks apply |
-| Either scanner missing, stale or invalid | Stop/inhibit motion; loss after startup latches a scanner-monitor fault requiring explicit recovery |
-
-Yellow uses the normal acceleration/deceleration ramp, so speed can remain above
-0.3 m/s while slowing. The policy covers velocity commands and direct wheel
-commands. Red clears cached motion; recovery requires neutral/rearm where
-applicable and a new command. An immediate zero command does not establish a
-physical stopping time.
-
-Valid protective evaluation paths identify red; valid warning evaluation paths
-identify yellow. These assignments must match the commissioned scanner
-configuration. Physical OSSD and field-set state are not inferred from those
-messages. ROS monitoring is not safety-rated; the independent scanner/safety
-controller/STO chain remains responsible for physical safety.
-
-## Physical startup and recovery
-
-1. Launch the hardware stack with the selected platform config. Before enable
-   permission, the driver reads controller state/faults and sends its heartbeat.
-2. The supervisor waits for fresh scanner fields, battery readiness/HV and SOC
-   of at least 20%, the configured operator interlock, applicable safety/STO
-   conditions and host checks when required. No motion command is needed.
-3. The driver disables/zeros targets, performs the initial fault-clear sequence
-   once, selects miControl modes through SDOs, and verifies
-   configuration acknowledgements/readback for every configured drive.
-4. Only after configuration completes does it enable the drives with zero
-   targets. Position/velocity feedback may become available only after enable.
-5. Fresh, complete, enabled and fault-free drive feedback completes startup and
-   permits motion. Missing feedback from any required module blocks all modules.
-
-All configured miControl drives supply position, velocity, native status and
-faults through SDOs. Installed ramps and PDO mappings are preserved; the driver
-sends no drive PDO configuration, RPDO commands or SYNC frames.
-
-Startup has a 15 s deadline. Failed setup, timeout or lost permission requests
-stop/disable; investigate a failed startup and request a new supervised B2 recovery to retry.
-Runtime B2 requests supervisor-owned verified fault reset and zero-target
-re-enable, with neutral controls and ready interlocks. Encoder reference and
-saved parameters are retained; startup does not home or zero an encoder.
-See [drive startup and B2 recovery](docs/drive_startup.md) for admission checks,
-fault-clearance acknowledgements and standstill verification.
-
-## Automated first-time installation
-
-On Ubuntu 24.04 ARM64 or AMD64, download/unpack the project, open a terminal in its
-directory and run:
+On the Ubuntu robot computer, stop any existing stack and open a terminal in
+the project root, the directory containing this README. Run:
 
 ```bash
 bash ./install.sh
 ```
 
-The command asks for Ubuntu administrator authentication, installs missing host
-packages and Docker/Compose, and builds the runtime, GUI and offline CAD tools.
-ROS dependencies are installed inside Docker; no host ROS installation or manual
-pip commands are needed. The build runs the full ROS tests, validates the supplied
-configuration and starts an isolated four-module virtual stack to check
-enabled drives, supervisor readiness, joints, odometry and diagnostics. The installer also checks the installed
-entrypoint, healthcheck, RViz, ROS Graph and CAD imports. It installs `moboterra-gui`,
-`moboterra-tools` and desktop application entries. The default prepares software
-without CAN adapters and does not configure or start a robot service.
-
-After installation:
+The installer obtains sudo access, installs missing Docker and host utilities,
+then builds and checks the complete image containing ROS, ROMB and RViz. No
+native ROS installation or host ROMB runtime is required. It registers the service and
+enables it for the next boot. It leaves the robot stack stopped after installation.
+To start this session explicitly:
 
 ```bash
-moboterra-gui rviz2
-moboterra-gui rqt_graph
-moboterra-tools  # writes moboterra-preview.png in the current directory
+sudo moboterra-ctl start
 ```
 
-When the two adapters are available, run `sudo bash ./deploy/install.sh --no-start`
-to identify their real serials and install the hardware service. Complete the
-hardware commissioning checks before starting it. Scanner Ethernet addresses and
-physical safety wiring remain specific to the connected hardware.
-See [deployment instructions](deploy/README.md) for unattended provisioning,
-direct Docker builds, recovery and hardware startup.
-See the [installation and command reference](docs/commands.md) for copyable
-host/container commands, isolated virtual testing, updated operator/vehicle ROS
-services and the edit–rebuild–deploy workflow. Rebuild and verify the image's
-message definitions after interface changes.
+At boot the service prepares the configured CAN link and launches the current
+hardware stack without RViz. It does not press B2 or enable the drives on the
+operator's behalf. Normal enable and recovery require a new B2 press with neutral
+controls and the required readiness conditions. Steering alignment can move the
+steering wheels during enable; traction remains zero during that sequence.
 
-## Build and launch
+Use the [Docker installation guide](docs/docker-autostart.md) for prerequisites,
+bundled image contents, failure behavior and target acceptance checks. Windows Docker
+Desktop is not the runtime for this physical SocketCAN deployment.
 
-On a ROS 2 Linux build host (target: Jazzy), from the MoboTerra repository root:
+## Daily commands
 
-The archived `example_project/` tree is excluded by `COLCON_IGNORE`; the active
-workspace contains the 12 packages under `src/`. ROMB requires the separately
-provisioned [verified runtime](src/mobotic_kinematics/README.md).
+Run these on the Ubuntu host:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths src --ignore-src --rosdistro jazzy -y
-colcon build --symlink-install
-source install/setup.bash
-ros2 run mobotic_config check_config
-ros2 launch mobotic_bringup moboterra.launch.py \
-  stack_type:=hardware robot_name:=moboterra \
-  can_interface:=can0 battery_can_interface:=can1
+sudo moboterra-ctl status
+sudo moboterra-ctl logs --follow --lines 200
+sudo moboterra-ctl stop
+sudo moboterra-ctl start
 ```
 
-This launches the four-module profile. Partial module layouts are unsupported.
-On a deployed host, use the commissioned `/etc/moboterra/platform.yaml` instead.
-Hardware launch can initialize and enable drives automatically once readiness
-passes; secure the machine and verify the selected configuration first.
-
-Install the external `ros2_socketcan`, `joy` and `sick_safetyscanners2` packages
-and their dependencies. Bringup launches the current stack automatically; it does
-not configure the OS CAN interface, NIC address or hardware safety wiring. Scanner
-TF is supplied by integrated `robot_state_publisher` (`start_description:=true` by default), not by the scanners. Do not start a second description owner.
-The drive bridge uses `can0`; a separate receive-only battery receiver uses
-`can1` and publishes `battery_can/can_rx`. Use each bus's bitrate from the selected
-platform config, with the battery adapter in listen-only mode. The managed host
-applies those rates; a direct ROS launch does not configure host interfaces.
-No battery operating-consent/HV control is added.
-
-Bringup now also starts measured wheel odometry:
-`joint_states -> kinematics -> vehicle/measured_velocity -> mobotic_odometry`.
-It publishes `/moboterra/vehicle/odom` and `odom -> base_link` on `/moboterra/tf`.
-The default `publish_odom_tf:=auto` honors the shared odometry policy.
-Use `publish_odom_tf:=false` if an external estimator owns that transform, or
-`start_odometry:=false` to omit the node. Use `start_description:=false` only when another description owner is already running. No laser/IMU fusion or autonomous navigation is added.
-
-The four-wheel reference profile uses a 10 ms heartbeat and motor-rpm traction
-limits of 1700. miControl ramps remain installed in the controller; the
-supervisor command ramp remains 0.5 m/s². The active four-miControl physical
-profile retains its lower configured motion limits. See the
-[driver guide](src/mobotic_driver/README.md).
-
-Before launching on a secured platform, verify the configuration against the
-machine. Scanner defaults: front `10.60.20.52`, rear `10.60.20.53`,
-PC NIC `10.60.20.186` (override with `scanner_host_ip`).
-The supervisor requests initialization/enable when battery, applicable safety,
-configured operator and required host checks pass, with minimum SOC at least 20%.
-An active motion command is not required to initialize or enable.
-The default operator source is PAIL CAN. USB joystick support is an alternative
-that requires its own verified configuration. Manual motion requires fresh
-operator input and all supervisor readiness checks.
-Startup, reconnect, mode changes and safety recovery additionally require neutral controls and fresh input. USB E-stop state is unknown rather than fabricated.
-
-Check the deployed configuration and live readiness without requesting motion:
+Use Ctrl+C to leave the log display; it does not stop the stack. To stop the stack
+and disable startup on future boots:
 
 ```bash
-ros2 run mobotic_bringup check_readiness \
-  --platform-config /etc/moboterra/platform.yaml
+sudo moboterra-ctl disable --now
 ```
 
-Add `--offline` for configuration validation without ROS or CAN access.
+A running service or Docker healthcheck does not prove drive readiness. Check
+`/moboterra/vehicle/mode` and the per-module status. A software stop is not a
+physical emergency stop; the independent hardware stop and STO chain remain
+responsible for physical safety. ROS monitoring is not safety-rated.
 
-## Readiness and loss handling
+## Visualization and engineering maintenance
 
-| Condition | Software response |
-|:--|:--|
-| Safety/battery missing, stale or not ready; SOC below 20% | Supervisor requests stop + disable |
-| Scanner warning/protective/unknown state | Apply the field policy above; both scanner streams remain required |
-| Joint-command loss (driver default 0.1 s) | Zero motion |
-| Supervisor management loss (0.3 s, steady-clock check) | Stop + disable, cancel enable retries |
-| Required CAN motion/status loss (0.3 s) or fault-data loss (2.5 s) | Stop all units; inhibit motion and standstill verification |
-| Unrepresentable steering position | Reject whole joint command before CAN writes; invalid selected autonomy candidate clears its cache and requests stop |
-| Mode change | Stop, confirm fresh sustained standstill, then accept only new commands |
-| Measured velocity loss | Odometry/odom TF publication stops; recovery rebases without guessing missing travel and increases uncertainty |
+Open the bundled RViz from the logged-in robot desktop with `moboterra-ctl rviz`.
+This needs no native ROS installation. Native hardware launch is an optional
+engineering maintenance path only; it requires the separate native environment. Stop the Docker
+service first. The CAN link must already be configured correctly.
 
-ROS monitoring/control is not safety-rated. miControl/FlexiSoft and the independent
-hardware stop/brake chain remain responsible for physical safety.
+```bash
+bash scripts/start_ros2_four_micontrol.sh --check start_rviz:=false
+bash scripts/start_ros2_four_micontrol.sh start_rviz:=false
+```
 
-## Documentation and remaining work
+Keep the launch terminal open. Stop with Ctrl+C and wait for drive-disable
+verification. Omit `start_rviz:=false` only in a graphical desktop session.
+Do not run the manual-only wrapper alongside this supervised stack.
 
-- [Whole-project node/topic graph](docs/moboterra_rqt_graph.md): source-derived hardware and virtual layouts.
-- [Wheel command path and latency](docs/control_path_and_latency.md): EC comparison, exact final-message fields, configured timing and measurement limits.
-- [ROS interface manual](docs/ros_interface_manual.md): topic/message descriptions, modes and recovery.
-- [Supervisor interface contract](docs/supervisor_interfaces.md): topics, modes and gates.
-- [Hardware monitoring and commissioning](docs/hardware_monitoring.md): battery/scanner mapping, STO limitations, diagnostics and loss tests.
+## Documentation
 
-Still required: full ROS 2 Jazzy/C++ build and integration validation, virtual-stack
-runtime validation on the target, and secured hardware commissioning. Physical
-acceptance must cover scanner field assignments and stop/recovery, B2 fault
-reset, STOP/RP2, radio loss, drive feedback, CAN bindings and safety wiring.
-The source four-module PAIL
-mapping still permits capture only until verified.
+| Document | Purpose |
+| --- | --- |
+| [Customer operating manual](docs/customer_manual.md) | Installation, operation, recovery, maintenance and handover checks |
+| [Docker installation](docs/docker-autostart.md) | Detailed current-image and boot-service procedure |
+| [Command reference](docs/commands.md) | Host and container commands with execution context |
+| [ROS interface reference](docs/ros_interface_manual.md) | Modes, topics, services, message units and application integration |
+| [Four-module configuration](docs/four_module_setup.md) | Drive IDs, network settings and current policy |
+| [Drive startup](docs/drive_startup.md) | Detailed initialization and B2 recovery behavior |
+| [Native environment](docs/pi-settings.md) | Native launch, environment, RViz and recordings |
+| [Validation and handover](docs/software_readiness.md) | Scope of software checks and required target checks |
 
-The [robot description](src/mobotic_description/README.md), wheel odometry and
-`odom -> base_link` are implemented. ROS/RViz checks, covariance/slip calibration
-and physical scanner extrinsic calibration remain required. `map -> odom`
-localization is outside this stack. Unknown STO bit mappings remain raw
-telemetry and do not constitute decoded safety confirmation.
-
-## Container deployment
-
-An ARM64/AMD64 Ubuntu 24.04 deployment is available in [deploy/README.md](deploy/README.md).
-It builds a ROS 2 Jazzy runtime image, identifies the two USB-to-CAN adapters by
-their unique USB serial numbers, configures platform `can0` and listen-only
-battery `can1`, and starts the hardware stack under a single systemd supervisor.
-Adapter loss and host-health faults keep ROS alive and latch ERROR with motion
-inhibited. Recovery requires explicit reset rather than a whole-stack restart.
-See the deployment guide for installation,
-rollback, diagnostics, GUI tools, and hardware acceptance tests.
+The standard `install.sh`, `deploy/install.sh` and `moboterra-ctl` commands all
+manage this current Docker stack. The older `moboterra-supervisor.service` assets
+are service records; their two-adapter configuration is not used. See
+[deployment details](deploy/README.md).

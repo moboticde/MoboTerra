@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
-"""Operator interface for the installed MoboTerra deployment."""
-
-from __future__ import annotations
-
+"""Customer controls for the complete current MoboTerra Docker stack."""
 import argparse
-import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import current_stack as deployment
 
-INSTALL_ROOT = Path("/opt/moboterra")
-RELEASES = INSTALL_ROOT / "releases"
-CURRENT = INSTALL_ROOT / "current"
-PREVIOUS = INSTALL_ROOT / "previous"
-CONFIG = Path("/etc/moboterra/moboterra.env")
-STATE = Path("/run/moboterra-supervisor/state.json")
-SERVICE = "moboterra-supervisor.service"
+SERVICE = deployment.SERVICE
+CONTAINER = 'moboterra-current-stack'
 
 
 def run(command, *, check=False):
@@ -26,135 +20,183 @@ def run(command, *, check=False):
 
 def require_root():
     if os.geteuid() != 0:
-        raise SystemExit("This command changes system state; run it with sudo")
+        raise RuntimeError('Run this command with sudo')
+
+
+def environment():
+    if not deployment.ENV_FILE.is_file():
+        raise RuntimeError('MoboTerra is not installed. Run bash install.sh from the delivery directory.')
+    values = deployment.read_environment()
+    required = {'MOBOTERRA_CURRENT_IMAGE', 'MOBOTERRA_UID', 'MOBOTERRA_GID', 'MOBOTERRA_ROBOT_NAME'}
+    if not required <= values.keys() or not values['MOBOTERRA_UID'].isdigit() or not values['MOBOTERRA_GID'].isdigit():
+        raise ValueError('Incomplete deployment environment; rerun bash install.sh from the delivery directory')
+    return values
 
 
 def show_status(_args):
-    if STATE.exists():
-        try:
-            print(json.dumps(json.loads(STATE.read_text(encoding="utf-8")), indent=2))
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"State file error: {exc}", file=sys.stderr)
-    else:
-        print("Supervisor state: unavailable")
-    run(["systemctl", "--no-pager", "--full", "status", SERVICE])
-    run(["docker", "inspect", "--format", "container={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}", "moboterra-robot"])
-    for interface in ("can0", "can1"):
-        run(["ip", "-details", "link", "show", "dev", interface])
+    values = environment()
+    print('Image: ' + values['MOBOTERRA_CURRENT_IMAGE'], flush=True)
+    result = run(['systemctl', '--no-pager', '--full', 'status', SERVICE])
+    run(['docker', 'inspect', '--format',
+         'container={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}',
+         CONTAINER])
+    print('Service/container status does not establish drive readiness; inspect vehicle/mode.', flush=True)
+    return result.returncode
 
 
 def show_can(_args):
-    for interface in sorted(Path("/sys/class/net").glob("*")):
-        try:
-            if (interface / "type").read_text(encoding="ascii").strip() != "280":
-                continue
-        except OSError:
-            continue
-        print(f"\n[{interface.name}]")
-        run(["udevadm", "info", "--query=property", f"--path={interface}"])
-        run(["ip", "-details", "-statistics", "link", "show", "dev", interface.name])
+    for interface in deployment.can_plan(deployment.configuration().platform):
+        result = run(['ip', '-details', '-statistics', 'link', 'show', 'dev', interface])
+        if result.returncode:
+            return result.returncode
+    return 0
 
 
 def service_action(args):
     require_root()
-    run(["systemctl", args.action, SERVICE], check=True)
+    environment()
+    command = ['systemctl', args.action]
+    if getattr(args, 'now', False): command.append('--now')
+    command.append(SERVICE)
+    run(command, check=True)
+    return 0
 
 
 def show_logs(args):
-    command = ["journalctl", "-u", SERVICE, "--no-pager", "-n", str(args.lines)]
-    if args.follow:
-        command.extend(["--follow"])
-    run(command)
-    if not args.follow:
-        run(["docker", "logs", "--tail", str(args.lines), "moboterra-robot"])
+    if args.host:
+        command = ['journalctl', '-u', SERVICE, '--no-pager', '-n', str(args.lines)]
+        if args.follow: command.append('--follow')
+    else:
+        command = ['docker', 'logs', '--tail', str(args.lines)]
+        if args.follow: command.append('--follow')
+        command.append(CONTAINER)
+    return run(command).returncode
 
 
-def _resolved_release(link: Path) -> Path:
-    target = link.resolve(strict=True)
-    if not target.is_relative_to(RELEASES.resolve()):
-        raise RuntimeError(f"Refusing release outside {RELEASES}: {target}")
-    return target
+def ros_command(args):
+    if not args.arguments:
+        raise ValueError('Supply a ros2 command, for example: moboterra-ctl ros topic list')
+    return run(['docker', 'exec', CONTAINER, 'bash', '-c',
+                'source scripts/setup_ros.bash && exec ros2 "$@"', '--', *args.arguments]).returncode
 
 
-def _replace_env_values(path: Path, updates: dict[str, str]):
-    lines = path.read_text(encoding="utf-8").splitlines()
-    seen = set()
-    output = []
-    for line in lines:
-        if "=" in line and not line.lstrip().startswith("#"):
-            key = line.split("=", 1)[0].strip()
-            if key in updates:
-                output.append(f"{key}={updates[key]}")
-                seen.add(key)
-                continue
-        output.append(line)
-    output.extend(f"{key}={value}" for key, value in updates.items() if key not in seen)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text("\n".join(output) + "\n", encoding="utf-8")
-    os.chmod(temporary, 0o644)
-    os.replace(temporary, path)
+def shell(_args):
+    return run(['docker', 'exec', '-it', CONTAINER, 'bash', '-c',
+                'source scripts/setup_ros.bash && exec bash']).returncode
 
 
-def rollback(_args):
+def isolated_command(values, command):
+    root = deployment.ROOT
+    return ['docker', 'run', '--rm', '--network', 'none', '--read-only',
+            '--user', values['MOBOTERRA_UID'] + ':' + values['MOBOTERRA_GID'],
+            '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+            '--tmpfs', '/tmp:rw,mode=1777',
+            '--tmpfs', '/opt/moboterra-project/runtime:rw,uid=' + values['MOBOTERRA_UID'] + ',gid=' + values['MOBOTERRA_GID'],
+            '--mount', f'type=bind,src={root / "src/mobotic_config/config"},dst=/opt/moboterra/share/mobotic_config/config,readonly',
+            '--mount', f'type=bind,src={root / "config/raspberry-pi/ros.env"},dst=/opt/moboterra-project/config/raspberry-pi/ros.env,readonly',
+            values['MOBOTERRA_CURRENT_IMAGE'], *command]
+
+
+def check(_args):
+    values = environment()
+    return run(isolated_command(values, ['bash', 'scripts/start_ros2_four_micontrol.sh',
+                                        '--check', 'start_rviz:=false'])).returncode
+
+
+def rviz(_args):
+    """Run the image's RViz as the desktop user; no native ROS or xhost changes."""
+    import pwd
+    values = environment()
+    display = os.environ.get('DISPLAY')
+    if not display or not Path('/tmp/.X11-unix').is_dir():
+        raise RuntimeError('Run moboterra-ctl rviz from the robot graphical desktop with X11/XWayland available')
+    uid = int(os.environ.get('SUDO_UID', os.getuid()))
+    account = pwd.getpwuid(uid)
+    authority = Path(os.environ.get('XAUTHORITY') or Path(account.pw_dir) / '.Xauthority')
+    if not authority.is_file():
+        raise RuntimeError('The desktop Xauthority file is unavailable; run from the logged-in desktop session')
+    root = deployment.ROOT
+    namespace = values['MOBOTERRA_ROBOT_NAME']
+    prefix = '/' + namespace.strip('/') if namespace else ''
+    docker = ['docker']
+    if os.geteuid() != 0 and subprocess.run(['docker', 'info'], stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL).returncode:
+        if not shutil.which('sudo'):
+            raise RuntimeError('Docker access requires sudo on this computer')
+        docker = ['sudo', 'docker']
+    command = [*docker, 'run', '--rm', '--network', 'host', '--ipc', 'host', '--pid', 'host', '--read-only',
+        '--user', f'{uid}:{account.pw_gid}', '--cap-drop', 'ALL',
+        '--security-opt', 'no-new-privileges:true', '--env', 'DISPLAY=' + display,
+        '--env', 'XAUTHORITY=/tmp/moboterra.xauthority', '--env', 'HOME=/tmp',
+        '--env', 'LIBGL_ALWAYS_SOFTWARE=1', '--env', 'QT_X11_NO_MITSHM=1', '--tmpfs', '/tmp:rw,mode=1777',
+        '--tmpfs', f'/opt/moboterra-project/runtime:rw,uid={uid},gid={account.pw_gid}',
+        '--mount', 'type=bind,src=/tmp/.X11-unix,dst=/tmp/.X11-unix,readonly',
+        '--mount', f'type=bind,src={authority},dst=/tmp/moboterra.xauthority,readonly',
+        '--mount', f'type=bind,src={root / "config/raspberry-pi/ros.env"},dst=/opt/moboterra-project/config/raspberry-pi/ros.env,readonly',
+        '--mount', f'type=bind,src={root / "config/raspberry-pi/live.rviz"},dst=/opt/moboterra-project/config/raspberry-pi/live.rviz,readonly',
+        values['MOBOTERRA_CURRENT_IMAGE'], 'bash', '-c',
+        'source scripts/setup_ros.bash && exec rviz2 -d config/raspberry-pi/live.rviz --ros-args "$@"',
+        '--', '-r', '__ns:=' + prefix, '-r', '/tf:=' + prefix + '/tf',
+        '-r', '/tf_static:=' + prefix + '/tf_static']
+    return run(command).returncode
+
+
+def rollback(args):
     require_root()
-    current = _resolved_release(CURRENT)
-    previous = _resolved_release(PREVIOUS)
-    manifest = json.loads((previous / "release.json").read_text(encoding="utf-8"))
-    updates = {
-        "MOBOTERRA_IMAGE": manifest["runtime_image"],
-        "MOBOTERRA_GUI_IMAGE": manifest["gui_image"],
-        "MOBOTERRA_RELEASE": manifest["version"],
-    }
-    config_backup = CONFIG.read_text(encoding="utf-8")
-    swapped = False
-    try:
-        run(["systemctl", "stop", SERVICE], check=True)
-        temp_current = INSTALL_ROOT / ".current.new"
-        temp_previous = INSTALL_ROOT / ".previous.new"
-        for path in (temp_current, temp_previous):
-            path.unlink(missing_ok=True)
-        temp_current.symlink_to(previous)
-        temp_previous.symlink_to(current)
-        os.replace(temp_current, CURRENT)
-        os.replace(temp_previous, PREVIOUS)
-        swapped = True
-        _replace_env_values(CONFIG, updates)
-        run(["systemctl", "start", SERVICE], check=True)
-    except Exception:
-        CONFIG.write_text(config_backup, encoding="utf-8")
-        os.chmod(CONFIG, 0o644)
-        if swapped:
-            repair_current = INSTALL_ROOT / ".current.repair"
-            repair_previous = INSTALL_ROOT / ".previous.repair"
-            for path in (repair_current, repair_previous):
-                path.unlink(missing_ok=True)
-            repair_current.symlink_to(current)
-            repair_previous.symlink_to(previous)
-            os.replace(repair_current, CURRENT)
-            os.replace(repair_previous, PREVIOUS)
-            run(["systemctl", "start", SERVICE])
-        raise
-    print(f"Rolled back from {current.name} to {previous.name}")
+    current = environment()
+    previous_path = deployment.ROOT / 'runtime/docker-stack.previous.env'
+    previous = deployment.read_environment(previous_path)
+    image = deployment.inspect_image(previous['MOBOTERRA_CURRENT_IMAGE'])
+    run(['systemctl', 'stop', SERVICE], check=True)
+    selected = dict(current, MOBOTERRA_CURRENT_IMAGE=image)
+    # Test the previous image with the current configuration, with no hardware network.
+    run(isolated_command(selected, ['bash', 'scripts/start_ros2_four_micontrol.sh',
+                                   '--check', 'start_rviz:=false']), check=True)
+    deployment.atomic_text(deployment.ENV_FILE, deployment.env_text(selected))
+    deployment.atomic_text(previous_path, deployment.env_text(current))
+    print('Previous image selected. Current configuration was retained. Stack remains stopped.', flush=True)
+    if args.start:
+        run(['systemctl', 'start', SERVICE], check=True)
+    return 0
 
 
-def main():
-    parser = argparse.ArgumentParser(prog="moboterra-ctl")
-    subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("status").set_defaults(func=show_status)
-    subparsers.add_parser("can").set_defaults(func=show_can)
-    for action in ("start", "stop", "restart"):
-        subparsers.add_parser(action).set_defaults(func=service_action, action=action)
-    logs = subparsers.add_parser("logs")
-    logs.add_argument("--follow", action="store_true")
-    logs.add_argument("--lines", type=int, default=100)
+def positive(value):
+    selected = int(value)
+    if selected < 1:
+        raise argparse.ArgumentTypeError('Must be a positive integer')
+    return selected
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='moboterra-ctl', description=__doc__)
+    commands = parser.add_subparsers(dest='command')
+    for name, function in [('status', show_status), ('can', show_can), ('check', check),
+                           ('shell', shell), ('rviz', rviz)]:
+        commands.add_parser(name).set_defaults(func=function)
+    for action in ('start', 'stop', 'restart', 'enable', 'disable'):
+        command = commands.add_parser(action)
+        if action in ('enable', 'disable'):
+            command.add_argument('--now', action='store_true', help='Also start/stop this session')
+        command.set_defaults(func=service_action, action=action)
+    logs = commands.add_parser('logs')
+    logs.add_argument('--follow', action='store_true')
+    logs.add_argument('--host', action='store_true', help='Host service journal instead of ROS container output')
+    logs.add_argument('--lines', type=positive, default=100)
     logs.set_defaults(func=show_logs)
-    subparsers.add_parser("rollback").set_defaults(func=rollback)
-    args = parser.parse_args()
-    if not hasattr(args, "func"):
-        args = parser.parse_args(["status"])
-    args.func(args)
+    ros = commands.add_parser('ros')
+    ros.add_argument('arguments', nargs=argparse.REMAINDER)
+    ros.set_defaults(func=ros_command)
+    old = commands.add_parser('rollback')
+    old.add_argument('--start', action='store_true', help='Start after the image rollback; otherwise leave stopped')
+    old.set_defaults(func=rollback)
+    args = parser.parse_args(argv)
+    if not hasattr(args, 'func'):
+        args = parser.parse_args(['status'])
+    try:
+        return args.func(args)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        parser.exit(1, str(error) + '\n')
 
 
-if __name__ == "__main__":
-    main()
-
+if __name__ == '__main__':
+    sys.exit(main())

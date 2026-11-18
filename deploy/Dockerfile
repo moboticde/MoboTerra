@@ -1,5 +1,22 @@
 # syntax=docker/dockerfile:1.7
 ARG ROS_IMAGE=ros:jazzy-ros-base-noble
+ARG ROMB_IMAGE=ros:jazzy-ros-base-noble
+
+# Only copy the amd64 ROS filesystem. Do not execute foreign-architecture RUN
+# steps: this also builds on ARM64 without registering host binfmt handlers.
+FROM --platform=linux/amd64 ${ROMB_IMAGE} AS romb-guest
+
+FROM ${ROS_IMAGE} AS romb-vendor
+WORKDIR /tmp/romb-vendor
+COPY deploy/vendor/agv_kinematics.deb deploy/vendor/agv_kinematics.deb.sha256 ./
+RUN sha256sum --check agv_kinematics.deb.sha256 \
+    && test "$(dpkg-deb --field agv_kinematics.deb Architecture)" = amd64 \
+    && dpkg-deb --extract agv_kinematics.deb /vendor-root
+
+FROM ${ROS_IMAGE} AS romb-emulator
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends qemu-user-static \
+    && rm -rf /var/lib/apt/lists/*
 
 FROM ${ROS_IMAGE} AS dependencies
 ARG TARGETARCH
@@ -15,7 +32,16 @@ RUN --mount=type=bind,source=src,target=/tmp/moboterra-src,readonly \
     && apt-get install -y --no-install-recommends procps python3-pytest \
     && rm -rf /root/.ros/rosdep /var/lib/apt/lists/*
 
-FROM dependencies AS builder
+FROM dependencies AS romb-support
+ENV MOBOTERRA_ROMB_RUNTIME=/opt/moboterra-romb
+COPY --from=romb-guest / /opt/moboterra-romb/rootfs/
+COPY --from=romb-vendor /vendor-root/ /opt/moboterra-romb/rootfs/
+COPY --from=romb-emulator /usr/bin/qemu-x86_64-static /opt/moboterra-romb/qemu-x86_64-static
+COPY deploy/container/romb-udp.xml /opt/moboterra-romb/udp-only.xml
+COPY deploy/container/prepare_romb.py /tmp/prepare_romb.py
+RUN python3 /tmp/prepare_romb.py && chmod -R a+rX /opt/moboterra-romb
+
+FROM romb-support AS builder
 WORKDIR /workspace
 COPY src/ src/
 COPY deploy/checks/ deploy/checks/
@@ -25,11 +51,11 @@ RUN source /opt/ros/jazzy/setup.bash \
     && colcon test --merge-install --python-testing pytest --event-handlers console_direct+ \
     && colcon test-result --verbose \
     && ros2 run mobotic_config check_config \
-    && python3 deploy/checks/virtual_smoke.py --platform-config src/mobotic_config/config/platform-four-micontrol.yaml
+    && ROS_DOMAIN_ID=192 python3 deploy/checks/virtual_smoke.py
 
 # Common runtime configuration precedes per-image dependencies and metadata.
 # New release timestamps do not force GUI/CAD downloads on a retry.
-FROM dependencies AS runtime-common
+FROM romb-support AS runtime-common
 RUN groupadd --gid 10001 moboterra \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/moboterra --shell /usr/sbin/nologin moboterra \
     && install -d -o 10001 -g 10001 /var/log/ros /tmp/moboterra /var/lib/moboterra/position-state
@@ -45,15 +71,34 @@ ENV ROS_DISTRO=jazzy \
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/moboterra-entrypoint"]
 
-FROM runtime-common AS runtime
+FROM runtime-common AS current-stack
+USER root
+# The native launcher checks CAN with ip and retains its shared flock and
+# receiver recovery. systemd and CAN configuration belong to the Linux host.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 util-linux fastdds-tools \
+        libgl1-mesa-dri libglx-mesa0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -d -o 10001 -g 10001 /opt/moboterra-project/runtime
 COPY --from=builder /workspace/install/ /opt/moboterra/
+COPY scripts/ /opt/moboterra-project/scripts/
+COPY tools/pi/ /opt/moboterra-project/tools/pi/
+COPY config/raspberry-pi/ /opt/moboterra-project/config/raspberry-pi/
+ENV MOBOTERRA_ROS_OVERLAY=/opt/moboterra \
+    MOBOTERRA_ROMB_RUNTIME=/opt/moboterra-romb \
+    HOME=/opt/moboterra-project/runtime/home
+USER 10001:10001
+WORKDIR /opt/moboterra-project
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
-LABEL org.opencontainers.image.title="MoboTerra ROS 2 runtime" \
-      org.opencontainers.image.description="MoboTerra hardware stack on ROS 2 Jazzy and Ubuntu 24.04" \
+LABEL org.opencontainers.image.title="MoboTerra complete ROS 2 stack" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.created="${BUILD_DATE}"
-CMD ["ros2", "launch", "mobotic_bringup", "moboterra.launch.py", "stack_type:=hardware", "robot_name:=moboterra", "can_interface:=can0", "battery_can_interface:=can1"]
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      com.mobotic.stack="four-micontrol-bundled-romb-v1"
+CMD ["bash", "scripts/start_ros2_four_micontrol.sh", "start_rviz:=false"]
+
+# Preserve the conventional runtime target with the same complete stack.
+FROM current-stack AS runtime
 
 FROM runtime-common AS gui-dependencies
 USER root

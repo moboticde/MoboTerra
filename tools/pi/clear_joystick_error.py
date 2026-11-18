@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import shutil
 import struct
 import subprocess
 import time
@@ -55,7 +56,8 @@ def main(argv=None):
     if receive_only_override:
         print('One-time receiver clear authorized; saved receive-only setting remains disabled for TX.', flush=True)
     lock = acquire_stack_lock(args.stack_lock_fd)
-    if subprocess.run(['systemctl', 'is-active', '--quiet', 'moboterra-supervisor.service']).returncode == 0:
+    if (shutil.which('systemctl') and subprocess.run(
+            ['systemctl', 'is-active', '--quiet', 'moboterra-supervisor.service']).returncode == 0):
         raise SystemExit('Stop the managed robot stack before clearing the receiver.')
     for process in Path('/proc').iterdir():
         if not process.name.isdigit():

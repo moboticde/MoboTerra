@@ -31,7 +31,9 @@ does not retry. A successful request starts acknowledged fault clearing and
 zero-target initialization/enable. Motion stays blocked until fresh enabled-drive
 feedback and sustained measured standstill confirm recovery. Another fault or a
 recovery timeout returns to the B2 wait; no program restart is needed. Fresh
-input and normal manual rearming are required after successful recovery.
+input is required after successful recovery. The current PAIL provider sets
+`require_neutral_rearm: false`; neutral controls are still required to admit B2
+recovery. Subsequent motion follows that configured operator policy.
 
 To inspect the current operator instruction:
 
@@ -54,8 +56,10 @@ EMCY codes on C-24 (`0x8150`: transmit COB-ID collision; `0x8110`: CAN overrun).
 For the current physical PAIL profile, `receiver_can_overrun_advisory` permits
 fresh validated controls to continue through communication-only `0x8110` /
 register `0x11`, with a visible warning. It preserves STOP, LINK/EMGY, input
-freshness, invalid-input and all hardware/supervisor safety checks. Other
-receiver faults, including `0x8150`, remain blocking.
+freshness, invalid-input and all hardware/supervisor safety checks. The active profile also sets `receiver_errors_advisory: true`, so other
+receiver error-register reports are advisory. Fresh valid input and physical
+STOP/link checks remain separate conditions; do not infer readiness from the
+absence of a latched receiver fault.
 
 The local native launcher holds a single-instance lock and rejects leftover
 MoboTerra nodes or an occupied FlexiSoft TCP port 9100 before starting nodes.
@@ -79,7 +83,7 @@ stale input and inhibited motion hold measured angles instead of homing.
 
 1. Before supervisor permission, the driver sends only state/fault SDO reads and
    its master heartbeat. It publishes truthful missing-feedback status.
-2. The supervisor checks fresh battery readiness/HV/SOC, the configured operator
+2. The supervisor checks fresh battery readiness/HV and valid SOC, the configured operator
    interlock, host health when required, and the applicable safety/STO conditions.
    A fresh B2 press with neutral controls authorizes controller initialization
    and steering alignment with zero traction; external readiness returning alone cannot enable drives.
@@ -169,14 +173,14 @@ path allows fault clearing and zero-target feedback acquisition only.
    and a new 0.25 s sustained body/all-joint standstill proof complete recovery.
    Samples from before the reset cannot satisfy that proof; movement, invalid
    samples or a feedback gap restart it. B2 also re-enables disabled drives.
-6. Cached motion is discarded. Fresh neutral/rearm and a new motion command are
-   required before the robot moves.
+6. Cached motion is discarded. Fresh input under the configured rearm policy
+   and a new motion command are required before the robot moves.
 
 `vehicle/mode.reset_result` reports fault-clearance waiting, zero-target feedback
 acquisition, completion or timeout. The default reset deadline is 20 s, covering
 the bounded 15 s driver startup and subsequent standstill proof. A timeout
 retains ERROR and requests disable; retries require a new explicit B2/service
-request. STOP, operator loss, low SOC, HV loss, required host/safety failures or
+request. STOP, required operator loss, HV loss, required host/safety failures or
 deflected operator controls prevent recovery enable. A failed startup may be
 rearmed by this explicit transaction; ordinary enable publications cannot rearm
 it. Persistent receiver/drive faults still require diagnosis. PAIL/USB input

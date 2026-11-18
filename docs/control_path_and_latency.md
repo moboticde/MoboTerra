@@ -103,25 +103,26 @@ for stop/hold commands.
 
 ## Latency and reaction time
 
-The return through the supervisor adds one ROS message romb and callback
+The return through the supervisor adds one ROS message delivery and callback
 compared with sending kinematics output directly to the driver. It does not
-add another fixed 20 ms control-cycle wait: the supervisor correlates, validates
+add another periodic control-cycle wait: the supervisor correlates, validates
 and emits the final command inside `_kinematics_candidate_callback`.
 
 | Stage | Configured behavior |
 | --- | --- |
-| Operator node publication | 20 ms policy period, before the supervisor input boundary |
-| Supervisor velocity selection/limiting | 20 ms control period (50 Hz) |
+| Operator node publication | 50 ms policy period (20 Hz), before the supervisor input boundary |
+| Supervisor velocity selection/limiting | 50 ms control period (20 Hz) |
 | Kinematics calculation | Runs in the velocity receive callback with fresh joint feedback |
 | Supervisor candidate approval | Runs in the candidate receive callback; no separate periodic wait |
-| Traction CAN PDO transmission | Driver stores the target, then sends it on the 20 ms PDO cycle |
+| Traction CAN transmission | Serialized miControl SDO writes through the paced sender; no drive PDO cycle |
 | Steering command transmission | Queued profile-speed/position writes; CAN/SDO response and queue time apply |
 
-Under ideal scheduling, the supervisor and traction-PDO phases contribute
-approximately 0–40 ms of waiting from a command already received by the
-supervisor to traction CAN transmission. This is only the contribution of those
-two periodic stages. It is neither a measured end-to-end latency nor an upper
-bound. PAIL acquisition/radio timing, operator publication, ROS transport,
+The supervisor selection timer can add phase-dependent waiting of up to one
+configured 50 ms period under ideal scheduling. The current drive path has no
+additional 20 ms traction-PDO cycle. SDO serialization, pacing, acknowledgements
+and feedback requests add variable queue and transport time. These periods do
+not establish measured end-to-end latency or an upper bound. PAIL
+acquisition/radio timing, operator publication, ROS transport,
 executor contention, CPU load, CAN arbitration/queues, controller response and
 mechanics add time. The EC feedback-triggered command publication also introduces
 phase dependence; source inspection alone cannot establish which robot reacts
@@ -168,4 +169,5 @@ Implementation references: [kinematics](../src/mobotic_kinematics/mobotic_kinema
 [driver](../src/mobotic_driver/src/mobotic_driver.cpp),
 [supervisor policy](../src/mobotic_config/config/supervisor.yaml),
 [driver policy](../src/mobotic_config/config/driver.yaml) and
-[four-module profile](../src/mobotic_config/config/platform-four-micontrol.yaml).
+[active hardware profile](../src/mobotic_config/config/platform.yaml) and
+[operator policy](../src/mobotic_config/config/manual_control.yaml).
