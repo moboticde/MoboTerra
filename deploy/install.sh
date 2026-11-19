@@ -17,6 +17,7 @@ No native ROS installation or separately prepared ROMB runtime is needed.
   --no-start           Install with boot startup disabled; leave the stack stopped.
   --software-only      Build/check image and install CLI without a robot service.
   --image IMAGE        Use a prepared complete image instead of a source build.
+  --image-archive FILE Load a Docker image archive locally. Requires --image.
   --ros-domain-id ID   Set the project ROS domain (0..232).
   --owner USER         Optional runtime user; selected automatically by default.
   -h, --help           Show this help.
@@ -25,13 +26,19 @@ USAGE
 arguments=("$@")
 selected_modes=0
 software_only=0
+image=
+image_archive=
 while (( $# )); do
     case "$1" in
-        --owner|--image|--ros-domain-id)
+        --owner|--image|--image-archive|--ros-domain-id)
             [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || { echo "Missing value for $1" >&2; exit 2; }
             if [[ "$1" == --ros-domain-id ]]; then
                 [[ "$2" =~ ^[0-9]{1,3}$ ]] && (( 10#$2 <= 232 )) || { echo 'ROS domain must be 0..232.' >&2; exit 2; }
             fi
+            case "$1" in
+                --image) image="$2" ;;
+                --image-archive) image_archive="$2" ;;
+            esac
             shift 2 ;;
         --start|--no-start) selected_modes=$((selected_modes + 1)); shift ;;
         --software-only) selected_modes=$((selected_modes + 1)); software_only=1; shift ;;
@@ -40,6 +47,10 @@ while (( $# )); do
     esac
 done
 (( selected_modes <= 1 )) || { echo 'Choose only one of --start, --no-start and --software-only.' >&2; exit 2; }
+if [[ -n "$image_archive" ]]; then
+    [[ -n "$image" ]] || { echo '--image-archive requires --image.' >&2; exit 2; }
+    [[ -f "$image_archive" ]] || { echo "Image archive does not exist: $image_archive" >&2; exit 2; }
+fi
 if [[ "$EUID" -ne 0 ]]; then
     exec sudo /bin/bash "$script_dir/install.sh" "${arguments[@]}"
 fi

@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -138,6 +139,18 @@ class RombRuntimeTest(unittest.TestCase):
             (root / 'rootfs/opt/ros/jazzy/lib/agv_kinematics/agv_kinematics').write_bytes(b'changed')
             with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
                 runtime_command([], root)
+
+    def test_runtime_uses_bundled_loader_directly_on_amd64_and_qemu_on_arm64(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.prepare(directory)
+            loader = str(root / 'rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2')
+            with patch('mobotic_kinematics.romb.runtime.os.uname', return_value=SimpleNamespace(machine='x86_64')):
+                native_command, _ = runtime_command([], root)
+            self.assertEqual(native_command[0], loader)
+            with patch('mobotic_kinematics.romb.runtime.os.uname', return_value=SimpleNamespace(machine='aarch64')):
+                emulated_command, _ = runtime_command([], root)
+            self.assertEqual(emulated_command,
+                             [str(root / 'qemu-x86_64-static'), '-L', str(root / 'rootfs'), *native_command])
 
     def test_missing_runtime_is_not_silently_replaced_by_native_kinematics(self):
         with tempfile.TemporaryDirectory() as directory:
