@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the complete customer Docker stack, or prepare its host CAN links."""
+"""Install the complete customer Docker stack, or prepare its host network and CAN."""
 import argparse
 from contextlib import contextmanager
 import datetime
@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVICE = 'moboterra-current-stack.service'
 LEGACY_SERVICE = 'moboterra-supervisor.service'
 ENV_FILE = ROOT / 'runtime/docker-stack.env'
+ROBOT_HOST_IPS = {f'192.168.{subnet}.250' for subnet in (1, 2, 3)}
 sys.path[:0] = [str(ROOT / 'src/mobotic_config'), str(ROOT / 'src/mobotic_kinematics')]
 
 
@@ -78,49 +79,94 @@ def legacy_stopped():
         raise RuntimeError(f'Stop the older deployment first: sudo systemctl stop {LEGACY_SERVICE}')
 
 
-def prepare_can(wait_seconds=60):
+def robot_ethernet_address():
+    interfaces = json.loads(run(['ip', '-json', '-details', '-4', 'address', 'show', 'up'],
+                                capture_output=True, text=True).stdout)
+    matches = []
+    for info in interfaces:
+        interface = info['ifname']
+        sysfs = Path('/sys/class/net') / interface
+        if (info.get('link_type') != 'ether' or 'LOWER_UP' not in info['flags']
+                or not (sysfs / 'device').exists() or (sysfs / 'phy80211').exists()
+                or (sysfs / 'wireless').exists()):
+            continue
+        matches.extend((interface, address['local']) for address in info.get('addr_info', [])
+                       if address.get('local') in ROBOT_HOST_IPS)
+    if len(matches) > 1:
+        candidates = ', '.join(f'{interface}={address}' for interface, address in matches)
+        raise RuntimeError(f'Ambiguous robot Ethernet addresses: {candidates}. Assign exactly one robot address.')
+    return matches[0] if matches else None
+
+
+def prepare_can(plan, deadline):
     """Configure only DOWN links; never cycle a live bus or clear BUS-OFF."""
+    pending = set(plan)
+    while pending:
+        for interface in sorted(pending):
+            probe = subprocess.run(['ip', '-json', '-details', 'link', 'show', 'dev', interface],
+                                   capture_output=True, text=True)
+            if probe.returncode:
+                continue
+            info = json.loads(probe.stdout)[0]
+            if info.get('linkinfo', {}).get('info_kind') != 'can':
+                raise ValueError(f'{interface} is not a physical SocketCAN interface')
+            bitrate, listen_only = plan[interface]
+            if 'UP' not in info['flags']:
+                run(['ip', 'link', 'set', 'dev', interface, 'type', 'can', 'bitrate', str(bitrate),
+                     'listen-only', 'on' if listen_only else 'off', 'restart-ms', '0'])
+                run(['ip', 'link', 'set', 'dev', interface, 'up'])
+                info = json.loads(run(['ip', '-json', '-details', 'link', 'show', 'dev', interface],
+                                      capture_output=True, text=True).stdout)[0]
+            validate_link(info, interface, bitrate, listen_only)
+            pending.remove(interface)
+        if pending:
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Missing CAN interfaces: ' + ', '.join(sorted(pending)))
+            time.sleep(1)
+
+
+def prepare_stack(wait_seconds=60):
+    """Select the scanner network and prepare CAN before launching Docker."""
+    import yaml
+    from mobotic_config.configuration import validate_platform
+
     legacy_stopped()
-    plan = can_plan(configuration().platform)
     with stack_stopped():
         deadline = time.monotonic() + wait_seconds
-        pending = set(plan)
-        while pending:
-            for interface in sorted(pending):
-                probe = subprocess.run(['ip', '-json', '-details', 'link', 'show', 'dev', interface],
-                                       capture_output=True, text=True)
-                if probe.returncode:
-                    continue
-                info = json.loads(probe.stdout)[0]
-                if info.get('linkinfo', {}).get('info_kind') != 'can':
-                    raise ValueError(f'{interface} is not a physical SocketCAN interface')
-                bitrate, listen_only = plan[interface]
-                if 'UP' not in info['flags']:
-                    run(['ip', 'link', 'set', 'dev', interface, 'type', 'can', 'bitrate', str(bitrate),
-                         'listen-only', 'on' if listen_only else 'off', 'restart-ms', '0'])
-                    run(['ip', 'link', 'set', 'dev', interface, 'up'])
-                    info = json.loads(run(['ip', '-json', '-details', 'link', 'show', 'dev', interface],
-                                          capture_output=True, text=True).stdout)[0]
-                validate_link(info, interface, bitrate, listen_only)
-                pending.remove(interface)
-            if pending:
-                if time.monotonic() >= deadline:
-                    raise RuntimeError('Missing CAN interfaces: ' + ', '.join(sorted(pending)))
-                time.sleep(1)
+        selected = robot_ethernet_address()
+        while selected is None:
+            if time.monotonic() >= deadline:
+                expected = ', '.join(sorted(ROBOT_HOST_IPS))
+                raise RuntimeError(
+                    f'No robot address on a connected wired Ethernet interface. Expected one of: {expected}')
+            time.sleep(1)
+            selected = robot_ethernet_address()
+        interface, host_ip = selected
+        subnet = host_ip.rsplit('.', 1)[0]
+        platform = configuration().platform
+        platform['scanners']['host_ip'] = host_ip
+        scanner_suffixes = {'front_left': 5, 'rear_right': 6}
+        for scanner in platform['scanners']['units']:
+            scanner['sensor_ip'] = f'{subnet}.{scanner_suffixes[scanner["name"]]}'
+        validate_platform(platform)
+        prepare_can(can_plan(platform), deadline)
+        if robot_ethernet_address() != selected:
+            raise RuntimeError('Robot Ethernet address changed during startup. Check the connection and restart.')
+        atomic_text(ROOT / 'runtime/platform.yaml', yaml.safe_dump(platform, sort_keys=False))
+        print(f'Scanner network selected on {interface} (host {host_ip}, '
+              f'front left {subnet}.5, rear right {subnet}.6)', flush=True)
 
 
-def systemd_quote(value, *, command=False):
+def systemd_quote(value):
     # systemd expands specifiers even inside quotes. No shell executes these paths.
     if any(character in str(value) for character in '\n\r\0'):
         raise ValueError('Paths must not contain newlines or NUL')
-    value = str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%')
-    if command:
-        value = value.replace('$', '$$')
+    value = str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$')
     return '"' + value + '"'
 
 
 def service_text(root, docker):
-    compose = ' '.join(systemd_quote(value, command=True) for value in (
+    compose = ' '.join(systemd_quote(value) for value in (
         docker, 'compose', '--env-file', root / 'runtime/docker-stack.env',
         '--file', root / 'deploy/compose.current-stack.yaml'))
     return f'''[Unit]
@@ -133,8 +179,7 @@ Conflicts={LEGACY_SERVICE}
 
 [Service]
 Type=simple
-WorkingDirectory={systemd_quote(root)}
-ExecStartPre=/usr/bin/python3 {systemd_quote(root / 'deploy/current_stack.py', command=True)} prepare
+ExecStartPre=/usr/bin/python3 {systemd_quote(root / 'deploy/current_stack.py')} prepare
 ExecStart={compose} up --no-build --abort-on-container-exit --exit-code-from robot
 ExecStop={compose} stop --timeout 45
 Restart=no
@@ -210,12 +255,15 @@ def verify_image(image):
          image, 'python3', '/opt/moboterra-checks/virtual_smoke.py'])
 
 
-def acquire_image(selected=None):
+def acquire_image(selected=None, archive=None):
     if selected:
-        probe = subprocess.run(['docker', 'image', 'inspect', selected],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if probe.returncode:
-            run(['docker', 'pull', selected])
+        if archive is not None:
+            run(['docker', 'image', 'load', '--input', str(archive)])
+        else:
+            probe = subprocess.run(['docker', 'image', 'inspect', selected],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if probe.returncode:
+                run(['docker', 'pull', selected])
         image = selected
     else:
         package = ROOT / 'deploy/vendor/agv_kinematics.deb'
@@ -293,7 +341,7 @@ def install(args):
         raise RuntimeError('Stop the stack first: sudo moboterra-ctl stop')
     cfg = configuration()
     can_plan(cfg.platform)
-    image = acquire_image(args.image)
+    image = acquire_image(args.image, args.image_archive)
     if args.software_only and ENV_FILE.exists():
         register_ctl()
         print(f'Complete image {image} built and checked. Existing image selection and ROS domain retained; '
@@ -354,22 +402,25 @@ def main():
     installer = commands.add_parser('install', help='Install the complete container and current boot service')
     installer.add_argument('--owner', help='Optional runtime user; inferred automatically when omitted')
     installer.add_argument('--image', help='Optional prepared complete image; otherwise build the bundled source')
+    installer.add_argument('--image-archive', type=Path, help='Load a local Docker archive containing --image')
     installer.add_argument('--ros-domain-id', type=int, choices=range(233), metavar='ID')
     mode = installer.add_mutually_exclusive_group()
     mode.add_argument('--no-start', action='store_true', help='Install with boot startup disabled; do not start')
     mode.add_argument('--software-only', action='store_true', help='Build/check image and install CLI without a robot service')
     mode.add_argument('--start', action='store_true', help='Enable boot startup and start the ROS stack now')
-    commands.add_parser('prepare', help='Boot preflight: prepare CAN without launching ROS')
+    commands.add_parser('prepare', help='Boot preflight: select the scanner profile and prepare CAN')
     args = parser.parse_args()
     if sys.platform != 'linux':
         parser.error('Run on the Ubuntu robot PC; physical SocketCAN requires Linux')
+    if args.command == 'install' and args.image_archive is not None and not args.image:
+        installer.error('--image-archive requires --image')
     try:
         if args.command == 'install':
             install(args)
         else:
             if os.geteuid() != 0:
                 raise RuntimeError('CAN preparation requires root')
-            prepare_can()
+            prepare_stack()
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         raise SystemExit(str(error)) from error
 

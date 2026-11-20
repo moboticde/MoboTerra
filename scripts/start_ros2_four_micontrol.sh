@@ -76,8 +76,10 @@ for process in pathlib.Path('/proc').iterdir():
         continue
     if b'launch' in args and b'mobotic_bringup' in args and b'moboterra.launch.py' in args:
         raise SystemExit(f'Stop the existing MoboTerra launch (PID {process.name}) first.')
+    native_romb = (len(args) >= 4 and args[0].endswith(b'/ld-linux-x86-64.so.2')
+                   and args[3].endswith(b'/agv_kinematics/agv_kinematics'))
     if (b'--ros-args' in args and any(a == b'__ns:=/moboterra' or a.startswith(b'__ns:=/moboterra/') for a in args)
-            and any(pathlib.Path(a.decode(errors='replace')).name in node_executables for a in args[:2])):
+            and (native_romb or any(pathlib.Path(a.decode(errors='replace')).name in node_executables for a in args[:2]))):
         try:
             environment = dict(item.split(b'=', 1) for item in process.joinpath('environ').read_bytes().split(b'\0') if b'=' in item)
         except (FileNotFoundError, PermissionError, ProcessLookupError):

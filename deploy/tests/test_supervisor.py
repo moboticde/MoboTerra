@@ -25,6 +25,7 @@ class ConfigurationTest(unittest.TestCase):
             env = root / 'moboterra.env'
             env.write_text('PLATFORM_CAN_SERIAL=p\nBATTERY_CAN_SERIAL=b\nROS_DOMAIN_ID=42\n')
             profile = Configuration().platform
+            profile['can']['battery'].update(interface='can1', bitrate=500000, listen_only=True)
             backend = MODULE.HostBackend(env, root / 'compose.yaml', FakeRunner())
             digests = []
             for bitrate in (250000, 500000):
@@ -45,7 +46,7 @@ class ConfigurationTest(unittest.TestCase):
             env = root / 'moboterra.env'
             env.write_text('PLATFORM_CAN_SERIAL=p\nBATTERY_CAN_SERIAL=b\nROS_DOMAIN_ID=42\n')
             profile = Configuration().platform
-            profile['can']['battery']['listen_only'] = False
+            profile['can']['battery'].update(interface='can1', listen_only=False)
             (root / 'platform.yaml').write_text(json.dumps(profile))
             backend = MODULE.HostBackend(env, root / 'compose.yaml', FakeRunner())
             self.assertFalse(backend.read_config().battery_listen_only)

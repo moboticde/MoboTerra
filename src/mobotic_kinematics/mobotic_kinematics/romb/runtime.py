@@ -1,4 +1,4 @@
-"""Launch the unchanged customer-romb amd64 kinematics on this ARM64 host."""
+"""Launch the unchanged amd64 ROMB solver with its bundled Linux and ROS libraries."""
 import hashlib
 import json
 import os
@@ -31,8 +31,9 @@ def runtime_command(arguments, runtime=None):
                RMW_IMPLEMENTATION='rmw_fastrtps_cpp', ROS_AUTOMATIC_DISCOVERY_RANGE='SYSTEM_DEFAULT',
                FASTRTPS_DEFAULT_PROFILES_FILE=str(profiles),
                FASTDDS_DEFAULT_PROFILES_FILE=str(profiles))
-    command = [str(qemu), '-L', str(root), str(loader), '--library-path', libraries,
-               str(binary), *arguments]
+    command = [str(loader), '--library-path', libraries, str(binary), *arguments]
+    if os.uname().machine != 'x86_64':
+        command = [str(qemu), '-L', str(root), *command]
     return command, env
 
 
@@ -41,8 +42,7 @@ def main():
         command, environment = runtime_command(sys.argv[1:])
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         raise SystemExit(f'Cannot start original romb kinematics: {error}') from error
-    print('Starting original customer-romb agv_kinematics (verified amd64 binary under QEMU)',
-          flush=True)
+    print('Starting original customer-romb agv_kinematics (verified amd64 binary)', flush=True)
     os.execve(command[0], command, environment)
 
 

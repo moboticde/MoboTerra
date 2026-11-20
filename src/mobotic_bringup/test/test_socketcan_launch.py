@@ -429,7 +429,7 @@ class SocketCanLaunchTest(unittest.TestCase):
             traction = node.kwargs['name'].endswith('_traction')
             self.assertEqual(parameters['drive_type'], 'traction' if traction else 'steering')
             self.assertEqual(parameters['encoder_resolution'], 4096.0 if traction else 121.0)
-            self.assertEqual(parameters['gear_ratio'], 16.0 if traction else 121.0)
+            self.assertEqual(parameters['gear_ratio'], 42.0 if traction else 121.0)
             self.assertEqual(node.kwargs['remappings'], [('can_rx', 'can_tx'), ('can_tx', 'can_rx')])
             condition = node.kwargs['condition']
             self.assertFalse(condition.perform({'stack_type': 'hardware'}))
