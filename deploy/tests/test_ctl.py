@@ -2,6 +2,7 @@
 import argparse
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -111,6 +112,41 @@ class ControlTest(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 ctl.rollback(argparse.Namespace(start=False))
         self.assertEqual(self.env.read_bytes(),original)
+
+    def test_rollback_preflight_accepts_legacy_and_renamed_image_launchers(self):
+        bash = shutil.which('bash')
+        if sys.platform == 'win32':
+            git = shutil.which('git')
+            candidate = Path(git).resolve().parents[1] / 'bin/bash.exe' if git else Path('missing')
+            bash = str(candidate) if candidate.is_file() else None
+        if not bash:
+            self.skipTest('Bash is required to exercise image launcher compatibility')
+        self.previous()
+        with patch.object(ctl, 'require_root'), \
+                patch.object(ctl.deployment, 'inspect_image', return_value='sha256:previous'), \
+                patch.object(ctl, 'run', return_value=subprocess.CompletedProcess([], 0)) as execute:
+            ctl.rollback(argparse.Namespace(start=False))
+        docker = execute.call_args_list[1].args[0]
+        preflight = docker[docker.index('sha256:previous') + 1:]
+        self.assertEqual(preflight[:2], ['bash', '-c'])
+        scripts = self.root / 'scripts'
+        scripts.mkdir()
+        new = scripts / 'start_MoboTerra'
+        old = scripts / 'start_ros2_four_micontrol.sh'
+        for names, expected in (([old], 'legacy'), ([new], 'current'), ([old, new], 'current'), ([], None)):
+            with self.subTest(names=names):
+                for path in (old, new):
+                    path.unlink(missing_ok=True)
+                for path in names:
+                    marker = 'current' if path == new else 'legacy'
+                    path.write_text('printf "%s\\n" ' + marker + ' "$@"\n', encoding='utf-8')
+                result = subprocess.run([bash, *preflight[1:]], cwd=self.root,
+                                        capture_output=True, text=True)
+                if expected is None:
+                    self.assertNotEqual(result.returncode, 0)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [expected, '--check', 'start_rviz:=false'])
 
 
 if __name__ == '__main__':

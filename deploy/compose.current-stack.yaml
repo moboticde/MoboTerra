@@ -26,6 +26,13 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # Systemd preflight generates this profile from the host's wired address.
+      - type: bind
+        source: ${MOBOTERRA_PROJECT_ROOT:?}/runtime/platform.yaml
+        target: /opt/moboterra/share/mobotic_config/config/platform.yaml
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${MOBOTERRA_PROJECT_ROOT:?}/config/raspberry-pi/ros.env
         target: /opt/moboterra-project/config/raspberry-pi/ros.env

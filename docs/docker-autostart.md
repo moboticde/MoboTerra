@@ -60,6 +60,7 @@ Keep the steering sweep clear. It is not a disable toggle.
 | `--software-only` | Build/check image and install CLI without registering a robot service or loading CAN modules |
 | `--start` | Enable boot startup and start ROS after successful installation |
 | `--image IMAGE` | Use a prepared complete image, pulling it if absent; validate and pin its image ID |
+| `--image-archive FILE` | Load a local Docker archive and install the image named by `--image` |
 | `--ros-domain-id ID` | Set the project's ROS domain from 0 to 232 |
 
 `--owner USER` is an optional service-personnel override. Normally the installer
@@ -71,19 +72,54 @@ The `--romb-runtime` option is no longer part of installation.
 On an existing installation, `--software-only` preserves the selected deployment
 image and ROS domain. Use a full stopped-stack installation to select the update.
 
+## Install the same release on multiple PCs
+
+Build and validate one image per CPU architecture. Set `image` to the exact
+tag printed by the build, then export it and record the archive checksum.
+
+```bash
+image=moboterra-current:YOUR_BUILD_TAG
+sudo docker image save --output /tmp/moboterra-amd64.tar "$image"
+(cd /tmp && sha256sum moboterra-amd64.tar > moboterra-amd64.tar.sha256)
+```
+
+Copy the matching project release and both archive files to each Ubuntu 24.04
+PC. Exclude the build PC's `runtime/` directory. Put the project at its
+permanent path and keep the archive files beside each other. On each PC, from
+the project root, set the same `image` tag and run:
+
+```bash
+(cd /path/to/archive && sha256sum --check moboterra-amd64.tar.sha256) &&
+  bash ./install.sh --no-start --image "$image" \
+    --image-archive /path/to/archive/moboterra-amd64.tar
+systemctl show moboterra-current-stack.service -p LoadState -p ActiveState -p UnitFileState
+```
+
+Expect `LoadState=loaded`, `ActiveState=inactive`, and `UnitFileState=disabled`.
+The installer validates the image and virtual stack on each PC with the robot
+disconnected. Fresh PCs still need access to the configured Ubuntu and Docker
+package repositories to install missing host prerequisites.
+
 ## Boot and shutdown behavior
 
-Systemd waits for Docker and network-online. CAN preflight waits up to 60 seconds
-for the configured physical interface names. DOWN links are configured at the
-active profile's bitrate/listen-only setting and brought UP, with bus-off restart
-disabled. The current profile shares transmitting `can0` at 500000 bit/s between
-drives, the PAIL receiver and batteries. No separate battery adapter is required.
+Systemd waits for Docker and network-online. Before launching Compose, the
+preflight looks for exactly one of `192.168.1.250`, `192.168.2.250`, or
+`192.168.3.250` on a connected physical Ethernet interface. It uses that
+address for the scanner host and the corresponding subnet's `.5` and `.6`
+for the front-left and rear-right scanners. Compose mounts the generated
+`runtime/platform.yaml`. The Ethernet and CAN checks share a 60-second
+timeout. Multiple matching IPs or an address change during startup stop the
+launch. Installing with `--no-start` works with the robot disconnected.
+
+The CAN preflight configures DOWN links at the active profile's
+bitrate/listen-only setting and brings them UP with bus-off restart disabled.
+The current profile shares transmitting `can0` at 500000 bit/s between drives,
+the PAIL receiver and batteries.
 
 The preflight does not rename adapters or cycle an UP bus. Wrong live settings,
 BUS-OFF, conflicting shared-bus settings or missing hardware fail startup and
-appear in the host journal. Keep the configured scanner Ethernet addresses and
-independent safety wiring correct; the installer does not assign NIC addresses
-or alter hardware safety logic.
+appear in the host journal. Configure the wired address in Ubuntu and check
+the scanner addresses and independent safety wiring during commissioning.
 
 The container runs under a non-root numeric UID/GID with a read-only filesystem,
 host networking for CAN/scanners, host IPC for DDS, and host PID visibility for

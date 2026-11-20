@@ -1,9 +1,10 @@
 # Four module hardware configuration
 
-The active hardware profile is `src/mobotic_config/config/platform.yaml`.
+The base hardware profile is `src/mobotic_config/config/platform.yaml`.
 It requires four powered wheel modules with eight miControl drives. Partial
-module lists are rejected. The current native launcher and current Docker
-deployment use this profile and the component YAML files beside it.
+module lists are rejected. The native launcher reads this profile directly.
+The Docker service uses it to generate a profile for the connected scanner
+network and reads the component YAML files beside the base profile.
 
 | Module | Steering CAN node | Traction CAN node |
 | --- | --- | --- |
@@ -16,10 +17,11 @@ Drives, the PAIL receiver at node 10 and both battery participants share
 transmitting `can0` at 500000 bit/s. The CAN master node is 11. The current
 deployment does not require a separate listen-only battery adapter.
 
-The host scanner NIC is configured as `192.168.1.200`; the front-left scanner
-is `192.168.1.5`, and the rear-right scanner is `192.168.1.6`. Host Ethernet
-configuration is an installation prerequisite and is not changed by the Docker
-installer. FlexiSoft telemetry is received through TCP port 9100.
+The base profile lists scanner host `192.168.1.200` and scanners `192.168.1.5`
+and `192.168.1.6`. For the Docker service, configure the Ubuntu robot-facing
+Ethernet port with the robot's `192.168.1.250`, `192.168.2.250`, or
+`192.168.3.250` address. Startup selects the corresponding scanner subnet.
+FlexiSoft telemetry is received through TCP port 9100.
 
 ## Current behavior
 

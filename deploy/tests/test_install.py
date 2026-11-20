@@ -32,6 +32,7 @@ if name=='docker':
  if args[:2]==['compose','version'] and kind!='complete' and not (root/'compose').exists():sys.exit(1)
  if args[:2]==['buildx','version'] and kind!='complete' and not (root/'buildx').exists():sys.exit(1)
  if args[:2]==['buildx','build'] and os.environ.get('FAIL_BUILD'):sys.exit(1)
+ if args[:2]==['image','load'] and os.environ.get('FAIL_LOAD'):sys.exit(1)
  if args[:1]==['run'] and os.environ.get('FAIL_VERIFY'):sys.exit(1)
  if args[:2]==['compose','--env-file'] and os.environ.get('FAIL_CONFIG'):sys.exit(1)
  if args[:2]==['image','inspect']:
@@ -92,11 +93,13 @@ class InstallationTest(unittest.TestCase):
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         (self.bin / 'python3').symlink_to(sys.executable)
+        for name in ('bash', 'cat', 'chmod', 'dirname', 'grep', 'install', 'uname'):
+            (self.bin / name).symlink_to(shutil.which(name))
         for name in ('dpkg','dpkg-query','docker','systemctl','systemd-analyze','ip','candump','udevadm','modprobe','curl','apt-get'):
             path = self.bin / name
             path.write_text(STUB)
             path.chmod(0o755)
-        self.env = dict(os.environ, PATH=str(self.bin)+':/usr/bin:/bin', TEST_ROOT=str(self.root))
+        self.env = dict(os.environ, PATH=str(self.bin), TEST_ROOT=str(self.root))
         self.env.pop('SUDO_USER', None)
         self.env.pop('MOBOTERRA_ROMB_RUNTIME', None)
 
@@ -194,6 +197,30 @@ class InstallationTest(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertFalse(any(call[:3]==['docker','buildx','build'] for call in self.calls()))
 
+    def test_archive_install_loads_and_checks_the_image_without_building_or_pulling(self):
+        archive = self.root / 'validated image.tar'
+        archive.touch()
+        result = self.invoke('--no-start', '--image-archive', str(archive),
+                             '--image', 'moboterra-current:release', DOCKER_KIND='missing')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        load = calls.index(['docker', 'image', 'load', '--input', str(archive)])
+        verify = next(index for index, call in enumerate(calls) if call[:2] == ['docker', 'run'])
+        self.assertLess(load, verify)
+        self.assertFalse(any(call[:3] == ['docker', 'buildx', 'build'] or call[:2] == ['docker', 'pull']
+                             for call in calls))
+        self.assertIn(['systemctl', 'disable', 'moboterra-current-stack.service'], calls)
+        self.assertNotIn(['systemctl', 'start', 'moboterra-current-stack.service'], calls)
+
+    def test_failed_archive_load_does_not_publish_the_service(self):
+        archive = self.root / 'bad-image.tar'
+        archive.touch()
+        result = self.invoke('--no-start', '--image-archive', str(archive),
+                             '--image', 'moboterra-current:release', FAIL_LOAD='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.repo / 'runtime/docker-stack.env').exists())
+        self.assertFalse(any(call[:2] == ['docker', 'pull'] for call in self.calls()))
+
     def test_wrong_architecture_and_active_service_are_rejected(self):
         for options in ({'IMAGE_ARCH':'arm64'},{'ACTIVE_STACK':'1'}):
             with self.subTest(options=options):
@@ -202,7 +229,9 @@ class InstallationTest(unittest.TestCase):
                 self.assertFalse((self.repo/'runtime/docker-stack.env').exists())
 
     def test_domain_and_options_are_validated(self):
-        for arguments in [('--ros-domain-id','233'),('--no-start','--start'),('--romb-runtime','/old/native/path')]:
+        for arguments in [('--ros-domain-id','233'),('--no-start','--start'),('--romb-runtime','/old/native/path'),
+                          ('--image-archive', 'missing.tar'),
+                          ('--image', 'moboterra-current:release', '--image-archive', 'missing.tar')]:
             result=self.invoke(*arguments)
             self.assertNotEqual(result.returncode,0)
         self.assertEqual(self.calls(),[])

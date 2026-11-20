@@ -12,7 +12,7 @@ sys.path.insert(0, str(PACKAGES / 'mobotic_config'))
 sys.path.insert(0, str(PACKAGES / 'mobotic_bringup'))
 sys.path.insert(0, str(PACKAGES / 'mobotic_config/test'))
 from platform_fixtures import four_module_platform
-from mobotic_config.configuration import Configuration
+from mobotic_config.configuration import Configuration, config_directory
 from mobotic_bringup.readiness import configuration_report, live_report
 
 
@@ -45,7 +45,8 @@ class ReadinessTest(unittest.TestCase):
         self.assertEqual(report['receiver_node'], 10)
 
     def test_unverified_four_module_operator_remains_a_configuration_blocker(self):
-        self.assertFalse(configuration_report(Configuration())['configuration_ready'])
+        unverified = Configuration(config_directory() / 'platform-four-micontrol.yaml')
+        self.assertFalse(configuration_report(unverified)['configuration_ready'])
 
     def test_ready_neutral_operator_needs_no_motion_command(self):
         report = live_report(self.cfg, self.samples, 10_000_000_000)

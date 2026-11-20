@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path, PurePosixPath
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -55,11 +56,9 @@ class CurrentStackTest(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps([response]), '')
             return subprocess.CompletedProcess(command, 0, '', '')
 
-        with patch.object(deployment, 'legacy_stopped'), \
-                patch.object(deployment, 'stack_stopped', return_value=nullcontext()), \
-                patch.object(deployment.subprocess, 'run', side_effect=execute):
+        with patch.object(deployment.subprocess, 'run', side_effect=execute):
             try:
-                deployment.prepare_can(wait_seconds=wait_seconds)
+                deployment.prepare_can({'can0': (500000, False)}, deployment.time.monotonic() + wait_seconds)
             finally:
                 self.calls = calls
 
@@ -92,18 +91,73 @@ class CurrentStackTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not UP'):
             self.prepare([link(up=False), link(up=False)])
 
+    def test_robot_ip_selection_ignores_wifi_disconnected_and_virtual_interfaces(self):
+        def interface(name, host_ip, connected=True):
+            return dict(ifname=name, link_type='ether', flags=['LOWER_UP'] if connected else [],
+                        addr_info=[{'local': host_ip}])
+
+        interfaces = [interface('eth0', '192.168.2.250'), interface('eth1', '192.168.3.250', False),
+                      interface('wlan0', '192.168.1.250'), interface('docker0', '192.168.3.250')]
+        devices = {Path('/sys/class/net') / path for path in (
+            'eth0/device', 'eth1/device', 'wlan0/device', 'wlan0/phy80211')}
+        with patch.object(deployment.Path, 'exists', autospec=True, side_effect=devices.__contains__), \
+                patch.object(deployment, 'run') as run:
+            run.return_value.stdout = json.dumps(interfaces)
+            self.assertEqual(deployment.robot_ethernet_address(), ('eth0', '192.168.2.250'))
+            interfaces[1]['flags'].append('LOWER_UP')
+            run.return_value.stdout = json.dumps(interfaces)
+            with self.assertRaisesRegex(RuntimeError, 'Ambiguous.*eth0=.*eth1='):
+                deployment.robot_ethernet_address()
+
+    def test_prepare_selects_scanner_network_for_all_three_hosts(self):
+        from mobotic_config.configuration import Configuration
+
+        for subnet in (1, 2, 3):
+            with self.subTest(subnet=subnet), tempfile.TemporaryDirectory() as directory:
+                host_ip = f'192.168.{subnet}.250'
+                cfg = deployment.configuration()
+                runtime = Path(directory) / 'runtime'
+                with patch.object(deployment, 'legacy_stopped'), \
+                        patch.object(deployment, 'stack_stopped', return_value=nullcontext()), \
+                        patch.object(deployment, 'robot_ethernet_address', return_value=('eth0', host_ip)), \
+                        patch.object(deployment, 'prepare_can') as can, \
+                        patch.object(deployment, 'configuration', return_value=cfg), \
+                        patch.object(deployment, 'ROOT', Path(directory)):
+                    deployment.prepare_stack(wait_seconds=0)
+                selected = Configuration(runtime / 'platform.yaml')
+                self.assertEqual(selected.scanner_parameters('front_left')['host_ip'], host_ip)
+                self.assertEqual(selected.scanner_parameters('front_left')['sensor_ip'], f'192.168.{subnet}.5')
+                self.assertEqual(selected.scanner_parameters('rear_right')['sensor_ip'], f'192.168.{subnet}.6')
+                self.assertEqual(can.call_args.args[0], {'can0': (500000, False)})
+                self.assertEqual(selected.parameters('driver'), deployment.configuration().parameters('driver'))
+
+    def test_prepare_rejects_missing_or_changed_address(self):
+        for addresses, message, checks_can in (
+            ([None], 'No robot address', False),
+            ([('eth0', '192.168.1.250'), ('eth0', '192.168.2.250')], 'address changed', True),
+        ):
+            with self.subTest(addresses=addresses), patch.object(deployment, 'legacy_stopped'), \
+                    patch.object(deployment, 'stack_stopped', return_value=nullcontext()), \
+                    patch.object(deployment, 'robot_ethernet_address', side_effect=addresses), \
+                    patch.object(deployment, 'prepare_can') as can, \
+                    patch.object(deployment, 'atomic_text') as write:
+                with self.assertRaisesRegex(RuntimeError, message):
+                    deployment.prepare_stack(wait_seconds=0)
+                self.assertEqual(can.called, checks_can)
+                write.assert_not_called()
+
     def test_service_runs_foreground_compose_with_bounded_shutdown(self):
         unit = deployment.service_text(PurePosixPath('/home/robot/Mobo Terra'), '/usr/bin/docker')
-        self.assertIn('WorkingDirectory="/home/robot/Mobo Terra"', unit)
         self.assertIn('"/home/robot/Mobo Terra/deploy/current_stack.py" prepare', unit)
+        self.assertIn('"--env-file" "/home/robot/Mobo Terra/runtime/docker-stack.env"', unit)
+        self.assertIn('"--file" "/home/robot/Mobo Terra/deploy/compose.current-stack.yaml"', unit)
         self.assertIn('up --no-build --abort-on-container-exit --exit-code-from robot', unit)
         self.assertIn('stop --timeout 45', unit)
         self.assertIn('Restart=no', unit)
         self.assertIn('Conflicts=moboterra-supervisor.service', unit)
 
     def test_systemd_escapes_paths_without_a_shell(self):
-        self.assertEqual(deployment.systemd_quote('/home/100%/$robot'), '"/home/100%%/$robot"')
-        self.assertEqual(deployment.systemd_quote('/home/100%/$robot', command=True),
+        self.assertEqual(deployment.systemd_quote('/home/100%/$robot'),
                          '"/home/100%%/$$robot"')
         with self.assertRaises(ValueError):
             deployment.systemd_quote('/home/robot\nExecStart=bad')
@@ -120,6 +174,10 @@ class CurrentStackTest(unittest.TestCase):
         self.assertEqual(service['pid'], 'host')
         mounts = {mount['target']: mount for mount in service['volumes']}
         self.assertTrue(mounts['/opt/moboterra/share/mobotic_config/config']['read_only'])
+        platform_mount = mounts['/opt/moboterra/share/mobotic_config/config/platform.yaml']
+        self.assertTrue(platform_mount['source'].endswith('/runtime/platform.yaml'))
+        self.assertTrue(platform_mount['read_only'])
+        self.assertFalse(platform_mount['bind']['create_host_path'])
         self.assertTrue(mounts['/opt/moboterra-project/config/raspberry-pi/ros.env']['read_only'])
         self.assertFalse(mounts['/opt/moboterra-project/runtime'].get('read_only', False))
 

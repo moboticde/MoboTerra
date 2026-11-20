@@ -150,8 +150,14 @@ def rollback(args):
     run(['systemctl', 'stop', SERVICE], check=True)
     selected = dict(current, MOBOTERRA_CURRENT_IMAGE=image)
     # Test the previous image with the current configuration, with no hardware network.
-    run(isolated_command(selected, ['bash', 'scripts/start_MoboTerra',
-                                   '--check', 'start_rviz:=false']), check=True)
+    # Previous images may predate the launcher rename. Select the entry point
+    # inside that image rather than assuming it matches this host checkout.
+    preflight = (
+        'for launcher in scripts/start_MoboTerra scripts/start_ros2_four_micontrol.sh; do '
+        'if [[ -f "$launcher" ]]; then exec bash "$launcher" --check start_rviz:=false; fi; '
+        'done; echo "MoboTerra launcher missing from rollback image" >&2; exit 1'
+    )
+    run(isolated_command(selected, ['bash', '-c', preflight]), check=True)
     deployment.atomic_text(deployment.ENV_FILE, deployment.env_text(selected))
     deployment.atomic_text(previous_path, deployment.env_text(current))
     print('Previous image selected. Current configuration was retained. Stack remains stopped.', flush=True)
