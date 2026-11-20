@@ -26,10 +26,23 @@ completing selection. This implementation verifies miControl current mode 2 /
 Current mode is inhibited under reduced-speed warnings rather than scaling
 amperes as velocity. See [the current-mode contract](../src/mobotic_supervisor/README.md).
 
-Public services are `vehicle/set_mode`, supervisor-owned
+Public services are `vehicle/set_mode`, `set_steering`, supervisor-owned
 `wheel_modules/enable_drives` (B2, like Logitech X), `wheel_modules/toggle_drives`
 (explicit legacy toggle), `wheel_modules/clear_errors`, and `vehicle/reset_odometry`.
 Reset acceptance is not completion: observe `vehicle/mode` reset fields.
+
+`set_steering` uses `mobotic_interfaces/srv/SetSteeringMode` with request `mode`:
+0 STANDARD (startup default), 1 CRAB, 2 ACKERMANN. It restricts AUTONOMOUS
+body-velocity commands only. STANDARD permits combined x/y/yaw; CRAB requires
+zero yaw; ACKERMANN requires zero lateral velocity and bounded curvature with no
+rotation in place. Selection changes use the existing stop/standstill transition,
+discard pending commands/results and require fresh commands after completion.
+`vehicle/mode` exposes `steering_mode`, `requested_steering_mode` and
+`steering_transition_in_progress`; the general `transition_in_progress` covers
+steering changes as well as vehicle-source changes. Incompatible commands stop
+the source and report `AUTONOMY_STEERING_COMMAND_REJECTED` until a new compatible
+command arrives. See [the steering contract](ros_interface_manual.md#autonomy-steering-selection).
+
 Fresh individually confirmed disabled drives can admit fault clearing when
 motion feedback is unavailable. Zero-target enable follows fresh fault-clear
 acknowledgements and external/neutral readiness; new sustained standstill and

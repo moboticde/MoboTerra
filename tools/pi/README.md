@@ -22,7 +22,7 @@ To record while running ROS, start this in terminal 1:
 Then start the existing stack in terminal 2:
 
 ```bash
-/home/mobotic/start_ros2_four_micontrol.sh
+/home/mobotic/start_MoboTerra
 ```
 
 The recorder prints its new `~/can_traces/<timestamp>/` directory. It is

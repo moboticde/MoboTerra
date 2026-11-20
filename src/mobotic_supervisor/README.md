@@ -12,6 +12,24 @@ The public contract is documented in [Supervisor interface contract](../../docs/
 
 Select 0/1/2 with `vehicle/set_mode` (SetVehicleMode). `operator/mode_request` accepts 0/1 only.
 
+Independent autonomy steering uses `set_steering` (SetSteeringMode), request
+`mode`: 0 STANDARD (startup default), 1 CRAB (zero yaw), 2 ACKERMANN (zero lateral
+velocity, geometry-derived curvature bound, no rotation in place). It is enforced
+at autonomous input admission, source gating and after velocity slew. ACKERMANN
+couples forward/yaw ramps and commands zero before a direction reversal, keeping
+the curvature envelope and both acceleration bounds. STANDARD retains the
+existing combined x/y/yaw path through ROMB.
+Changes reuse the vehicle-mode stop/standstill state machine, serialize against
+source changes/reset, revoke pending kinematics generations and require fresh
+commands after completion. `vehicle/mode` reports active/requested steering and
+transition progress. Incompatible inputs revoke previous motion, produce
+CONTROLLED_STOP candidates and report `AUTONOMY_STEERING_COMMAND_REJECTED`;
+repeated invalid input does not invalidate stop results or disable drives by
+itself. The selection affects autonomy only, persists across vehicle-mode changes
+and recovery, and resets to STANDARD on restart. See
+[the public contract](../../docs/ros_interface_manual.md#autonomy-steering-selection)
+and [commands](../../docs/commands.md#select-autonomy-steering).
+
 KINEMATICOFF traction uses current control. Its JointState candidate contains
 every configured joint with full finite `position`, `velocity` and `effort`
 arrays. Steering uses position [rad], nonnegative profile speed [rad/s] and zero

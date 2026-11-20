@@ -21,7 +21,7 @@ from mobotic_interfaces.msg import (
     ComponentHealthArray,
     WheelModuleStatusArray,
 )
-from mobotic_interfaces.srv import SetVehicleMode
+from mobotic_interfaces.srv import SetSteeringMode, SetVehicleMode
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -170,6 +170,10 @@ class MoboticSupervisor(Node):
             raise ValueError('KINEMATICOFF current mode is verified only for miControl traction')
 
         self.selected_mode = initial_mode
+        self.steering_mode = SetSteeringMode.Request.STANDARD
+        self.requested_steering_mode = self.steering_mode
+        self.steering_transition_in_progress = False
+        self.autonomy_command_rejection = ''
         self.started_at = self.get_clock().now()
         self.startup_grace = float(self.get_parameter('startup_grace').value)
         self.reset_timeout = float(self.get_parameter('reset_timeout').value)
@@ -305,6 +309,9 @@ class MoboticSupervisor(Node):
         ]
         self.mode_service = self.create_service(
             SetVehicleMode, 'vehicle/set_mode', self._set_mode_service
+        )
+        self.steering_service = self.create_service(
+            SetSteeringMode, 'set_steering', self._set_steering_service
         )
         if self.operator_scanner_override_enabled:
             self.selector_subscription = self.create_subscription(
@@ -548,6 +555,21 @@ class MoboticSupervisor(Node):
             )
             return
         if self._finite_twist(msg) and self._command_stamp_valid(msg.header.stamp, self.autonomy_timeout):
+            reason = self._autonomy_steering_reason(msg)
+            if reason:
+                # Revoke in-flight motion as well as the cached input. Preserve
+                # the last output only for the supervised deceleration to zero.
+                if reason != getattr(self, 'autonomy_command_rejection', ''):
+                    self.get_logger().warning('Rejected autonomous velocity: ' + reason)
+                if not getattr(self, 'autonomy_command_rejection', '') or self.autonomy_command is not None:
+                    self._new_authority(preserve_stop=True)
+                    now = self.get_clock().now()
+                    if self.command_accept_after is None or now.nanoseconds > self.command_accept_after.nanoseconds:
+                        self.command_accept_after = now
+                self.autonomy_command_rejection = reason
+                self.autonomy_command = self.autonomy_command_received = None
+                return
+            self.autonomy_command_rejection = ''
             self.autonomy_command = msg
             self.autonomy_command_received = self.get_clock().now()
         else:
@@ -843,8 +865,88 @@ class MoboticSupervisor(Node):
         response.message = message
         return response
 
+    @staticmethod
+    def _steering_mode_name(mode):
+        return {SetSteeringMode.Request.STANDARD: 'STANDARD',
+                SetSteeringMode.Request.CRAB: 'CRAB',
+                SetSteeringMode.Request.ACKERMANN: 'ACKERMANN'}.get(mode, 'invalid')
+
+    def _cancel_steering_transition(self):
+        self.steering_transition_in_progress = False
+        self.requested_steering_mode = getattr(self, 'steering_mode', SetSteeringMode.Request.STANDARD)
+
+    def _set_steering_service(self, request, response):
+        response.accepted, response.transition_started, response.message = self._request_steering(request.mode)
+        response.active_mode = getattr(self, 'steering_mode', SetSteeringMode.Request.STANDARD)
+        return response
+
+    def _request_steering(self, mode):
+        if self._steering_mode_name(mode) == 'invalid':
+            return False, False, 'invalid steering mode; use 0 STANDARD, 1 CRAB or 2 ACKERMANN'
+        if self.selected_mode not in (VehicleModeState.MANUAL, VehicleModeState.AUTONOMOUS):
+            return False, False, 'steering selection requires MANUAL or AUTONOMOUS vehicle mode'
+        if self.reset_started_at is not None or getattr(self, 'fault_codes', set()):
+            return False, False, 'reset faults and finish drive recovery before selecting steering'
+        if self.transition_in_progress:
+            if (getattr(self, 'steering_transition_in_progress', False)
+                    and mode == self.requested_steering_mode and not self.transition_timed_out):
+                return True, False, 'steering transition already in progress'
+            return False, False, 'another transition is in progress'
+        if mode == getattr(self, 'steering_mode', SetSteeringMode.Request.STANDARD):
+            return True, False, 'steering mode already active; request unchanged'
+        if mode == SetSteeringMode.Request.ACKERMANN:
+            policy = getattr(self, 'manual_steering_policy', None)
+            curvature = getattr(policy, 'curvature_limit', 0.0)
+            if not math.isfinite(curvature) or curvature <= 0.0:
+                return False, False, 'ACKERMANN requires configured steering geometry'
+        if self.selected_mode == VehicleModeState.MANUAL:
+            stationary, reason = self._standstill_gate(self.get_clock().now(), after_request=False)
+            if not stationary:
+                return False, False, 'stop before preselecting autonomy steering: ' + reason
+        accepted, started, message = self._request_mode(self.selected_mode)
+        if accepted and started:
+            self.requested_steering_mode = mode
+            self.steering_transition_in_progress = True
+            message = 'steering transition started: stopping before ' + self._steering_mode_name(mode)
+            self._publish_mode_state(self.get_clock().now(), False, message)
+        return accepted, started, message
+
+    def _autonomy_steering_reason(self, msg):
+        if self.selected_mode != VehicleModeState.AUTONOMOUS:
+            return ''
+        mode = getattr(self, 'steering_mode', SetSteeringMode.Request.STANDARD)
+        vx, vy, yaw = msg.twist.linear.x, msg.twist.linear.y, msg.twist.angular.z
+        epsilon = 1e-9
+        if mode == SetSteeringMode.Request.CRAB and abs(yaw) > epsilon:
+            return 'CRAB requires angular.z = 0'
+        if mode == SetSteeringMode.Request.ACKERMANN:
+            if abs(vy) > epsilon:
+                return 'ACKERMANN requires linear.y = 0'
+            curvature = getattr(getattr(self, 'manual_steering_policy', None), 'curvature_limit', 0.0)
+            if not math.isfinite(curvature) or curvature <= 0.0:
+                return 'ACKERMANN steering geometry unavailable'
+            if abs(yaw) > abs(vx) * curvature + epsilon:
+                return 'ACKERMANN requires bounded curvature and prohibits rotation in place'
+        return ''
+
+    def _constrain_autonomy_steering(self, output):
+        # Remove accepted numerical noise and enforce the final family bound.
+        if self.selected_mode != VehicleModeState.AUTONOMOUS:
+            return
+        mode = getattr(self, 'steering_mode', SetSteeringMode.Request.STANDARD)
+        if mode == SetSteeringMode.Request.CRAB:
+            output.twist.angular.z = 0.0
+        elif mode == SetSteeringMode.Request.ACKERMANN:
+            output.twist.linear.y = 0.0
+            curvature = getattr(getattr(self, 'manual_steering_policy', None), 'curvature_limit', 0.0)
+            bound = abs(output.twist.linear.x) * curvature if math.isfinite(curvature) and curvature > 0 else 0.0
+            output.twist.angular.z = clamp(output.twist.angular.z, -bound, bound)
+
     def _request_mode(self, requested_mode):
         now = self.get_clock().now()
+        if (getattr(self, 'steering_transition_in_progress', False)
+                and self.transition_in_progress and not self.transition_timed_out):
+            return False, False, 'steering transition already in progress'
         if (requested_mode == VehicleModeState.KINEMATICOFF
                 and not getattr(self, 'kinematicoff_current_supported', True)):
             return False, False, 'KINEMATICOFF current mode is verified only for miControl traction'
@@ -861,6 +963,7 @@ class MoboticSupervisor(Node):
                 self.transition_started_at = None
                 self.transition_from_direct = False
                 self.transition_standstill_since = None
+                self._cancel_steering_transition()
                 self._invalidate_motion_commands(now)
                 self._publish_mode_state(now, False, 'MANUAL selected; faults remain; press B2 to recover drives')
                 return True, False, 'MANUAL selected; faults remain; press B2 to recover drives'
@@ -897,6 +1000,7 @@ class MoboticSupervisor(Node):
         self.manual_command = self.manual_command_received = None
         self.autonomy_command = self.autonomy_command_received = None
         self.autonomy_joint_command = self.autonomy_joint_received = None
+        self.autonomy_command_rejection = ''
         self._publish_mode_state(self.transition_started_at, False,
                                  'mode transition started: stopping before source selection')
         self.get_logger().info(
@@ -1128,6 +1232,7 @@ class MoboticSupervisor(Node):
         self.transition_in_progress = False
         self.transition_standstill_since = None
         self.requested_mode = self.selected_mode
+        self._cancel_steering_transition()
 
     def _operator_wait_status(self, now):
         ready, reason = self._enable_gate(now, recovering=True, allow_drive_faults=True)
@@ -1231,6 +1336,7 @@ class MoboticSupervisor(Node):
         self.manual_steering_requests = {}
         self.autonomy_command = None
         self.autonomy_command_received = None
+        self.autonomy_command_rejection = ''
         self.autonomy_joint_command = None
         self.autonomy_joint_received = None
         self.last_output = [0.0, 0.0, 0.0]
@@ -1275,6 +1381,8 @@ class MoboticSupervisor(Node):
             return True, 'manual command active'
 
         if self.selected_mode == VehicleModeState.AUTONOMOUS:
+            if getattr(self, 'autonomy_command_rejection', ''):
+                return False, self.autonomy_command_rejection
             if not self._message_fresh(
                 self.autonomy_command, self.autonomy_command_received,
                 self.autonomy_timeout, now
@@ -1282,6 +1390,9 @@ class MoboticSupervisor(Node):
                 return False, 'autonomous velocity command stale or missing'
             if not self._velocity_frame_valid(self.autonomy_command):
                 return False, 'autonomous velocity command frame mismatch'
+            steering_reason = self._autonomy_steering_reason(self.autonomy_command)
+            if steering_reason:
+                return False, steering_reason
             return True, 'autonomous velocity command active'
 
         if self.selected_mode == VehicleModeState.KINEMATICOFF:
@@ -1393,8 +1504,12 @@ class MoboticSupervisor(Node):
                 1.0, speed_limit / self.max_velocity_linear))
         manual_policy = (getattr(self, 'manual_steering_policy', None)
                          if self.selected_mode == VehicleModeState.MANUAL else None)
-        if manual_policy is not None:
-            target_x, target_y, target_angular = manual_policy.cap_velocity(
+        ackermann = (self.selected_mode == VehicleModeState.AUTONOMOUS
+                     and getattr(self, 'steering_mode', SetSteeringMode.Request.STANDARD)
+                     == SetSteeringMode.Request.ACKERMANN)
+        velocity_policy = getattr(self, 'manual_steering_policy', None) if ackermann else manual_policy
+        if velocity_policy is not None:
+            target_x, target_y, target_angular = velocity_policy.cap_velocity(
                 (source.twist.linear.x, source.twist.linear.y, source.twist.angular.z),
                 linear_limit, angular_limit)
         else:
@@ -1410,12 +1525,26 @@ class MoboticSupervisor(Node):
         # including a transition from a previously faster command. Physical
         # deceleration still follows the configured drive/controller limits.
         output_angular = slew(target_angular, self.last_output[2], self.max_acceleration_angular * scale * dt)
-        if manual_policy is not None:
-            output.twist.linear.x, output.twist.linear.y, output.twist.angular.z = manual_policy.cap_velocity(
+        if ackermann:
+            # Each sign of vx has a convex curvature envelope. Stop at zero
+            # before reversing, then interpolate x/yaw with the same fraction
+            # so neither independent slew nor zero crossing creates in-place yaw.
+            if target_x * self.last_output[0] < 0.0:
+                target_x = target_angular = 0.0
+            dx, dw = target_x - self.last_output[0], target_angular - self.last_output[2]
+            fraction = min(1.0,
+                self.max_acceleration_linear * scale * dt / abs(dx) if dx else 1.0,
+                self.max_acceleration_angular * scale * dt / abs(dw) if dw else 1.0)
+            output_x = self.last_output[0] + dx * fraction
+            output_y = 0.0
+            output_angular = self.last_output[2] + dw * fraction
+        if velocity_policy is not None:
+            output.twist.linear.x, output.twist.linear.y, output.twist.angular.z = velocity_policy.cap_velocity(
                 (output_x, output_y, output_angular), linear_limit, angular_limit)
         else:
             output.twist.linear.x, output.twist.linear.y = clamp_planar(output_x, output_y, linear_limit)
             output.twist.angular.z = clamp(output_angular, -angular_limit, angular_limit)
+        self._constrain_autonomy_steering(output)
         self.last_output = [
             output.twist.linear.x,
             output.twist.linear.y,
@@ -1509,6 +1638,9 @@ class MoboticSupervisor(Node):
         state.selected_mode = self.selected_mode
         state.requested_mode = self.requested_mode
         state.transition_in_progress = self.transition_in_progress
+        state.steering_mode = getattr(self, 'steering_mode', SetSteeringMode.Request.STANDARD)
+        state.requested_steering_mode = getattr(self, 'requested_steering_mode', state.steering_mode)
+        state.steering_transition_in_progress = getattr(self, 'steering_transition_in_progress', False)
         state.motion_permitted = bool(motion_permitted and not faults and not errors and not safety
                                       and not getattr(self, 'operator_drives_disabled', False)
                                       and getattr(self, 'reset_started_at', None) is None)
@@ -1523,6 +1655,8 @@ class MoboticSupervisor(Node):
             reasons.add('B2_ENABLE_REQUIRED')
         if self._safety_selector_mismatch(now):
             reasons.add('SAFETY_SELECTOR_MISMATCH')
+        if self.selected_mode == VehicleModeState.AUTONOMOUS and getattr(self, 'autonomy_command_rejection', ''):
+            reasons.add('AUTONOMY_STEERING_COMMAND_REJECTED')
         speed_reasons = tuple(self._speed_limit_reasons())
         reasons.update(speed_reasons)
         state.reason_codes = sorted(reasons)
@@ -1558,7 +1692,7 @@ class MoboticSupervisor(Node):
                 if speed_reasons else f'Speed policy: no reduced-speed condition; platform cap {self.max_velocity_linear:g} m/s')
         self.mode_state_publisher.publish(state)
 
-    def _standstill_gate(self, now):
+    def _standstill_gate(self, now, *, after_request=True):
         for message, received, timeout, label in (
             (self.measured_velocity, self.measured_velocity_received,
              self.velocity_feedback_timeout, 'vehicle velocity'),
@@ -1571,7 +1705,7 @@ class MoboticSupervisor(Node):
             age = (now.nanoseconds - stamp_ns) * 1.0e-9
             if not 0.0 <= age <= timeout:
                 return False, f'{label} feedback timestamp invalid or stale'
-            if stamp_ns < self.transition_started_at.nanoseconds:
+            if after_request and stamp_ns < self.transition_started_at.nanoseconds:
                 return False, f'waiting for {label} feedback after mode request'
 
         velocity = self.measured_velocity.twist
@@ -1601,6 +1735,7 @@ class MoboticSupervisor(Node):
             self.traction_mode_change_ready = False
             self.transition_standstill_since = None
             self.requested_mode = self.selected_mode
+            self._cancel_steering_transition()
             self._invalidate_motion_commands(now)
             self._publish_mode_state(now, False, 'AUTO cancelled: RP2 Safety Enabled required')
             return
@@ -1662,6 +1797,10 @@ class MoboticSupervisor(Node):
             return
 
         self.selected_mode = self.requested_mode
+        steering_change = getattr(self, 'steering_transition_in_progress', False)
+        if steering_change:
+            self.steering_mode = self.requested_steering_mode
+        self._cancel_steering_transition()
         self.transition_in_progress = False
         self.transition_started_at = None
         self.transition_from_direct = False
@@ -1669,7 +1808,9 @@ class MoboticSupervisor(Node):
         self.transition_standstill_since = None
         # Commands buffered before the switch must not move the new source.
         self._invalidate_motion_commands(now)
-        self._publish_mode_state(now, False, 'mode transition complete: waiting for new command')
+        self._publish_mode_state(now, False,
+            ('steering transition complete: ' + self._steering_mode_name(self.steering_mode)
+             if steering_change else 'mode transition complete') + ': waiting for new command')
         self.get_logger().info(
             f'Mode transition complete: {self._mode_name(self.selected_mode)}'
         )
@@ -1759,7 +1900,13 @@ class MoboticSupervisor(Node):
             source = self.manual_command
         elif source_ready and self.selected_mode == VehicleModeState.AUTONOMOUS:
             source = self.autonomy_command
-        self._publish_velocity(source, now, immediate_stop=not source_ready)
+        steering_rejected = (self.selected_mode == VehicleModeState.AUTONOMOUS
+                             and bool(getattr(self, 'autonomy_command_rejection', '')))
+        if steering_rejected:
+            source = TwistStamped()  # Supervised zero target, never the rejected input.
+            source.header.stamp = now.to_msg()
+        immediate_stop = not motion_gate[0] if steering_rejected else not source_ready
+        self._publish_velocity(source, now, immediate_stop=immediate_stop)
         self._publish_mode_state(now, source_ready, reason)
 
     def _new_authority(self, preserve_stop=False):
@@ -2079,6 +2226,7 @@ class MoboticSupervisor(Node):
         else:
             self.reset_id += 1
             self.transition_in_progress = False
+            self._cancel_steering_transition()
             self.reset_started_at = now
             self.standstill_since = None
             self.reset_result = 'accepted; recovery not yet verified'
@@ -2102,7 +2250,9 @@ class MoboticSupervisor(Node):
                 (output.twist.linear.x, output.twist.linear.y, output.twist.angular.z),
                 (source.twist.linear.x, source.twist.linear.y, source.twist.angular.z) if source is not None else None)
         if hasattr(self, 'velocity_ledger'):
-            purpose = (WheelModuleCommandArray.CONTROLLED_STOP if self.transition_in_progress else
+            steering_stop = (self.selected_mode == VehicleModeState.AUTONOMOUS
+                             and bool(getattr(self, 'autonomy_command_rejection', '')))
+            purpose = (WheelModuleCommandArray.CONTROLLED_STOP if self.transition_in_progress or steering_stop else
                        WheelModuleCommandArray.MOTION if source is not None else WheelModuleCommandArray.HOLD)
             self.velocity_ledger[now.nanoseconds] = (self.authority_generation, purpose,
                 source.header.stamp if source is not None and not self.transition_in_progress else now.to_msg(),

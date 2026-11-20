@@ -25,6 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WheelModuleStatus.msg"
   "msg/WheelModuleStatusArray.msg"
   "srv/SetVehicleMode.srv"
+  "srv/SetSteeringMode.srv"
   DEPENDENCIES std_msgs builtin_interfaces
 )
 

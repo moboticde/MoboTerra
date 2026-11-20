@@ -97,7 +97,7 @@ a DOWN physical CAN link at the saved bitrate and brings it UP. It does not
 rename adapters, cycle a running bus or clear BUS-OFF automatically. An UP link
 with incorrect settings or missing hardware causes startup to fail.
 
-The service launches `start_ros2_four_micontrol.sh start_rviz:=false`. Scanners,
+The service launches `start_MoboTerra start_rviz:=false`. Scanners,
 ROMB kinematics, robot transforms and wheel odometry remain enabled. RViz opens
 separately from the logged-in desktop using the same container image.
 
@@ -358,6 +358,37 @@ fresh measured standstill, normally for 0.25 seconds. A transition that cannot
 complete within 10 seconds latches a fault. Acceptance in the service response
 does not establish completed transition or motion readiness.
 
+Autonomous body-velocity steering can be selected independently through
+`/moboterra/set_steering`:
+
+| `mode` | Selection | Command rules |
+| --- | --- | --- |
+| 0 | STANDARD | Startup default; combined forward, sideways and yaw commands |
+| 1 | CRAB | Forward/sideways/diagonal translation; `angular.z = 0` |
+| 2 | ACKERMANN | `linear.y = 0`; forward/reverse turning within the geometry-derived curvature limit; no rotation in place |
+
+For example, select CRAB in the current container environment:
+
+```bash
+sudo moboterra-ctl ros service call /moboterra/set_steering \
+  mobotic_interfaces/srv/SetSteeringMode '{mode: 1}'
+```
+
+The service does not select AUTONOMOUS or enable drives. Changes stop the vehicle,
+verify measured standstill for 0.25 seconds, and require fresh commands after
+completion; the transition deadline is 10 seconds. Observe `steering_mode`,
+`requested_steering_mode` and `steering_transition_in_progress` on `vehicle/mode`.
+An incompatible command requests a controlled stop and reports
+`AUTONOMY_STEERING_COMMAND_REJECTED` rather than changing the requested path.
+A fresh compatible command clears that inhibition. Preselection in MANUAL
+requires standstill and leaves joystick steering unchanged. Selection survives
+vehicle-mode changes and recovery, but resets to STANDARD on supervisor restart.
+All normal readiness and safety checks, including the current RP2 Safety Enabled
+requirement, still apply. See [the command reference](commands.md#select-autonomy-steering)
+for all three calls and [the interface contract](ros_interface_manual.md#autonomy-steering-selection)
+for exact rules. Rebuild the image/native workspace and dependent applications
+before using this new service and the extended `VehicleModeState` message.
+
 In KINEMATICOFF, `autonomy/joint_setpoints` is a stamped `sensor_msgs/msg/JointState`
 containing every configured joint. Steering uses position in radians and a
 nonnegative profile speed in rad/s; traction velocity must be zero and signed
@@ -370,6 +401,7 @@ does not prove physical standstill.
 | `wheel_modules/enable_drives` | B2-equivalent initialization and enable; does not toggle off |
 | `wheel_modules/clear_errors` | Explicit supervised fault-recovery transaction |
 | `vehicle/set_mode` | Select mode 0, 1 or 2 using `SetVehicleMode` |
+| `set_steering` | Autonomy steering: 0 STANDARD (default), 1 CRAB, 2 ACKERMANN using `SetSteeringMode` |
 | `vehicle/reset_odometry` | Reset local wheel odometry only after standstill checks |
 
 The drive and odometry services use `std_srvs/srv/Trigger`. An accepted request

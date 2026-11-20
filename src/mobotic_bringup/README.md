@@ -12,6 +12,10 @@ MANUAL/AUTONOMOUS; face buttons are unused. Terminal requests use
 `vehicle/set_mode`, the only API accepting KINEMATICOFF. Both first stop and verify standstill, then
 switch the sole selected mode. The driver enforces exclusive setpoint routing
 using fresh `vehicle/mode`; KINEMATICOFF needs no extra opt-in setting.
+Autonomy steering is selected separately with `set_steering` (SetSteeringMode):
+0 STANDARD (startup default), 1 CRAB, 2 ACKERMANN. Changes stop and verify
+standstill, then require fresh compatible commands; manual joystick steering is
+unchanged. See [steering commands](../../docs/commands.md#select-autonomy-steering).
 The default `operator` node is `remdevice_control`: PAIL/Ecobox node 10, 500 kbit/s,
 on shared `can0`; the CAN master is node 11. Its active source mapping is marked
 verified. Confirm physical controls and stopping on the delivered machine. Follow the
@@ -42,7 +46,7 @@ For hardware operation, use the guarded launcher from the project root after
 installing the native environment and configuring host CAN:
 
 ```bash
-bash scripts/start_ros2_four_micontrol.sh start_rviz:=false
+bash scripts/start_MoboTerra start_rviz:=false
 ```
 
 One launch starts the driver, kinematics, odometry, supervisor and platform diagnostics.
@@ -281,7 +285,7 @@ captured live graph. Missing publishers/subscribers may change what rqt displays
 Kinematics implementations and ROMB integration are owned by
 [`mobotic_kinematics`](../mobotic_kinematics/README.md). Bringup selects
 `kinematics_backend:=romb` (the only supported solver) and delegates node creation to that package.
-`start_ros2_four_micontrol.sh` continues to select ROMB, using the same executable
+`start_MoboTerra` continues to select ROMB, using the same executable
 names, topics and geometry. ROMB executables now belong to `mobotic_kinematics`.
 
 ## Manual-only commissioning test
@@ -351,12 +355,12 @@ ros2 service call /moboterra/wheel_modules/disable_drives std_srvs/srv/Trigger '
 ```
 
 Stop with Ctrl-C. To restore supervised operation, stop the manual launch and use
-`/home/mobotic/start_ros2_four_micontrol.sh`. Never run both authorities together.
+`/home/mobotic/start_MoboTerra`. Never run both authorities together.
 
 
 ## Native launcher shutdown
 
-Both `/home/mobotic/start_ros2_four_micontrol.sh` and its manual-only wrapper now
+Both `/home/mobotic/start_MoboTerra` and its manual-only wrapper now
 run through `mobotic_bringup.shutdown_guard`. On Ctrl-C, SIGTERM, terminal hangup,
 or launch exit, the guard first stops the authority, leaves the driver and CAN
 sender alive for the authority lease to expire, then shuts down the launch group.
@@ -400,7 +404,7 @@ encoder-zero reference; this does not calibrate a mechanical home switch or
 prove physical wheel-angle scale. See the manual-control README for controls and
 selection/release behavior.
 
-The host launcher /home/mobotic/start_ros2_four_micontrol.sh runs the same verified
+The host launcher /home/mobotic/start_MoboTerra runs the same verified
 node-10 PAIL recovery as clear_joystick_error.sh after its stopped-stack/CAN
 preflight and before ROS nodes start. The manual-only wrapper inherits this
 behavior. Keep sticks neutral and B2 released. All eight drives must already
@@ -420,4 +424,4 @@ mode; missed historical faults cannot be checked through an initial SDO read.
 
 `start_rviz:=true` adds RViz to the launch lifecycle. `rviz_config` selects a display configuration; an empty value uses RViz defaults. The viewer runs in the robot namespace and remaps `/tf` and `/tf_static` to that namespace. Closing RViz does not stop the stack.
 
-On the Pi, `scripts/start_ros2_four_micontrol.sh` selects `config/raspberry-pi/live.rviz` and enables robot description, measured-wheel odometry and RViz by default. The manual-only wrapper inherits those defaults. Use `start_rviz:=false` for a headless launch. See [Pi settings](../../docs/pi-settings.md) for feedback availability and startup commands.
+On the Pi, `scripts/start_MoboTerra` selects `config/raspberry-pi/live.rviz` and enables robot description, measured-wheel odometry and RViz by default. The manual-only wrapper inherits those defaults. Use `start_rviz:=false` for a headless launch. See [Pi settings](../../docs/pi-settings.md) for feedback availability and startup commands.

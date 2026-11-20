@@ -1,7 +1,7 @@
 # MoboTerra ROS interface reference
 
 This reference applies to the current four-module miControl stack launched by
-`scripts/start_ros2_four_micontrol.sh` and its current Docker deployment.
+`scripts/start_MoboTerra` and its current Docker deployment.
 Names below are relative to `/moboterra`. Check the installed message definitions
 before integrating an external application; updating source does not update an
 already-built Docker image.
@@ -119,6 +119,59 @@ receiver sample primes the switch without issuing a mode request. An unchanged
 switch does not repeatedly override a service-selected mode. Both autonomous
 modes require a fresh valid RP2 Safety Enabled selector in the current profile.
 
+### Autonomy steering selection
+
+`/moboterra/set_steering` (`mobotic_interfaces/srv/SetSteeringMode`) selects
+the steering policy for AUTONOMOUS `autonomy/cmd_vel` commands:
+
+| `mode` | Selection | Accepted body velocities |
+| --- | --- | --- |
+| 0 | STANDARD | Combined `linear.x`, `linear.y` and `angular.z`; startup default |
+| 1 | CRAB | Forward, sideways or diagonal translation; `angular.z = 0` |
+| 2 | ACKERMANN | Forward/reverse with turning; `linear.y = 0`, bounded curvature, no rotation in place |
+
+ACKERMANN requires `abs(angular.z) <= abs(linear.x) * max_curvature`, where
+`max_curvature = 1 / max(abs(wheel_x) + abs(wheel_y))` over the configured wheel
+positions, in 1/m. This is the same geometry-derived curvature envelope as manual
+Ackermann steering. Input checks allow an absolute numerical tolerance of `1e-9`;
+the outgoing velocity still has zero forbidden components and respects the
+curvature bound during acceleration, reversing and deceleration.
+ACKERMANN uses coupled forward/yaw ramps and passes through zero commanded
+velocity before reversing direction, preserving both acceleration limits and
+the curvature envelope.
+
+The service request contains `uint8 mode`. The response contains `accepted`,
+`transition_started`, `active_mode` and `message`. An accepted change stops the
+outgoing command, verifies fresh body and all-joint standstill for 0.25 seconds,
+then commits the selection. Until completion, `active_mode` remains the previous
+selection. The existing 10-second transition deadline applies; a timeout retains
+the previous selection and latches a fault. Commands and pending kinematics
+results from before completion are discarded. New valid commands are required
+afterward; an already-running publisher can supply them and cause motion.
+
+Observe `vehicle/mode.steering_mode`, `requested_steering_mode`, and
+`steering_transition_in_progress`; `transition_in_progress` covers either a
+vehicle-source change or a steering change. Repeating the active selection is a
+no-op; repeating the pending selection reports it in progress. Conflicting
+requests and requests during fault recovery are rejected. Selection is also
+available in MANUAL after fresh measured standstill, using the same transition
+sequence to preselect the next autonomous policy. It does not change manual
+joystick steering. KINEMATICOFF rejects steering-selection requests.
+
+An incompatible autonomous command revokes the previous candidate and pending
+motion results and requests a controlled stop. It is not silently converted into
+another path. `AUTONOMY_STEERING_COMMAND_REJECTED` appears in `reason_codes`, with
+the specific cause in `status_message`. This is a command inhibition, not a
+latched drive fault; a fresh compatible command clears it. Safety/readiness loss
+continues to use the existing stop and drive-enable policy.
+
+Selection remains across vehicle-mode changes and recovery, and returns to
+STANDARD on supervisor restart. It does not enable drives or select AUTONOMOUS.
+All safety, RP2, speed, acceleration, feedback and command-freshness checks remain.
+Rebuild the image/native workspace and applications using `VehicleModeState` for
+the new service and extended status message before deployment; see
+[installation and updates](commands.md#installation-and-updates).
+
 ## Candidate command contracts
 
 Body-velocity candidates use a valid nonzero current source timestamp and the
@@ -179,6 +232,7 @@ code or `enabled=false` alone is not fresh health or standstill proof.
 | Relative service | Type | Purpose |
 | --- | --- | --- |
 | `vehicle/set_mode` | `mobotic_interfaces/srv/SetVehicleMode` | Request 0, 1 or 2 |
+| `set_steering` | `mobotic_interfaces/srv/SetSteeringMode` | Autonomy steering: 0 STANDARD (default), 1 CRAB, 2 ACKERMANN |
 | `wheel_modules/enable_drives` | `std_srvs/srv/Trigger` | B2-equivalent initialize/enable request |
 | `wheel_modules/clear_errors` | `std_srvs/srv/Trigger` | Separate supervised fault-recovery transaction |
 | `vehicle/reset_odometry` | `std_srvs/srv/Trigger` | Reset local wheel odometry with measured standstill |

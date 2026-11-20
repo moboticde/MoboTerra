@@ -13,6 +13,11 @@ uint8 current_mode
 uint8 selected_mode
 uint8 requested_mode
 bool transition_in_progress
+# Autonomy steering: 0 STANDARD (startup default), 1 CRAB, 2 ACKERMANN.
+# transition_in_progress covers vehicle-source and steering transitions.
+uint8 steering_mode
+uint8 requested_steering_mode
+bool steering_transition_in_progress
 bool motion_permitted
 bool safety_stop_active
 bool error_active

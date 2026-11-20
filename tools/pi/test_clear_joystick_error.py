@@ -9,7 +9,7 @@ import sys
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = PROJECT_ROOT / 'scripts/start_ros2_four_micontrol.sh'
+LAUNCHER = PROJECT_ROOT / 'scripts/start_MoboTerra'
 SOURCE=Path(__file__).with_name('clear_joystick_error.py')
 spec=importlib.util.spec_from_file_location('pail_clear',SOURCE)
 module=importlib.util.module_from_spec(spec)

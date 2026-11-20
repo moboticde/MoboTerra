@@ -18,7 +18,7 @@ services:
     security_opt: [no-new-privileges:true]
     environment:
       ROBOT_NAME: ${MOBOTERRA_ROBOT_NAME:?}
-    command: [bash, scripts/start_ros2_four_micontrol.sh, "start_rviz:=false"]
+    command: [bash, scripts/start_MoboTerra, "start_rviz:=false"]
     volumes:
       - type: bind
         source: ${MOBOTERRA_PROJECT_ROOT:?}/src/mobotic_config/config

@@ -136,6 +136,48 @@ sudo moboterra-ctl ros service call /moboterra/vehicle/reset_odometry \
   std_srvs/srv/Trigger '{}'
 ```
 
+## Select autonomy steering
+
+The vehicle mode remains AUTONOMOUS (1). The independent steering selection uses
+0 STANDARD (startup default), 1 CRAB or 2 ACKERMANN:
+
+```bash
+# STANDARD: combined forward/sideways/yaw commands.
+sudo moboterra-ctl ros service call /moboterra/set_steering \
+  mobotic_interfaces/srv/SetSteeringMode '{mode: 0}'
+
+# CRAB: forward/sideways/diagonal translation, angular.z = 0.
+sudo moboterra-ctl ros service call /moboterra/set_steering \
+  mobotic_interfaces/srv/SetSteeringMode '{mode: 1}'
+
+# ACKERMANN: linear.y = 0, bounded curvature, no rotation in place.
+sudo moboterra-ctl ros service call /moboterra/set_steering \
+  mobotic_interfaces/srv/SetSteeringMode '{mode: 2}'
+
+sudo moboterra-ctl ros topic echo /moboterra/vehicle/mode
+```
+
+Inside the sourced container shell or native ROS environment, replace
+`sudo moboterra-ctl ros` with `ros2`. The short native CRAB request is:
+
+```bash
+ros2 service call /moboterra/set_steering \
+  mobotic_interfaces/srv/SetSteeringMode '{mode: 1}'
+```
+
+Enable/initialize drives separately and wait for motion hardware readiness.
+When changing steering, wait for `steering_transition_in_progress: false` and
+the requested `steering_mode`. Switching stops the vehicle and requires fresh
+measured standstill for 0.25 seconds, then fresh compatible commands. Acceptance
+is not completion. A 10-second timeout latches a fault. MANUAL permits stationary
+preselection; KINEMATICOFF does not. Incompatible commands request a controlled
+stop and report `AUTONOMY_STEERING_COMMAND_REJECTED`; valid new commands clear the
+inhibition. See [the steering contract](ros_interface_manual.md#autonomy-steering-selection).
+
+Source changes require rebuilding the deployed image/native workspace and
+dependent applications; an existing image does not gain the service from a
+configuration reload.
+
 ## Configuration check and rollback
 
 ```bash

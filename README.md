@@ -14,7 +14,7 @@ edition is [MoboTerra_user_manual.docx](MoboTerra_user_manual.docx).
 | --- | --- |
 | Target computer | Ubuntu 24.04 with Linux Docker Engine; ROS 2 Jazzy in the image |
 | Wheel modules | `front_left`, `front_right`, `rear_left`, `rear_right`; eight drives |
-| Hardware launch | `scripts/start_ros2_four_micontrol.sh` |
+| Hardware launch | `scripts/start_MoboTerra` |
 | Kinematics | Original ROMB solver, guest libraries, emulator and adapter included in Docker |
 | Robot CAN | Drives, PAIL receiver and batteries share `can0` at 500000 bit/s |
 | CAN node assignments | Drives 1–8; PAIL receiver 10; master 11 |
@@ -89,8 +89,8 @@ engineering maintenance path only; it requires the separate native environment. 
 service first. The CAN link must already be configured correctly.
 
 ```bash
-bash scripts/start_ros2_four_micontrol.sh --check start_rviz:=false
-bash scripts/start_ros2_four_micontrol.sh start_rviz:=false
+bash scripts/start_MoboTerra --check start_rviz:=false
+bash scripts/start_MoboTerra start_rviz:=false
 ```
 
 Keep the launch terminal open. Stop with Ctrl+C and wait for drive-disable

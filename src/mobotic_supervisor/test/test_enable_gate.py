@@ -96,6 +96,7 @@ namespace = {
     'WheelModuleCommandArray': WheelModuleCommandArray,
     'WheelModuleCommand': SimpleNamespace,
     'VehicleModeState': MODES,
+    'SetSteeringMode': SimpleNamespace(Request=SimpleNamespace(STANDARD=0, CRAB=1, ACKERMANN=2)),
     'math': math,
     'copy': copy,
 }

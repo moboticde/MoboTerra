@@ -95,7 +95,7 @@ LABEL org.opencontainers.image.title="MoboTerra complete ROS 2 stack" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       com.mobotic.stack="four-micontrol-bundled-romb-v1"
-CMD ["bash", "scripts/start_ros2_four_micontrol.sh", "start_rviz:=false"]
+CMD ["bash", "scripts/start_MoboTerra", "start_rviz:=false"]
 
 # Preserve the conventional runtime target with the same complete stack.
 FROM current-stack AS runtime

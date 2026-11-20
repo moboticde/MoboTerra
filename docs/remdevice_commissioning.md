@@ -419,7 +419,7 @@ Virtual mode remains receive-only, with no physical operator sender.
 
 The separate-adapter setup used drives and batteries on `can0` and PAIL on
 `can1`, both at 500 kbit/s. The current PEAK PCAN-USB setup uses
-`/home/mobotic/start_ros2_four_micontrol.sh` with drives, batteries and PAIL all
+`/home/mobotic/start_MoboTerra` with drives, batteries and PAIL all
 on `can0` at 500 kbit/s. Connecting two
 adapters to the same robot DB9 does not isolate traffic: PAIL's CAN connection
 must be removed from the original bus and wired only to the new adapter, with

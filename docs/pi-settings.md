@@ -39,8 +39,8 @@ Confirm the host CAN link is already UP at the active profile's bitrate. Use
 neutral controls, with B2 released. From the project root:
 
 ```bash
-bash scripts/start_ros2_four_micontrol.sh --check start_rviz:=false
-bash scripts/start_ros2_four_micontrol.sh start_rviz:=false
+bash scripts/start_MoboTerra --check start_rviz:=false
+bash scripts/start_MoboTerra start_rviz:=false
 ```
 
 The check command validates configuration and selected visualization dependencies

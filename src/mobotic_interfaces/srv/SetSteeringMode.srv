@@ -1,0 +1,13 @@
+# Steering policy for AUTONOMOUS body-velocity commands only.
+# Selection never enables drives or selects AUTONOMOUS vehicle mode.
+uint8 STANDARD=0
+uint8 CRAB=1
+uint8 ACKERMANN=2
+
+uint8 mode
+---
+# Acceptance starts a stop/standstill transition; observe vehicle/mode.
+bool accepted
+bool transition_started
+uint8 active_mode
+string message

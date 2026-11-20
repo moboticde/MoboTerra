@@ -203,7 +203,7 @@ def verify_image(image):
     run(['docker', 'run', '--rm', '--network', 'none', image, 'python3', '-c',
          'from mobotic_kinematics.romb.runtime import runtime_command; runtime_command([])'])
     run(['docker', 'run', '--rm', '--network', 'none', image,
-         'bash', 'scripts/start_ros2_four_micontrol.sh', '--check', 'start_rviz:=false'])
+         'bash', 'scripts/start_MoboTerra', '--check', 'start_rviz:=false'])
     run(['docker', 'run', '--rm', '--network', 'none', '--env', 'QT_QPA_PLATFORM=offscreen',
          image, 'rviz2', '--help'], stdout=subprocess.DEVNULL)
     run(['docker', 'run', '--rm', '--network', 'none', '--env', 'ROS_DOMAIN_ID=192',

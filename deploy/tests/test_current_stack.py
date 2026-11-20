@@ -113,7 +113,7 @@ class CurrentStackTest(unittest.TestCase):
     def test_container_keeps_native_checks_and_current_configuration(self):
         service = yaml.safe_load((ROOT / 'deploy/compose.current-stack.yaml').read_text())['services']['robot']
         self.assertEqual(service['command'],
-                         ['bash', 'scripts/start_ros2_four_micontrol.sh', 'start_rviz:=false'])
+                         ['bash', 'scripts/start_MoboTerra', 'start_rviz:=false'])
         self.assertEqual(service['restart'], 'no')
         self.assertEqual(service['network_mode'], 'host')
         self.assertEqual(service['ipc'], 'host')

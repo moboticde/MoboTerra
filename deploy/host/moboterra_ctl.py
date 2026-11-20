@@ -99,7 +99,7 @@ def isolated_command(values, command):
 
 def check(_args):
     values = environment()
-    return run(isolated_command(values, ['bash', 'scripts/start_ros2_four_micontrol.sh',
+    return run(isolated_command(values, ['bash', 'scripts/start_MoboTerra',
                                         '--check', 'start_rviz:=false'])).returncode
 
 
@@ -150,7 +150,7 @@ def rollback(args):
     run(['systemctl', 'stop', SERVICE], check=True)
     selected = dict(current, MOBOTERRA_CURRENT_IMAGE=image)
     # Test the previous image with the current configuration, with no hardware network.
-    run(isolated_command(selected, ['bash', 'scripts/start_ros2_four_micontrol.sh',
+    run(isolated_command(selected, ['bash', 'scripts/start_MoboTerra',
                                    '--check', 'start_rviz:=false']), check=True)
     deployment.atomic_text(deployment.ENV_FILE, deployment.env_text(selected))
     deployment.atomic_text(previous_path, deployment.env_text(current))
