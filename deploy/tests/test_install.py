@@ -157,6 +157,15 @@ class InstallationTest(unittest.TestCase):
                 self.assertFalse((self.root/'usr/local/bin/moboterra-ctl').exists())
                 self.assertFalse((self.root/'etc/systemd/system/moboterra-current-stack.service').exists())
 
+    def test_invalid_alternate_platform_fails_before_build(self):
+        profile = self.repo / 'src/mobotic_config/config/platform-four-micontrol.yaml'
+        profile.write_text(profile.read_text().replace('listen_only: false', 'listen_only: true'))
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('platform-four-micontrol.yaml:', result.stderr)
+        self.assertIn('shared drive and battery CAN interface cannot be listen-only', result.stderr)
+        self.assertFalse(any(call[:3] == ['docker', 'buildx', 'build'] for call in self.calls()))
+
     def test_corrupt_vendor_package_fails_before_build(self):
         (self.deploy/'vendor/agv_kinematics.deb').write_bytes(b'corrupted')
         result=self.invoke()

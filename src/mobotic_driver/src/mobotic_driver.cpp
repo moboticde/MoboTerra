@@ -556,6 +556,11 @@ void MoboticDriver::configureWheelModules(const std::vector<std::string>& module
   }
 }
 
+double MoboticDriver::activeDiagnosticPollPeriod() const
+{
+  return std::max(3.0, diagnostic_sdo_period_);
+}
+
 void MoboticDriver::publishWheelModuleStatus(const rclcpp::Time& stamp)
 {
   const auto steady_now = FeedbackFreshness::Clock::now();
@@ -612,9 +617,11 @@ void MoboticDriver::publishWheelModuleStatus(const rclcpp::Time& stamp)
       item.error_register = drive.getError(); item.error_code = drive.activeErrorCode();
       item.fault_known = drive.feedbackFreshness().fresh(FeedbackFreshness::ERROR_REGISTER, fault_feedback_timeout_, steady_now);
       item.motor_current = drive.motorCurrentAmps();
-      item.current_known = std::isfinite(item.motor_current) && drive.feedbackFreshness().fresh(FeedbackFreshness::CURRENT, motion_feedback_timeout_, steady_now);
+      // Current is a background diagnostic. Allow one missed poll without
+      // relaxing the position, velocity, or drive-state freshness deadlines.
+      item.current_known = std::isfinite(item.motor_current) &&
+          drive.feedbackFreshness().fresh(FeedbackFreshness::CURRENT, 2.0 * activeDiagnosticPollPeriod(), steady_now);
       if (!item.current_known) { item.motor_current = std::numeric_limits<double>::quiet_NaN(); }
-      item.temperature = std::numeric_limits<double>::quiet_NaN(); item.temperature_known = false;
       const auto& stamps = field_stamp_ns_[name];
       item.status_stamp = rclcpp::Time(stamps[0]);
       item.fault_stamp = rclcpp::Time(stamps[1]);
@@ -884,8 +891,7 @@ void MoboticDriver::scheduleFeedbackReads()
   bool background_busy = bounded_background && std::any_of(sdo_channels_.begin(), sdo_channels_.end(),
       [](const auto& item) { return item.second.backgroundReadOutstanding(); });
   const bool fault_debt = fault_service_pending;
-  const double auxiliary_period = bounded_background && sdo_motion_active ?
-      std::max(3.0, diagnostic_sdo_period_) : diagnostic_sdo_period_;
+  const double auxiliary_period = sdo_motion_active ? activeDiagnosticPollPeriod() : diagnostic_sdo_period_;
   const auto queue_background = [&](const std::string& name, const can_msgs::msg::Frame& frame,
                                     std::map<std::string, rclcpp::Time>& attempts, double period) {
     if (background_busy || !shouldPoll(attempts, name, period)) { return false; }

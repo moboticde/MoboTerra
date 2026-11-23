@@ -84,6 +84,11 @@ inline int signedIntFromSdoReadReply(const can_msgs::msg::Frame& frame, const un
   {
     return static_cast<std::int16_t>(shortFromFrame(frame, index));
   }
+  if (frame.data[0] == READ_REPLY_3B)
+  {
+    const int value = frame.data[index] | (frame.data[index + 1] << 8) | (frame.data[index + 2] << 16);
+    return value & 0x800000 ? value - 0x1000000 : value;
+  }
   return intFromFrame(frame, index);
 }
 
@@ -144,8 +149,9 @@ enum ParameterIds : std::uint16_t
   MICONTROL_DEVICE_MODE = 0x3003,
   // Software enable command/readback, distinct from actual DEV_Status.
   MICONTROL_DEVICE_STATE = 0x3004,
+  MICONTROL_TRACTION_RMS_CURRENT = 0x3113,
   CURRENT_INPUT = 0x3200,
-  MICONTROL_CURRENT_FEEDBACK = 0x3262,
+  MICONTROL_STEERING_RMS_CURRENT = 0x3262,
   MICONTROL_VELOCITY_INPUT = 0x3300,
   MICONTROL_S_VELOCITY_INPUT = 0x3500,
   MICONTROL_VELOCITY_FEEDBACK = 0x3A04,
@@ -155,7 +161,7 @@ enum ParameterIds : std::uint16_t
 };
 
 // Generic aliases used by mobotic_driver.cpp.
-constexpr ParameterIds CURRENT_FEEDBACK = MICONTROL_CURRENT_FEEDBACK;
+constexpr ParameterIds CURRENT_FEEDBACK = MICONTROL_STEERING_RMS_CURRENT;
 constexpr ParameterIds VELOCITY_INPUT = MICONTROL_VELOCITY_INPUT;
 constexpr ParameterIds STEERING_PROFILE_VELOCITY_INPUT = MICONTROL_VELOCITY_INPUT;
 constexpr ParameterIds S_VELOCITY_INPUT = MICONTROL_S_VELOCITY_INPUT;
@@ -302,6 +308,11 @@ public:
 
   can_msgs::msg::Frame readFeedbackRequest(const ParameterIds& parameter) const
   {
+    if (parameter == CURRENT_FEEDBACK)
+    {
+      return createAndFillMoboticHeader(requestNodeID_, READ_FROM_DEVICE, currentFeedbackIndex(),
+                                        currentFeedbackSubindex());
+    }
     const unsigned subindex = parameter == VELOCITY_FEEDBACK ? 1 : 0;
     return createAndFillMoboticHeader(requestNodeID_, READ_FROM_DEVICE, parameter, subindex);
   }
@@ -373,10 +384,10 @@ public:
       software_enable_requested_ = frame.data[4] != 0;
       software_enable_valid_ = true;
     }
-    else if (parameterId == MICONTROL_CURRENT_FEEDBACK && subindex <= 1 && size == 4)
+    else if (parameterId == currentFeedbackIndex() && subindex == currentFeedbackSubindex())
     {
       if (!accept(FeedbackFreshness::CURRENT)) { return frames; }
-      feedbacks_[CURRENT_FEEDBACK] = intFromFrame(frame, 4);
+      feedbacks_[CURRENT_FEEDBACK] = signedIntFromSdoReadReply(frame, 4);
     }
     else if (parameterId == MICONTROL_VELOCITY_FEEDBACK && subindex == 1 && size == 4)
     {
@@ -485,7 +496,7 @@ public:
   double positionCountsPerOutputRevolution() const
   { return resolution_ * (isTractionJoint() ? gear_ratio_ : 1.0); }
 
-  // 0x3262:0 uses mA; :1 signed-current telemetry uses the same scale.
+  // The ROS interface reports amperes from the controller's milliamp reading.
   double motorCurrentAmps() const
   {
     return hasFeedback(CURRENT_FEEDBACK) ? feedback(CURRENT_FEEDBACK) / 1000.0 :
@@ -493,6 +504,10 @@ public:
   }
 
 private:
+  ParameterIds currentFeedbackIndex() const
+  { return isTractionJoint() ? MICONTROL_TRACTION_RMS_CURRENT : MICONTROL_STEERING_RMS_CURRENT; }
+  unsigned currentFeedbackSubindex() const { return isTractionJoint() ? 0 : 1; }
+
   std::string id_;
   unsigned requestNodeID_{0};
   unsigned replyNodeID_{0};

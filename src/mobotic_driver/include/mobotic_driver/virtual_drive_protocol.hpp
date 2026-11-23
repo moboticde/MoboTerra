@@ -102,6 +102,7 @@ private:
       case 0x3002: return result((enabled_ ? 1u : 0u) | (error_ ? 2u : 0u), 4);
       case 0x3003: return result(mode_, 4);
       case 0x3004: return result(software_enable_requested_ ? 1 : 0, 4);
+      case 0x3113: if (traction_joint_) { return result(current_, 4); } break;
       case 0x3762: return result(checkedCanPosition(position_).value(), 4);
       case 0x3111: return result(48000, 4); // Synthetic 48 V.
       case 0x3114: return result(25, 4);

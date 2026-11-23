@@ -96,34 +96,41 @@ class CurrentStackTest(unittest.TestCase):
             return dict(ifname=name, link_type='ether', flags=['LOWER_UP'] if connected else [],
                         addr_info=[{'local': host_ip}])
 
-        interfaces = [interface('eth0', '192.168.2.250'), interface('eth1', '192.168.3.250', False),
+        interfaces = [interface('eth0', '192.168.2.199'), interface('eth1', '192.168.42.17', False),
                       interface('wlan0', '192.168.1.250'), interface('docker0', '192.168.3.250')]
+        interfaces[0]['addr_info'].extend({'local': address} for address in (
+            '10.60.20.250', '192.168.2.0', '192.168.2.5', '192.168.2.6', '192.168.2.255'))
         devices = {Path('/sys/class/net') / path for path in (
             'eth0/device', 'eth1/device', 'wlan0/device', 'wlan0/phy80211')}
         with patch.object(deployment.Path, 'exists', autospec=True, side_effect=devices.__contains__), \
                 patch.object(deployment, 'run') as run:
             run.return_value.stdout = json.dumps(interfaces)
-            self.assertEqual(deployment.robot_ethernet_address(), ('eth0', '192.168.2.250'))
+            self.assertEqual(deployment.robot_ethernet_address(), ('eth0', '192.168.2.199'))
             interfaces[1]['flags'].append('LOWER_UP')
             run.return_value.stdout = json.dumps(interfaces)
             with self.assertRaisesRegex(RuntimeError, 'Ambiguous.*eth0=.*eth1='):
                 deployment.robot_ethernet_address()
+            self.assertEqual(deployment.robot_ethernet_address('192.168.42.17'), ('eth1', '192.168.42.17'))
+            self.assertIsNone(deployment.robot_ethernet_address('192.168.42.18'))
 
-    def test_prepare_selects_scanner_network_for_all_three_hosts(self):
+    def test_prepare_selects_scanner_network_for_default_and_custom_hosts(self):
         from mobotic_config.configuration import Configuration
 
-        for subnet in (1, 2, 3):
-            with self.subTest(subnet=subnet), tempfile.TemporaryDirectory() as directory:
-                host_ip = f'192.168.{subnet}.250'
+        for subnet, suffix, use_override in ((1, 250, False), (2, 199, False), (42, 17, True)):
+            host_ip = f'192.168.{subnet}.{suffix}'
+            override = host_ip if use_override else ''
+            with self.subTest(host_ip=host_ip), tempfile.TemporaryDirectory() as directory:
                 cfg = deployment.configuration()
                 runtime = Path(directory) / 'runtime'
-                with patch.object(deployment, 'legacy_stopped'), \
+                with patch.dict(deployment.os.environ, MOBOTERRA_ROBOT_HOST_IP=override), \
+                        patch.object(deployment, 'legacy_stopped'), \
                         patch.object(deployment, 'stack_stopped', return_value=nullcontext()), \
-                        patch.object(deployment, 'robot_ethernet_address', return_value=('eth0', host_ip)), \
+                        patch.object(deployment, 'robot_ethernet_address', return_value=('eth0', host_ip)) as ethernet, \
                         patch.object(deployment, 'prepare_can') as can, \
                         patch.object(deployment, 'configuration', return_value=cfg), \
                         patch.object(deployment, 'ROOT', Path(directory)):
                     deployment.prepare_stack(wait_seconds=0)
+                ethernet.assert_called_with(override or None)
                 selected = Configuration(runtime / 'platform.yaml')
                 self.assertEqual(selected.scanner_parameters('front_left')['host_ip'], host_ip)
                 self.assertEqual(selected.scanner_parameters('front_left')['sensor_ip'], f'192.168.{subnet}.5')

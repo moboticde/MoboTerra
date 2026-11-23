@@ -78,7 +78,7 @@ Edit `battery.participants` in the selected platform YAML; all five `batteries.*
 arrays are generated together. Do not configure absent participants or assign
 the same telegram binding to multiple packs. See the
 [battery commissioning procedure](../src/mobotic_vanguard_battery/README.md#battery-commissioning).
-SOC reference units are percent; `sensor_msgs/BatteryState.percentage` and
+SOC reference units are percent; `BatteryPackState.percentage` and
 `minimum_percentage` are fractions. Invalid/reserved values produce NaN and block
 readiness, not a clamped 100% SOC. The 0.2 (20%) supervisor threshold is advisory only; valid low SOC does not
 block startup, motion or B2 recovery.

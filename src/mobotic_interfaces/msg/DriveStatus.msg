@@ -13,10 +13,9 @@ bool device_state_known
 int32 error_register
 int32 error_code
 bool fault_known
+# Controller-reported RMS motor current in amperes. Check current_known before using it.
 float64 motor_current
 bool current_known
-float64 temperature
-bool temperature_known
 builtin_interfaces/Time status_stamp
 builtin_interfaces/Time fault_stamp
 builtin_interfaces/Time current_stamp

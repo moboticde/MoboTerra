@@ -1,4 +1,4 @@
-"""Read-only Vanguard/J1939 decoding; BatteryState SOC is a fraction, not percent."""
+"""Read-only Vanguard/J1939 decoding with fractional state of charge."""
 import math
 
 

@@ -18,9 +18,9 @@ transmitting `can0` at 500000 bit/s. The CAN master node is 11. The current
 deployment does not require a separate listen-only battery adapter.
 
 The base profile lists scanner host `192.168.1.200` and scanners `192.168.1.5`
-and `192.168.1.6`. For the Docker service, configure the Ubuntu robot-facing
-Ethernet port with the robot's `192.168.1.250`, `192.168.2.250`, or
-`192.168.3.250` address. Startup selects the corresponding scanner subnet.
+and `192.168.1.6`. For the Docker service, give the Ubuntu robot-facing
+Ethernet port a free `192.168.x.x` address on the scanner subnet. Startup
+detects the host address and uses that subnet for the scanners at `.5` and `.6`.
 FlexiSoft telemetry is received through TCP port 9100.
 
 ## Current behavior

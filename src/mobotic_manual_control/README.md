@@ -266,6 +266,8 @@ and analog PDO pair, including acquisition age, skew, axis validation and
 LINK/EMGY/STOP. Missing or invalid controls still stop motion; the supervisor's
 250 ms operator timeout and drive recovery policy remain active. Raw diagnostics
 retain the receiver code/register, policy flag and CAN-error indication count.
+The PDO-based policy drops the PAIL `0x8150` EMCY frame with register `0x11`
+before recording the event. Independent error-register reads remain visible.
 Healthy diagnostics stay in `operator/raw`; they do not replace normal operator
 status or generate warning/error logs. Actual PDO/STOP/link failures are still reported.
 This setting does not repair receiver faults or verify a CAN frame's producer.

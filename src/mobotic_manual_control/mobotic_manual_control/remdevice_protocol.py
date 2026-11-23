@@ -184,6 +184,12 @@ class RemdeviceReceiver:
         if stamp_ns <= self.last_stamps.get(cob_id, -1):
             return False
         if cob_id == self.emergency_id:
+            code = int.from_bytes(payload[:2], 'little')
+            register = payload[2]
+            if diagnostic_only and code == 0x8150 and register == 0x11:
+                # Suppress the known PAIL collision report in PDO-based mode.
+                # It must not replace an earlier diagnostic or affect PDO age.
+                return False
             # EMCYs describe receiver state in acquisition order. A fault and its
             # zero-code reset can both be queued before the first callback runs;
             # the PDO cutoff (callback time) must not hide either newer event.
@@ -191,8 +197,8 @@ class RemdeviceReceiver:
             # Under PDO-based policy, diagnostics leave this cutoff untouched.
             self.last_stamps[cob_id] = stamp_ns
             was_blocking = self.has_blocking_error()
-            self.emergency_code = int.from_bytes(payload[:2], 'little')
-            self.emergency_register = payload[2]
+            self.emergency_code = code
+            self.emergency_register = register
             if self.has_blocking_error() or was_blocking:
                 self.invalidate(f'EMCY 0x{self.emergency_code:04x}', now_ns, preserve_physical=True)
             return False

@@ -211,7 +211,7 @@ int run()
     {
       SdoChannel required;
       required.push(createAndFillMoboticHeader(0x600 + node, READ_FROM_DEVICE, MICONTROL_DEVICE_MODE, 0), start);
-      required.push(createAndFillMoboticHeader(0x600 + node, READ_FROM_DEVICE, 0x3262, 0), start);
+      required.push(createAndFillMoboticHeader(0x600 + node, READ_FROM_DEVICE, MICONTROL_TRACTION_RMS_CURRENT, 0), start);
       required.push(createAndFillMoboticHeader(0x600 + node, READ_FROM_DEVICE, 0x3001, 0), start);
       require(required.faultReadOutstanding(), "fault evidence is required service");
       const auto first = required.next(.1, start);
@@ -387,7 +387,7 @@ int run()
               "stale mode evidence cannot cancel a miControl disable command");
     }
     SdoChannel native;
-    native.push(createAndFillMoboticHeader(0x602, READ_FROM_DEVICE, MICONTROL_CURRENT_FEEDBACK, 0), start);
+    native.push(createAndFillMoboticHeader(0x602, READ_FROM_DEVICE, MICONTROL_TRACTION_RMS_CURRENT, 0), start);
     native.push(createAndFillMoboticHeader(0x602, READ_FROM_DEVICE, MICONTROL_STATUS_REGISTER, 0), start);
     native.push(createAndFillMoboticHeader(0x602, READ_FROM_DEVICE, MICONTROL_DEVICE_MODE, 0), start);
     native.push(moving, start);
@@ -468,7 +468,7 @@ static double load(bool native_barrier)
         }
         if (tick % 1000 == 0)
         {
-          push_read(node, MICONTROL_CURRENT_FEEDBACK, now);
+          push_read(node, MICONTROL_TRACTION_RMS_CURRENT, now);
           push_read(node, MICONTROL_ERROR_REGISTER, now);
         }
         auto target = createAndFillMoboticHeader(0x600+node, WRITE_TO_DEVICE, STEERING_PROFILE_VELOCITY_INPUT, 0);

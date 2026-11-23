@@ -18,7 +18,6 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>ros2_socketcan</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
 
   <exec_depend>mobotic_config</exec_depend>
   <export>

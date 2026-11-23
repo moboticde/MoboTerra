@@ -18,6 +18,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ComponentHealthArray.msg"
   "msg/WheelModuleCommandArray.msg"
   "msg/WheelModuleOperationCommand.msg"
+  "msg/BatteryPackState.msg"
   "msg/BatterySystemState.msg"
   "msg/VehicleModeRequest.msg"
   "msg/VehicleModeState.msg"

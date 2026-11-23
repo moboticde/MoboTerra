@@ -37,7 +37,7 @@ tree = ast.parse(source.read_text(encoding='utf-8'))
 cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'VanguardBatteryMonitor')
 cls.bases = []
 cls.body = [node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name != '__init__']
-namespace = dict(math=math, re=re, Time=Time, BatteryState=Message, BatterySystemState=Message,
+namespace = dict(math=math, re=re, Time=Time, BatteryPackState=Message, BatterySystemState=Message,
                  HIGH_VOLTAGE_CONNECTED=1, OPERATIONAL=2,
                  decode_soc=telemetry.decode_soc, decode_electrical=telemetry.decode_electrical,
                  values_valid=telemetry.values_valid)

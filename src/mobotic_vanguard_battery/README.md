@@ -4,10 +4,10 @@ Read-only Vanguard J1939 telemetry monitoring. The node's `can_rx` subscription
 is remapped by both launch files to `battery_can/can_rx`, isolated from drive CAN.
 Publishes:
 
-- `battery/<id>/state` (`sensor_msgs/msg/BatteryState`): individual measurements;
+- `battery/<id>/state` (`mobotic_interfaces/msg/BatteryPackState`): individual measurements;
   `battery1` and `battery2` for the supported four-module profiles.
-- `battery/state` (`sensor_msgs/msg/BatteryState`): compatibility alias for
-  `primary_battery_id` (now `battery1`); it is not an aggregate of both packs.
+- `battery/state` (`mobotic_interfaces/msg/BatteryPackState`): alias for
+  `primary_battery_id` (now `battery1`).
 - `battery/system_state` (`mobotic_interfaces/msg/BatterySystemState`): readiness
   and minimum SOC across the configured internal participants; consumed by the supervisor.
 
@@ -31,6 +31,9 @@ address assignment; do not infer them from the number of packs or the wiring.
 
 Stale/missing/invalid SOC or electrical fields become NaN and block aggregate
 readiness. Stale status marks the participant absent and reports watchdog expiry.
+`BatteryPackState` exposes voltage, current and fractional SOC and omits unsupported
+temperature and amp-hour fields. Update subscribers using the former `sensor_msgs/msg/BatteryState`
+type to `mobotic_interfaces/msg/BatteryPackState`.
 Reserved J1939 values must not appear as valid 100% SOC.
 When `can_rx.header.stamp` is nonzero, each status/SOC/electrical sample retains
 its CAN acquisition time. Delayed romb consumes `telemetry_timeout` (default

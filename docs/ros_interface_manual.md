@@ -57,8 +57,8 @@ not an odometry measurement.
 | `vehicle/measured_velocity` | `geometry_msgs/msg/TwistStamped` | Measured body velocity |
 | `vehicle/odom` | `nav_msgs/msg/Odometry` | Wheel-derived pose, velocity and covariance |
 | `battery/system_state` | `mobotic_interfaces/msg/BatterySystemState` | Aggregate pack readiness, HV, faults and minimum SOC |
-| `battery/<id>/state` | `sensor_msgs/msg/BatteryState` | Individual pack measurements for `battery1` and `battery2` |
-| `battery/state` | `sensor_msgs/msg/BatteryState` | Alias for the primary pack; not the two-pack aggregate |
+| `battery/<id>/state` | `mobotic_interfaces/msg/BatteryPackState` | Individual pack measurements for `battery1` and `battery2` |
+| `battery/state` | `mobotic_interfaces/msg/BatteryPackState` | Alias for the primary pack |
 | `scanner/<location>/scan` | `sensor_msgs/msg/LaserScan` | Laser ranges; locations are `front_left` and `rear_right` |
 | `scanner/<location>/safety_zone_status` | `mobotic_interfaces/msg/ScannerSafetyState` | Direct scanner evaluation-path information and validity |
 | `safety/state` | `mobotic_interfaces/msg/SafetyState` | FlexiSoft monitoring and derived software safety state |
@@ -221,8 +221,12 @@ is wheel-contact m/s. `effort` is empty. Use names to associate array values;
 do not assume a transport array order.
 
 `wheel_modules/status` contains separate steering and traction `DriveStatus`
-records, including actual current in amperes and `current_known`. Native state,
-mode and fault values have their own known/freshness information. Module flags
+records with controller-reported RMS current in amperes and `current_known`.
+The miControl SDO is `0x3113:00` for traction and `0x3262:01` for steering.
+Both values are decoded as signed little-endian milliamperes. Check
+`current_known` and `current_stamp` when consuming these background readings.
+The driver expires current samples after two active diagnostic poll periods.
+Native state, mode and fault values have separate freshness checks. Module flags
 include `startup_pending`, `startup_complete`, `startup_failed`, `position_valid`,
 `feedback_fresh`, `enabled` and reset acknowledgement. A last-known zero fault
 code or `enabled=false` alone is not fresh health or standstill proof.

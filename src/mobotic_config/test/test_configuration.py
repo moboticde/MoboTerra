@@ -348,9 +348,7 @@ class ConfigurationTest(unittest.TestCase):
                     self.assertEqual(len(battery['batteries.' + key]), len(identifiers))
                 self.assertEqual(battery['primary_battery_id'], 'battery1')
                 self.assertEqual(cfg.platform['can']['battery'],
-                                 {'interface': 'can0', 'bitrate': 500000, 'listen_only': False}
-                                 if path == self.cfg.path else
-                                 {'interface': 'can1', 'bitrate': 500000, 'listen_only': True})
+                                 {'interface': 'can0', 'bitrate': 500000, 'listen_only': False})
 
     def test_integrated_and_standalone_battery_launch_follow_selected_pack_count(self):
         for path, identifiers in (

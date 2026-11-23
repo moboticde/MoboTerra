@@ -442,9 +442,12 @@ is not completion. Observe `vehicle/mode` for verified recovery.
 ### PDO-based receiver readiness
 
 The supplied default platform enables `operator.receiver_errors_advisory: true`.
-Receiver EMCYs (including `0x8110` and `0x8150`), current error-register values,
+Receiver EMCYs, current error-register values,
 their clears and CAN-error notifications remain diagnostics. They do not
 invalidate a fresh joystick PDO pair or start an automatic communication reset.
+This policy discards the PAIL `0x8150` EMCY frame when its register byte is `0x11`.
+The independent error-register read still reports the register value, which can
+represent other faults. Strict receiver profiles retain collision handling.
 Malformed or stale diagnostic messages also cannot invalidate the controls.
 The normal PDO acquisition-age limit (250 ms), pair/skew checks, axis validation,
 physical LINK/EMGY/STOP and supervisor/hardware interlocks remain authoritative.

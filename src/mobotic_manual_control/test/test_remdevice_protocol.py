@@ -197,13 +197,25 @@ class FreshnessTest(unittest.TestCase):
         self.pair()
         original = self.rx.snapshot(self.now)
         epoch = self.rx.epoch_ns
-        for code, register in ((0x8110, 0x11), (0x8150, 0x11), (0x6000, 1),
+        for code, register in ((0x8110, 0x11), (0x8150, 0x15), (0x6000, 1),
                                (0x2320, 0x15), (0, 0x11), (0, 0)):
             self.send(self.rx.emergency_id, [code & 255, code >> 8, register, 0, 0, 0, 0, 0], dt=1_000_000)
             self.assertEqual((self.rx.emergency_code, self.rx.emergency_register), (code, register))
             self.assertFalse(self.rx.has_blocking_error())
             self.assertEqual(self.rx.snapshot(self.now), original)
             self.assertEqual(self.rx.epoch_ns, epoch)
+        self.assertIsNone(self.rx.snapshot(original.stamp_ns + 251_000_000))
+
+    def test_pdo_based_policy_ignores_collision_report_without_clearing_other_faults(self):
+        self.rx.errors_advisory = True
+        self.pair()
+        original = self.rx.snapshot(self.now)
+        self.send(self.rx.emergency_id, [0x00, 0x60, 0x01, 0, 0, 0, 0, 0], dt=1_000_000)
+        fault_stamp = self.rx.last_stamps[self.rx.emergency_id]
+        self.send(self.rx.emergency_id, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0], dt=1_000_000)
+        self.assertEqual((self.rx.emergency_code, self.rx.emergency_register), (0x6000, 0x01))
+        self.assertEqual(self.rx.last_stamps[self.rx.emergency_id], fault_stamp)
+        self.assertEqual(self.rx.snapshot(self.now), original)
         self.assertIsNone(self.rx.snapshot(original.stamp_ns + 251_000_000))
 
     def test_pdo_based_policy_ignores_bad_diagnostics_but_rejects_bad_pdos(self):

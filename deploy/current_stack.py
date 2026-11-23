@@ -4,6 +4,7 @@ import argparse
 from contextlib import contextmanager
 import datetime
 import hashlib
+from ipaddress import IPv4Address, IPv4Network
 import re
 import json
 import os
@@ -17,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVICE = 'moboterra-current-stack.service'
 LEGACY_SERVICE = 'moboterra-supervisor.service'
 ENV_FILE = ROOT / 'runtime/docker-stack.env'
-ROBOT_HOST_IPS = {f'192.168.{subnet}.250' for subnet in (1, 2, 3)}
+ROBOT_NETWORK = IPv4Network('192.168.0.0/16')
+SCANNER_SUFFIXES = {'front_left': 5, 'rear_right': 6}
 sys.path[:0] = [str(ROOT / 'src/mobotic_config'), str(ROOT / 'src/mobotic_kinematics')]
 
 
@@ -25,11 +27,14 @@ def run(command, **kwargs):
     return subprocess.run(command, check=True, **kwargs)
 
 
-def configuration():
-    from mobotic_config.configuration import COMPONENT_FILES, Configuration
+def configuration(profile='platform.yaml'):
+    from mobotic_config.configuration import COMPONENT_FILES, Configuration, ConfigurationError
     directory = ROOT / 'src/mobotic_config/config'
-    return Configuration(directory / 'platform.yaml', overrides={
-        component: directory / filename for component, filename in COMPONENT_FILES.items()})
+    try:
+        return Configuration(directory / profile, overrides={
+            component: directory / filename for component, filename in COMPONENT_FILES.items()})
+    except ConfigurationError as error:
+        raise ConfigurationError(f'{directory / profile}: {error}') from error
 
 
 def can_plan(platform):
@@ -79,7 +84,11 @@ def legacy_stopped():
         raise RuntimeError(f'Stop the older deployment first: sudo systemctl stop {LEGACY_SERVICE}')
 
 
-def robot_ethernet_address():
+def is_robot_host_address(address):
+    return address in ROBOT_NETWORK and address.packed[-1] not in (0, 255, *SCANNER_SUFFIXES.values())
+
+
+def robot_ethernet_address(host_ip=None):
     interfaces = json.loads(run(['ip', '-json', '-details', '-4', 'address', 'show', 'up'],
                                 capture_output=True, text=True).stdout)
     matches = []
@@ -90,11 +99,15 @@ def robot_ethernet_address():
                 or not (sysfs / 'device').exists() or (sysfs / 'phy80211').exists()
                 or (sysfs / 'wireless').exists()):
             continue
-        matches.extend((interface, address['local']) for address in info.get('addr_info', [])
-                       if address.get('local') in ROBOT_HOST_IPS)
+        for address in info.get('addr_info', []):
+            local = address.get('local')
+            if (local and is_robot_host_address(IPv4Address(local))
+                    and (host_ip is None or local == host_ip)):
+                matches.append((interface, local))
     if len(matches) > 1:
         candidates = ', '.join(f'{interface}={address}' for interface, address in matches)
-        raise RuntimeError(f'Ambiguous robot Ethernet addresses: {candidates}. Assign exactly one robot address.')
+        raise RuntimeError(f'Ambiguous robot Ethernet addresses: {candidates}. '
+                           'Assign one robot address or select it with MOBOTERRA_ROBOT_HOST_IP.')
     return matches[0] if matches else None
 
 
@@ -130,27 +143,30 @@ def prepare_stack(wait_seconds=60):
     import yaml
     from mobotic_config.configuration import validate_platform
 
+    override = os.environ.get('MOBOTERRA_ROBOT_HOST_IP') or None
+    if override and not is_robot_host_address(IPv4Address(override)):
+        raise ValueError('MOBOTERRA_ROBOT_HOST_IP must be a usable 192.168.x.x scanner host address')
+
     legacy_stopped()
     with stack_stopped():
         deadline = time.monotonic() + wait_seconds
-        selected = robot_ethernet_address()
+        selected = robot_ethernet_address(override)
         while selected is None:
             if time.monotonic() >= deadline:
-                expected = ', '.join(sorted(ROBOT_HOST_IPS))
+                expected = override or 'a usable 192.168.x.x host address'
                 raise RuntimeError(
-                    f'No robot address on a connected wired Ethernet interface. Expected one of: {expected}')
+                    f'No robot address on a connected wired Ethernet interface. Expected {expected}.')
             time.sleep(1)
-            selected = robot_ethernet_address()
+            selected = robot_ethernet_address(override)
         interface, host_ip = selected
         subnet = host_ip.rsplit('.', 1)[0]
         platform = configuration().platform
         platform['scanners']['host_ip'] = host_ip
-        scanner_suffixes = {'front_left': 5, 'rear_right': 6}
         for scanner in platform['scanners']['units']:
-            scanner['sensor_ip'] = f'{subnet}.{scanner_suffixes[scanner["name"]]}'
+            scanner['sensor_ip'] = f'{subnet}.{SCANNER_SUFFIXES[scanner["name"]]}'
         validate_platform(platform)
         prepare_can(can_plan(platform), deadline)
-        if robot_ethernet_address() != selected:
+        if robot_ethernet_address(override) != selected:
             raise RuntimeError('Robot Ethernet address changed during startup. Check the connection and restart.')
         atomic_text(ROOT / 'runtime/platform.yaml', yaml.safe_dump(platform, sort_keys=False))
         print(f'Scanner network selected on {interface} (host {host_ip}, '
@@ -266,6 +282,8 @@ def acquire_image(selected=None, archive=None):
                 run(['docker', 'pull', selected])
         image = selected
     else:
+        for profile in sorted((ROOT / 'src/mobotic_config/config').glob('platform-*.yaml')):
+            configuration(profile.name)
         package = ROOT / 'deploy/vendor/agv_kinematics.deb'
         expected = (package.with_suffix('.deb.sha256')).read_text().split()[0]
         if hashlib.sha256(package.read_bytes()).hexdigest() != expected:

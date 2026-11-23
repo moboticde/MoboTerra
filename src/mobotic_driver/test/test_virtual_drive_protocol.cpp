@@ -245,9 +245,7 @@ void currentModeProtocol()
   {
     const unsigned node = traction ? 2 : 1;
     VirtualDriveProtocol drive(node, traction);
-    auto driver = MoboticDriveCanCommunication("test", node, CURRENT, 4096, 16.0, {});
-    // Steering is identified by its configured position role in the real driver;
-    // use its actual MiControl requests rather than the traction backend above.
+    auto driver = backend(node, traction);
     if (traction)
     {
       reply(drive, driver.setDeviceModeRequest(CURRENT));
@@ -255,8 +253,24 @@ void currentModeProtocol()
     }
     else { write(drive, node, 0x3003, 0, 4, CURRENT); write(drive, node, 0x3004, 0, 4, 1); }
     write(drive, node, 0x3200, 0, 4, static_cast<uint32_t>(-1000));
-    const auto frame = reply(drive, request(node, 0x3262, 1));
-    check(signedIntFromSdoReadReply(frame, 4) == -1000, "repository current command convention must have signed feedback");
+    const auto current_request = driver.readFeedbackRequest(CURRENT_FEEDBACK);
+    check(shortFromFrame(current_request, 1) == (traction ? 0x3113 : 0x3262) &&
+          current_request.data[3] == (traction ? 0 : 1), "current SDO must match the configured drive role");
+    driver.update(reply(drive, request(node, 0x3262, 0)));
+    driver.update(reply(drive, request(node, traction ? 0x3262 : 0x3113, traction ? 1 : 0)));
+    check(std::isnan(driver.motorCurrentAmps()), "other current objects cannot refresh the RMS reading");
+    const auto frame = reply(drive, current_request);
+    driver.update(frame);
+    check(driver.motorCurrentAmps() == -1.0, "signed four-byte RMS feedback converts from mA to A");
+    for (const auto command : {READ_REPLY_2B, READ_REPLY_3B})
+    {
+      auto short_reply = frame;
+      short_reply.data[0] = command;
+      short_reply.data[7] = 0; // Unused bytes need not be sign-extended by the controller.
+      if (command == READ_REPLY_2B) { short_reply.data[6] = 0; }
+      driver.update(short_reply);
+      check(driver.motorCurrentAmps() == -1.0, "shorter signed RMS feedback converts from mA to A");
+    }
     check(read(drive, node, 0x3A04, 1) == 0, "current mode must not invent velocity dynamics");
   }
 }

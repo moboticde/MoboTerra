@@ -49,9 +49,11 @@ int main()
                 "miControl mode bytes match the supplied legacy header");
         for (const auto& action : {drive.changeDeviceStateRequest(ENABLE), drive.clearErrorRequest(CLEAR)})
         { require(action.data[0] == 0x23 && intFromFrame(action, 4) == 1, "miControl state/reset uses four-byte writes"); }
-        require(drive.readFeedbackRequest(CURRENT_FEEDBACK).data[3] == 0 &&
+        const auto current_request = drive.readFeedbackRequest(CURRENT_FEEDBACK);
+        require(shortFromFrame(current_request, 1) == (traction ? 0x3113 : 0x3262) &&
+                current_request.data[3] == (traction ? 0 : 1) &&
                 drive.readFeedbackRequest(VELOCITY_FEEDBACK).data[3] == 1 &&
-                drive.readFeedbackRequest(POSITION_FEEDBACK).data[3] == 0, "miControl legacy feedback subindices");
+                drive.readFeedbackRequest(POSITION_FEEDBACK).data[3] == 0, "miControl feedback objects and subindices");
         if (traction) { require(drive.inputId(VELOCITY) == 0x3300, "miControl ordinary velocity uses 0x3300"); }
         if (current) { require(drive.inputId(CURRENT) == 0x3200, "miControl current uses 0x3200"); }
       }

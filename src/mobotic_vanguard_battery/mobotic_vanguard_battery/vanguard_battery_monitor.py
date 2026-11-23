@@ -5,11 +5,10 @@ from dataclasses import dataclass, field
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from can_msgs.msg import Frame
-from mobotic_interfaces.msg import BatterySystemState
+from mobotic_interfaces.msg import BatteryPackState, BatterySystemState
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.time import Time
-from sensor_msgs.msg import BatteryState
 from .telemetry import decode_soc, decode_electrical, values_valid
 
 
@@ -112,10 +111,10 @@ class VanguardBatteryMonitor(Node):
             self.batteries[identifier] = battery
 
         self.battery_publishers = {
-            identifier: self.create_publisher(BatteryState, f'battery/{identifier}/state', 1)
+            identifier: self.create_publisher(BatteryPackState, f'battery/{identifier}/state', 1)
             for identifier in self.batteries
         }
-        self.primary_publisher = self.create_publisher(BatteryState, 'battery/state', 1)
+        self.primary_publisher = self.create_publisher(BatteryPackState, 'battery/state', 1)
         self.system_state_publisher = self.create_publisher(
             BatterySystemState, 'battery/system_state', 1
         )
@@ -233,37 +232,33 @@ class VanguardBatteryMonitor(Node):
         soc_fresh = self._fresh(battery.soc_stamp, now)
         electrical_fresh = self._fresh(battery.electrical_stamp, now)
 
-        msg = BatteryState()
+        msg = BatteryPackState()
         msg.header.stamp = now.to_msg()
         msg.header.frame_id = battery.identifier
         msg.location = battery.identifier
         msg.voltage = battery.voltage if electrical_fresh else math.nan
         msg.current = battery.current if electrical_fresh else math.nan
         msg.percentage = battery.percentage if soc_fresh else math.nan
-        msg.temperature = math.nan
-        msg.charge = math.nan
-        msg.capacity = math.nan
-        msg.design_capacity = math.nan
-        msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_UNKNOWN
+        msg.power_supply_technology = BatteryPackState.POWER_SUPPLY_TECHNOLOGY_UNKNOWN
         msg.present = status_fresh and battery.high_voltage_status == HIGH_VOLTAGE_CONNECTED
 
         if not status_fresh:
-            msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_WATCHDOG_TIMER_EXPIRE
+            msg.power_supply_health = BatteryPackState.POWER_SUPPLY_HEALTH_WATCHDOG_TIMER_EXPIRE
         elif (self._operational_ready(battery) and not self._charging_inhibited(battery, now)
               and soc_fresh and electrical_fresh
               and values_valid(battery.percentage, battery.voltage, battery.current)):
-            msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_GOOD
+            msg.power_supply_health = BatteryPackState.POWER_SUPPLY_HEALTH_GOOD
         else:
-            msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_UNSPEC_FAILURE
+            msg.power_supply_health = BatteryPackState.POWER_SUPPLY_HEALTH_UNSPEC_FAILURE
 
         if not electrical_fresh or not math.isfinite(battery.current):
-            msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_UNKNOWN
+            msg.power_supply_status = BatteryPackState.POWER_SUPPLY_STATUS_UNKNOWN
         elif battery.current > 0.1:
-            msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
+            msg.power_supply_status = BatteryPackState.POWER_SUPPLY_STATUS_CHARGING
         elif battery.current < -0.1:
-            msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
+            msg.power_supply_status = BatteryPackState.POWER_SUPPLY_STATUS_DISCHARGING
         else:
-            msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING
+            msg.power_supply_status = BatteryPackState.POWER_SUPPLY_STATUS_NOT_CHARGING
         return msg
 
     def _publish(self):

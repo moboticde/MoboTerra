@@ -444,7 +444,7 @@ class RemdeviceControlTest(unittest.TestCase):
         self.pair(); self.pair(speed=255)
         self.state()
         initial_infos = len(infos)
-        for code, register in ((0x8110, 0x11), (0x8150, 0x11), (0x6000, 1), (0, 0)):
+        for code, register in ((0x8110, 0x11), (0x8150, 0x15), (0x6000, 1), (0, 0)):
             stamp = self.node.last_joy_stamp
             count = len(self.node.joy_publisher.messages)
             self.send(0x89, [code & 255, code >> 8, register, 0, 0, 0, 0, 0])
@@ -462,6 +462,18 @@ class RemdeviceControlTest(unittest.TestCase):
         self.assertFalse(self.resets)
         self.assertFalse(warnings)
         self.assertEqual(len(infos), initial_infos)
+
+    def test_pdo_based_policy_omits_collision_report_but_honors_emgy_flag(self):
+        self.node.decoder.errors_advisory = True
+        self.pair(); self.pair(speed=255)
+        self.send(0x89, [0x50, 0x81, 0x11, 0, 0, 0, 0, 0])
+        self.assertTrue(self.state().command_active)
+        raw = json.loads(self.node.raw_publisher.messages[-1].data)
+        self.assertEqual((raw['receiver_error_code'], raw['receiver_error_register']), (0, 0))
+        self.pair(status=0x20)
+        state = self.state()
+        self.assertFalse(state.connected or state.command_active)
+        self.assertIn('receiver link/EMGY unavailable', state.status_message)
 
     def test_pdo_based_policy_register_errors_never_reset_healthy_receiver(self):
         self.node.decoder.errors_advisory = True

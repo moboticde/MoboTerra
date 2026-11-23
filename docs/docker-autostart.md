@@ -103,13 +103,15 @@ package repositories to install missing host prerequisites.
 ## Boot and shutdown behavior
 
 Systemd waits for Docker and network-online. Before launching Compose, the
-preflight looks for exactly one of `192.168.1.250`, `192.168.2.250`, or
-`192.168.3.250` on a connected physical Ethernet interface. It uses that
+preflight looks for one `192.168.x.x` host address on connected physical
+Ethernet. The `.0`, `.5`, `.6`, and `.255` addresses are reserved. It uses the selected
 address for the scanner host and the corresponding subnet's `.5` and `.6`
 for the front-left and rear-right scanners. Compose mounts the generated
 `runtime/platform.yaml`. The Ethernet and CAN checks share a 60-second
-timeout. Multiple matching IPs or an address change during startup stop the
-launch. Installing with `--no-start` works with the robot disconnected.
+timeout. If more than one address matches, set `MOBOTERRA_ROBOT_HOST_IP` in the
+systemd service environment to select the robot-facing address. An address
+change during startup stops the launch. Installing with `--no-start` works
+with the robot disconnected.
 
 The CAN preflight configures DOWN links at the active profile's
 bitrate/listen-only setting and brings them UP with bus-off restart disabled.

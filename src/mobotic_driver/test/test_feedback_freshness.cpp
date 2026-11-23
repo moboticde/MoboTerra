@@ -62,7 +62,7 @@ TEST(FeedbackFreshness, HeartbeatsCurrentAndUnrelatedSdosDoNotRenewMotion)
   const auto motion_generation = drive.feedbackFreshness().generation(FeedbackFreshness::VELOCITY);
   drive.update(createHeartbeatFrame(drive.rawCanNodeID()), later);
   drive.update(reply(drive, 0x2086, 0, 1), later);
-  auto current = reply(drive, CURRENT_FEEDBACK, 0, 0);
+  auto current = reply(drive, MICONTROL_TRACTION_RMS_CURRENT, 0, 0);
   drive.update(current, later);
   EXPECT_FALSE(ready(drive, later));
   EXPECT_EQ(drive.feedbackFreshness().generation(FeedbackFreshness::VELOCITY), motion_generation);

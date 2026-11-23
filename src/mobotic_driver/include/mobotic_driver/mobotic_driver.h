@@ -55,6 +55,7 @@ private:
                              const std::vector<std::string>& steering_drives,
                              const std::vector<std::string>& traction_drives);
   void publishWheelModuleStatus(const rclcpp::Time& stamp);
+  double activeDiagnosticPollPeriod() const;
   void enforceManagementLease();
   void modeStateCallback(const mobotic_interfaces::msg::VehicleModeState& msg);
   void enforceModeAuthority();

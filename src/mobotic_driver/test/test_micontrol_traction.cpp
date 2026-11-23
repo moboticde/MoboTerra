@@ -92,10 +92,11 @@ int main(int argc, char** argv)
             intFromFrame(mode_request, 4) == 3, "legacy four-byte mode command");
     for (const auto& request : {backend.changeDeviceStateRequest(ENABLE), backend.clearErrorRequest(CLEAR)})
     { require(request.data[0] == 0x23 && intFromFrame(request, 4) == 1, "legacy four-byte enable/reset command"); }
-    require(backend.readFeedbackRequest(CURRENT_FEEDBACK).data[3] == 0 &&
+    const auto current_request = backend.readFeedbackRequest(CURRENT_FEEDBACK);
+    require(shortFromFrame(current_request, 1) == 0x3113 && current_request.data[3] == 0 &&
             backend.readFeedbackRequest(VELOCITY_FEEDBACK).data[3] == 1 &&
             backend.readFeedbackRequest(POSITION_FEEDBACK).data[3] == 0,
-            "legacy current, velocity and position subindices");
+            "traction feedback objects and subindices");
     bool unsupported_rejected = false;
     try { MoboticDriveCanCommunication unsupported("traction", 4, VELOCITY, 4096, 16, limits, "elmo"); }
     catch (const std::invalid_argument&) { unsupported_rejected = true; }
@@ -301,7 +302,7 @@ int main(int argc, char** argv)
       return std::count_if(transmitted.begin() + begin, transmitted.end(), [](const Frame& frame) {
         if (frame.id < 0x601 || frame.id > 0x608 || frame.data[0] != READ_FROM_DEVICE) { return false; }
         const auto index = static_cast<uint16_t>(shortFromFrame(frame, 1));
-        return index == 0x3762 || index == 0x3A04 || index == 0x3262;
+        return index == 0x3762 || index == 0x3A04 || index == 0x3262 || index == 0x3113;
       });
     };
     spin_until([] { return false; }, .4);
@@ -634,6 +635,8 @@ int main(int argc, char** argv)
       spin_until([] { return false; }, .4);
       const auto begin = transmitted.size();
       const auto healthy_drops = sender ? sender->droppedFrames() : 0;
+      auto current_window_start = std::chrono::steady_clock::now();
+      double longest_current_window = 0.0;
       spin_until([&] {
         if (!all([](const auto& m) {
           return m.enabled && m.startup_complete && m.feedback_fresh && m.position_valid &&
@@ -655,8 +658,19 @@ int main(int argc, char** argv)
         require(joint_stamp > 0 &&
             (bus->now().nanoseconds() - joint_stamp) < 300'000'000,
             "coherent JointState must stay within the unchanged 300 ms deadline");
+        const auto now = std::chrono::steady_clock::now();
+        if (all([](const auto& m) {
+          return m.steering.current_known && std::isfinite(m.steering.motor_current) &&
+                 m.traction.current_known && std::isfinite(m.traction.motor_current);
+        }))
+        {
+          const double window = std::chrono::duration<double>(now - current_window_start).count();
+          longest_current_window = std::max(longest_current_window, window);
+        }
+        else { current_window_start = now; }
         return false;
       }, 60);
+      require(longest_current_window >= 2.0, "all drive currents must remain valid between diagnostic polls");
       std::map<std::pair<unsigned, unsigned>, std::chrono::steady_clock::time_point> previous;
       double maximum_native_gap_ms = 0, maximum_fault_gap_ms = 0;
       for (auto i = begin; i < transmitted.size(); ++i)
@@ -678,11 +692,15 @@ int main(int argc, char** argv)
               "all eight actual-state and mode streams retain the unchanged deadline");
       require(!sender || sender->droppedFrames() == healthy_drops,
               "healthy sustained feedback must not lose requests at the final queue");
-      require(count_native_reads(begin, 0x3262) >= 8 && count_native_reads(begin, 0x3262) <= 400,
+      const auto steering_current_reads = count_native_reads(begin, 0x3262);
+      const auto traction_current_reads = count_native_reads(begin, 0x3113);
+      require(steering_current_reads >= 4 && traction_current_reads >= 4 &&
+              steering_current_reads + traction_current_reads <= 400,
               "optional current reads stay at the diagnostic rate during enabled operation");
       std::cout << "SUSTAINED_FRESHNESS_SAMPLE seconds=60 reply_delay_ms=" << reply_delay_ms
                 << " max_native_gap_ms=" << maximum_native_gap_ms
-                << " max_fault_gap_ms=" << maximum_fault_gap_ms << " current_reads=" << count_native_reads(begin, 0x3262) << '\n';
+                << " max_fault_gap_ms=" << maximum_fault_gap_ms
+                << " current_reads=" << steering_current_reads + traction_current_reads << '\n';
       rclcpp::shutdown();
       return 0;
     }
