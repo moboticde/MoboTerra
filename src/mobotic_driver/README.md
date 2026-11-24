@@ -128,13 +128,11 @@ Hardware timing, units and stop behavior still require commissioning.
 
 ## Steering alignment on B2 enable
 
-The active physical profile restores `steering_align_on_enable: true`. B2
-clears/initializes/enables the controllers and aligns steering to its nearest
-full-turn home at 1.2 rad/s, with traction held at zero. This uses the existing
-encoder zero; it does not search for a home sensor or redefine the reference.
-The configured manual policy also returns steering home on fresh neutral input,
-after new complete feedback confirms traction standstill. Normal joystick
-steering remains 0.3 rad/s; fresh stick motion cancels the neutral return.
+The active physical profile sets `steering_align_on_enable: false`. B2
+clears, initializes and enables the controllers at their measured steering
+angles. The configured manual policy returns steering home on fresh neutral
+input after new complete feedback confirms traction standstill. Normal joystick
+steering runs at 0.3 rad/s. Fresh stick motion cancels the neutral return.
 
 `steering_align_on_enable` opts a physical profile into bounded nearest-home
 alignment during each supervisor-authorized B2 recovery. Each steering target is
@@ -147,10 +145,13 @@ unrepresentable nearest target aborts recovery instead of choosing a longer move
 This never writes an encoder origin, searches for a home sensor, or saves
 controller settings. Verify the configured position scale and physical home.
 
-Traction remains zero and `startup_pending` stays true until all steering actual
-positions are within one degree of their selected home (or a finer one-count tolerance) and fresh
-steering velocities confirm standstill. The supervisor then completes its normal sustained
-standstill proof before accepting fresh joystick motion. Controls must be neutral
+Traction remains zero and `startup_pending` stays true while steering moves home.
+Alignment completes when fresh feedback confirms that all steering units are stationary
+within one degree of home (or a finer one-count tolerance). If steering times out
+after the controllers acknowledged the homing targets, the driver cancels the move.
+It can continue recovery at the measured steering positions once the controllers
+acknowledge the steering stop and fresh feedback confirms standstill. The supervisor
+then verifies sustained standstill before accepting fresh joystick motion. Controls must be neutral
 to request recovery; subsequent stick movement is ignored until recovery ends.
 Return to neutral afterward for fresh rearm. Defaults are `steering_alignment_velocity: 0.6` rad/s and
 `steering_alignment_timeout: 12.5` s, allowing a half-turn at 0.6 rad/s. The
@@ -159,10 +160,10 @@ velocity is bounded by each motor native RPM limit and the timeout must fit with
 changes do not request this B2 alignment phase.
 
 Fresh management/authority and a matching reset transaction authorize the phase.
-A safety stop, lost lease/authority, stale drive feedback, traction movement, or
-an alignment timeout aborts it and disables all drives; a new B2 recovery is
-required. The driver logs alignment start/completion and exposes the pending
-phase in wheel-module status.
+A safety stop, lost lease or authority, stale drive feedback, traction movement
+during homing, or a failure to confirm the stop before the startup deadline
+disables all drives and requires a new B2 recovery. The driver logs alignment
+start, completion and timeout, and exposes the pending phase in wheel-module status.
 
 
 Traction `JointState.velocity` and final `traction_velocity` use contact m/s;

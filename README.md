@@ -51,8 +51,8 @@ sudo moboterra-ctl start
 At boot the service prepares the configured CAN link and launches the current
 hardware stack without RViz. It does not press B2 or enable the drives on the
 operator's behalf. Normal enable and recovery require a new B2 press with neutral
-controls and the required readiness conditions. Steering alignment can move the
-steering wheels during enable; traction remains zero during that sequence.
+controls and the required readiness conditions. B2 enables at the measured
+steering angles. Neutral controls can return steering home after recovery.
 
 Use the [Docker installation guide](docs/docker-autostart.md) for prerequisites,
 bundled image contents, failure behavior and target acceptance checks. Windows Docker

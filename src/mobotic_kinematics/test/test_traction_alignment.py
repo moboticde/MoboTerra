@@ -1,4 +1,4 @@
-"""Measured steering alignment must bound the complete manual traction batch."""
+"""Manual traction and steering correction during off-angle motion."""
 import math
 from types import SimpleNamespace
 
@@ -14,9 +14,9 @@ def stamped(candidate, seconds):
     return candidate
 
 
-@pytest.mark.parametrize('error, fraction', [(0., 1.), (4., 1.), (6., 1.), (18., .5), (30., 0.), (90., 0.)])
+@pytest.mark.parametrize('error', [0., 18., 30., 31., 90.])
 @pytest.mark.parametrize('direction', [-1., 1.])
-def test_worst_wheel_sets_one_common_fraction_with_mounting_signs(error, fraction, direction):
+def test_steering_error_keeps_requested_traction_and_mounting_signs(error, direction):
     g = geometry()
     g['wheel_mount_angles'] = [0., math.pi, 0., math.pi]
     p = ManualSteering(g)
@@ -24,7 +24,7 @@ def test_worst_wheel_sets_one_common_fraction_with_mounting_signs(error, fractio
     candidate = model(g, body)
     feedback = sample(g, [-math.radians(error), 0., 0., 0.])
     out = p.align(candidate, feedback, body)
-    assert out.velocity[4:] == pytest.approx([direction*.4*fraction, -direction*.4*fraction]*2)
+    assert out.velocity[4:] == pytest.approx([direction*.4, -direction*.4]*2)
     assert out.velocity[0] == (.3 if error else 0.)
     assert out.velocity[1:4] == [0.]*3
 
@@ -41,7 +41,7 @@ def test_unequal_turning_speeds_keep_their_ratios_under_one_lagging_wheel():
     out = p.align(candidate, feedback, body)
     expected = full_traction(g, body, out.position[:4])
     assert len({round(abs(v), 4) for v in expected}) > 1
-    assert out.velocity[4:] == pytest.approx([v*.5 for v in expected], abs=3e-5)
+    assert out.velocity[4:] == pytest.approx(expected, abs=3e-5)
     assert out.velocity[:4] == [0., 0., .3, 0.]
 
 
@@ -59,12 +59,16 @@ def test_121_unit_feedback_compares_the_reachable_native_target():
     feedback.position[:4] = [a+2*unit for a in native]
     out = p.align(candidate, feedback, body)
     assert out.velocity[4:] == pytest.approx(full_traction(g, body, out.position[:4]), abs=3e-5)
-    assert out.velocity[:4] == [.3]*4  # Position correction is finer than the traction threshold.
-    feedback.position[0] = native[0]+11*unit  # More than 30 degrees on just one wheel.
-    assert p.align(candidate, feedback, body).velocity[4:] == [0.]*4
+    assert out.velocity[:4] == [.3]*4
+    feedback.position[:4] = native
+    assert p.align(candidate, feedback, body).velocity[:4] == [0.]*4
+    feedback.position[0] += 11*unit  # More than 30 degrees on one wheel.
+    out = p.align(candidate, feedback, body)
+    assert out.velocity[:4] == [.3, 0., 0., 0.]
+    assert out.velocity[4:] == pytest.approx(full_traction(g, body, out.position[:4]), abs=3e-5)
 
 
-def test_one_stalled_steering_wheel_holds_all_traction():
+def test_traction_remains_available_with_one_stalled_steering_wheel():
     g = geometry()
     p = ManualSteering(g)
     body = (0., .4, 0.)
@@ -72,49 +76,43 @@ def test_one_stalled_steering_wheel_holds_all_traction():
     feedback = sample(g, [0.]*4)
     for _ in range(150):
         out = p.align(candidate, feedback, body)
-        assert out.velocity[4:] == [0.]*4
+        assert out.velocity[4:] == pytest.approx(full_traction(g, body, out.position[:4]), abs=3e-5)
         for k in range(1, 4):
             error = out.position[k] - feedback.position[k]
             feedback.position[k] += max(-.3*.05, min(.3*.05, error))
     assert out.velocity[:4] == [.3, 0., 0., 0.]
 
 
-def test_held_full_speed_request_recovers_from_zero_without_windup():
+def test_held_full_speed_request_obeys_acceleration_with_stalled_steering():
     g = geometry()
     g['max_acceleration_linear'] = .5
     p = ManualSteering(g)
     body = (0., 2., 0.)
     candidate = model(g, body)
     feedback = sample(g, [0.]*4)
-    for k in range(40):
-        out = p.align(stamped(candidate, 100+k*.05), feedback, body)
-        assert out.velocity[4:] == [0.]*4
-    feedback.position[:4] = out.position[:4]
     previous = 0.
-    for k in range(40, 140):
+    for k in range(100):
         out = p.align(stamped(candidate, 100+k*.05), feedback, body)
         peak = max(map(abs, out.velocity[4:]))
         assert 0 <= peak-previous <= .025+1e-10
         assert out.velocity[4:] == pytest.approx([peak, -peak, peak, -peak])
         previous = peak
     assert previous == pytest.approx(2.)
-    # A new large error cuts traction even after the ramp has reached full speed.
-    feedback.position[0] -= math.radians(45.)
-    assert p.align(stamped(candidate, 107.), feedback, body).velocity[4:] == [0.]*4
+    assert out.velocity[:4] == [.3]*4
 
 
-def test_partial_alignment_does_not_repeatedly_shrink_the_ramp():
+def test_steering_feedback_and_duplicate_samples_do_not_change_the_ramp():
     g = geometry()
     g['max_acceleration_linear'] = .5
     p = ManualSteering(g)
     body = (2., 0., 0.)
     candidate = model(g, body)
     feedback = sample(g, [-math.radians(18.), 0., 0., 0.])
-    for k in range(100):
+    for k in range(41):
         out = p.align(stamped(candidate, 100+k*.05), feedback, body)
     assert max(map(abs, out.velocity[4:])) == pytest.approx(1.)
     feedback.position[0] = 0.
-    out = p.align(stamped(candidate, 105.), feedback, body)
+    out = p.align(stamped(candidate, 102.05), feedback, body)
     assert max(map(abs, out.velocity[4:])) == pytest.approx(1.025)
     # Duplicate samples cannot create extra acceleration allowance.
     for _ in range(10):
@@ -154,7 +152,7 @@ def test_boost_changes_only_the_moving_steering_profile_and_releases_immediately
     for boost in (False, True, True, False):
         out = p.align(candidate, feedback, body, boost=boost)
         assert out.velocity[:4] == ([.6]*4 if boost else [.3]*4)
-        assert out.velocity[4:] == [0.]*4  # B1 does not bypass the alignment gate.
+        assert out.velocity[4:] == pytest.approx(full_traction(g, body, out.position[:4]), abs=3e-5)
         if targets is not None:
             assert out.position == targets
         targets = out.position

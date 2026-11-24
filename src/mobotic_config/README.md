@@ -39,7 +39,7 @@ The defaults preserve the commissioned four-module layout (1.69 m / 0.99 m,
 0.325 m radius, 42:1 traction reduction), shared CAN0 drive/battery traffic, master node 11, node-10
 REMdevice mapping and the actual scanner addresses. Driver feedback/heartbeat
 periods are 0.1 s, supervisor/operator periods are 0.05 s, manual linear scaling
-is 0.5, and B2 steering alignment uses 1.2 rad/s. Raw traction profile values are preserved commissioning
+is 0.5, and neutral return-to-home uses 1.2 rad/s. Raw traction profile values are preserved commissioning
 settings, not automatically recalculated from a geometry edit. Recalibrate them
 when changing gearing, resolution or tyre dimensions. Software ceilings must fit
 the controller's raw velocity/current ceilings.
@@ -251,5 +251,5 @@ It defaults to false for existing profiles. `steering_neutral_home_velocity`
 defaults to normal steering speed; the active robot enables neutral return at
 1.2 rad/s while normal joystick steering stays at 0.3 rad/s. The driver command
 ceiling includes the homing speed, validated against every steering controller's
-native RPM bounds. B2 startup alignment is separately enabled by
-`driver.steering_align_on_enable`; the active physical override restores it.
+native RPM bounds. `driver.steering_align_on_enable` optionally requests B2
+startup alignment. The active physical profile enables at measured angles.

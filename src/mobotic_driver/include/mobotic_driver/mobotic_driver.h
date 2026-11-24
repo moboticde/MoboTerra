@@ -120,7 +120,7 @@ private:
   bool controller_control_started_{false};
   DriveStartup startup_;
   double startup_timeout_{15.0};
-  enum class SteeringAlignment { IDLE, WAITING, MOVING, COMPLETE };
+  enum class SteeringAlignment { IDLE, WAITING, MOVING, STOPPING, COMPLETE };
   SteeringAlignment steering_alignment_{SteeringAlignment::IDLE};
   bool steering_align_on_enable_{false};
   double steering_alignment_velocity_{0.6}, steering_alignment_timeout_{12.5};

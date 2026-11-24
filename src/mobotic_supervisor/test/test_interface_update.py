@@ -232,7 +232,7 @@ class InterfaceUpdateTest(unittest.TestCase):
                 self.node._kinematics_candidate_callback(msg)
                 output = self.node.final_command_publisher.messages[-1]
                 self.assertEqual([m.steering_profile_velocity for m in output.modules], [expected]*2)
-                self.assertEqual([m.traction_velocity for m in output.modules], [0.]*2)
+                self.assertEqual([m.traction_velocity for m in output.modules], [.3]*2)
 
     def neutral_candidate(self, purpose=None):
         msg = self.joints()

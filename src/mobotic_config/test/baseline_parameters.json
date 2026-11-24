@@ -183,7 +183,7 @@
     "sample_skew_budget": 0.005,
     "startup_timeout": 15.0,
     "status_feedback_timeout": 0.35,
-    "steering_align_on_enable": true,
+    "steering_align_on_enable": false,
     "steering_alignment_timeout": 12.5,
     "steering_alignment_velocity": 1.2,
     "supervisor_timeout": 0.3,

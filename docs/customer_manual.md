@@ -164,7 +164,7 @@ approved START and STOP procedure. Keep the driving controls neutral.
    correct the reported blocker. A normal waiting state includes `B2_ENABLE_REQUIRED`.
 2. With controls neutral and readiness restored, release B2 and press it once.
    A button held at launch or reconnection is not a new enable request.
-3. Wait for initialization, steering alignment and feedback validation to finish.
+3. Wait for initialization and feedback validation to finish.
    Traction remains zero during recovery. Observe `reset_in_progress`,
    `drives_enabled`, `ready_to_drive`, `motion_permitted` and `reason_codes`.
 4. Apply a new manual command only after recovery completes and the intended

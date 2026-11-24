@@ -382,7 +382,7 @@ def test_homing_diagnostic_channel_only_applies_to_active_recovery(node):
     assert not node._operator()  # never grants joystick motion
 
 
-def test_final_manual_command_holds_traction_during_a_large_turn(node):
+def test_final_manual_command_applies_traction_during_a_large_turn(node):
     import math
     from mobotic_kinematics.manual_steering import ManualSteering
     node.steering_policy=ManualSteering({'wheels_x':[1.], 'wheels_y':[.5],
@@ -397,7 +397,7 @@ def test_final_manual_command_holds_traction_during_a_large_turn(node):
     joints.velocity=[.3,.1]
     node._candidate(joints)
     final=node.command_pub.publish.call_args.args[0].modules[0]
-    assert final.traction_velocity==0. and final.steering_profile_velocity==.3
+    assert final.traction_velocity==.1 and final.steering_profile_velocity==.3
     assert final.steering_position==math.pi/4
 
 
@@ -541,7 +541,7 @@ def test_manual_only_neutral_homing_uses_faster_profile_with_zero_traction(node)
             assert result.steering_position == 0.
 
 
-def test_alignment_hold_and_accelerated_recovery_reach_the_final_manual_command(node):
+def test_traction_acceleration_applies_before_and_after_steering_alignment(node):
     from mobotic_kinematics.manual_steering import ManualSteering
     node.steering_policy = ManualSteering({
         'wheels_x': [.845], 'wheels_y': [.495],
@@ -550,7 +550,6 @@ def test_alignment_hold_and_accelerated_recovery_reach_the_final_manual_command(
         'wheel_mount_angles': [0.], 'max_steering_velocity': .3,
         'steering_position_resolutions': [121.], 'max_acceleration_linear': .5})
     node.phase = 'enabled'
-    previous = 0.
     for k in range(10):
         node.test_now = 100.+k*.05
         joints = seed(node, True)
@@ -567,13 +566,8 @@ def test_alignment_hold_and_accelerated_recovery_reach_the_final_manual_command(
         node._candidate(candidate)
         command = node.command_pub.publish.call_args.args[0].modules[0]
         assert command.steering_position == pytest.approx(math.pi/2)
-        if k < 4:
-            assert command.traction_velocity == 0.
-            assert command.steering_profile_velocity == .3
-        else:
-            assert command.steering_profile_velocity == 0.
-            assert command.traction_velocity == pytest.approx(previous+.025)
-        previous = command.traction_velocity
+        assert command.steering_profile_velocity == (.3 if k < 4 else 0.)
+        assert command.traction_velocity == pytest.approx(k*.025)
     assert node.phase == 'enabled'
     # Fresh candidate alone cannot bypass stale measured steering feedback.
     node.test_now += .05
@@ -587,7 +581,7 @@ def test_alignment_hold_and_accelerated_recovery_reach_the_final_manual_command(
     assert node.command_pub.publish.call_count == count
 
 
-def test_b1_steering_boost_is_held_and_does_not_bypass_traction_alignment(node):
+def test_b1_steering_boost_changes_only_the_steering_profile(node):
     from mobotic_kinematics.manual_steering import ManualSteering
     node.max_steering_velocity = .3
     node.steering_policy = ManualSteering({
@@ -611,5 +605,5 @@ def test_b1_steering_boost_is_held_and_does_not_bypass_traction_alignment(node):
         node._candidate(candidate)
         final = node.command_pub.publish.call_args.args[0].modules[0]
         assert final.steering_profile_velocity == (.6 if boost else .3)
-        assert final.traction_velocity == 0.
+        assert final.traction_velocity == .1
         assert final.steering_position == pytest.approx(math.pi/2)

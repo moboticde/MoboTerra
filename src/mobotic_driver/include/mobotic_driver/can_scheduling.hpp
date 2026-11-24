@@ -157,6 +157,14 @@ public:
         std::any_of(queue_.begin(), queue_.end(), [](const Entry& e) { return nativeRead(e.frame); });
   }
 
+  bool steeringStopAcknowledged() const
+  {
+    const auto profile = acknowledged_targets_.find(STEERING_PROFILE_VELOCITY_INPUT);
+    const auto update = acknowledged_targets_.find(MICONTROL_CLEAR_ERROR_STATUS);
+    return profile != acknowledged_targets_.end() && zeroMotionCommand(profile->second.frame) &&
+        update != acknowledged_targets_.end() && profileUpdate(update->second.frame);
+  }
+
   std::optional<can_msgs::msg::Frame> next(double write_timeout, Clock::time_point now = Clock::now(),
       int64_t stamp_ns = 0, bool motion_phase = false, bool native_enable_fresh = true)
   {

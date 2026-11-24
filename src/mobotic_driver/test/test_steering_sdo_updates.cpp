@@ -90,11 +90,17 @@ void ordering()
   position_frame = short_restart.next(.1, start + 1ms); acknowledge(short_restart, *position_frame);
   short_restart.push(make(3, STEERING_PROFILE_VELOCITY_INPUT), start + 2ms);
   short_restart.push(make(3, MICONTROL_CLEAR_ERROR_STATUS, 5), start + 2ms);
-  for (unsigned slot=0; slot<2; ++slot)
-  { auto stop = short_restart.next(.1, start + std::chrono::milliseconds(3+slot));
-    require(stop.has_value(), "short stop applies zero and Update"); acknowledge(short_restart, *stop); }
+  const auto zero = short_restart.next(.1, start + 3ms);
+  require(zero && object(*zero) == STEERING_PROFILE_VELOCITY_INPUT, "stop writes the zero profile first");
+  acknowledge(short_restart, *zero);
+  require(!short_restart.steeringStopAcknowledged(), "the zero profile alone does not prove a stop");
+  const auto update = short_restart.next(.1, start + 4ms);
+  require(update && object(*update) == MICONTROL_CLEAR_ERROR_STATUS, "stop applies the zero profile with Update");
+  acknowledge(short_restart, *update);
+  require(short_restart.steeringStopAcknowledged(), "zero profile and Update acknowledgements prove a stop");
   admit(short_restart, profile, target, start + 6ms);
   speed_frame = short_restart.next(.1, start + 6ms); acknowledge(short_restart, *speed_frame);
+  require(!short_restart.steeringStopAcknowledged(), "a new positive profile revokes the stop proof");
   admit(short_restart, profile, target, start + 7ms);
   position_frame = short_restart.next(.1, start + 8ms);
   require(position_frame && object(*position_frame) == ABSOLUTE_POSITION_INPUT,

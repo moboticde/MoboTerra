@@ -3,7 +3,7 @@
 The updated contract is [supervisor_interfaces.md](supervisor_interfaces.md).
 Physical startup waits for a new B2 request and external supervisor readiness,
 configures miControl modes through SDOs and enables with zero traction before
-requiring complete position/velocity feedback and steering alignment. Installed
+requiring complete position/velocity feedback and sustained standstill. Installed
 ramps and drive PDO mappings remain unchanged. Startup is bounded and
 cancelled on lost permission. No external encoder-reference recovery is required.
 See [drive startup and B2 recovery](drive_startup.md). The durable recovery helper

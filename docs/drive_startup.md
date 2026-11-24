@@ -73,20 +73,19 @@ neither the supervisor nor the physical driver requires them to start enable.
 All position access remains through CANopen, with no direct encoder connection,
 reference-zeroing or external retained-reference prerequisite.
 
-The active physical profile sets `steering_align_on_enable: true`. Initialization
-clears faults and selects modes, then enable aligns steering to the nearest
-full-turn equivalent of the existing zero at 1.2 rad/s. Traction remains zero
-throughout recovery. Fresh neutral joystick input also returns steering home,
-after newer complete feedback shows traction standstill. The target is frozen
-for that neutral period; moving the stick cancels the return. Safety stops,
-stale input and inhibited motion hold measured angles instead of homing.
+The active physical profile sets `steering_align_on_enable: false`. Initialization
+clears faults and selects modes, then enables at the measured steering angles.
+Traction remains zero throughout recovery. In manual mode, fresh neutral joystick
+input returns steering home after newer complete feedback shows traction standstill.
+The target is frozen for that neutral period. Moving the stick cancels the return.
+Safety stops, stale input and motion inhibition hold the measured steering angles.
 
 1. Before supervisor permission, the driver sends only state/fault SDO reads and
    its master heartbeat. It publishes truthful missing-feedback status.
 2. The supervisor checks fresh battery readiness/HV and valid SOC, the configured operator
    interlock, host health when required, and the applicable safety/STO conditions.
    A fresh B2 press with neutral controls authorizes controller initialization
-   and steering alignment with zero traction; external readiness returning alone cannot enable drives.
+   with zero traction. External readiness returning alone cannot enable drives.
 3. Once authorized, the driver disables and zeros targets, clears initial errors,
    and selects the configured native steering/traction modes using SDOs. Mode
    writes require matching readback; reset/disable/zero actions require acknowledgement.
@@ -94,16 +93,20 @@ stale input and inhibited motion hold measured angles instead of homing.
 4. The driver requests miControl software enable (`3004:0`) with zero traction
    and zero steering profile velocity. Actual enable is read from `3002:0` bit 0.
 5. Enabled controllers supply position (`3762:0`), velocity (`3A04:1`), native
-   status/mode and faults through serialized SDO reads. Fresh complete feedback
-   supplies the nearest-home alignment targets. Startup completes after steering
-   reaches home and the normal sustained standstill proof succeeds.
+   status/mode and faults through serialized SDO reads. The supervisor requires
+   fresh complete feedback and sustained standstill before accepting motion.
+
+Profiles that opt into B2 steering alignment use fresh feedback to select
+nearest-home targets. If alignment times out, recovery can finish at the
+measured angles after the driver verifies acknowledgement of the homing targets,
+application of the steering stop, and standstill from fresh feedback.
 
 No drive PDO mapping, NMT setup or SYNC cycle is generated. Unsolicited PDOs
 cannot update feedback or freshness. Both transport compatibility flags,
 `traction_pdo_enabled` and `telemetry_pdo_enabled`, must be false.
 
 The initial attempt is bounded by `driver.startup_timeout` (15 s, steady clock).
-Missing replies, failed configuration readback, timeout or lost supervisor
+Missing replies, failed configuration readback, a startup timeout or lost supervisor
 permission cancel pending initialization and request stop/disable through native SDOs. Failure is reported through
 `WheelModuleStatus.startup_failed`. Native status/fault polling continues after
 failure. An explicit B2 enable press may clear faults using fresh disabled-drive

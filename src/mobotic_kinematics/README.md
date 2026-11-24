@@ -69,14 +69,12 @@ authorities select boost from fresh, connected, active operator state and restor
 normal speed on release. Profiles without this setting retain normal steering
 speed during boost. Native motor RPM limits also bound the boost setting.
 
-Manual traction uses one scale from the largest measured steering error across
-all wheels: full speed through 6 degrees, linearly reduced from 6 to 30 degrees,
-and zero at 30 degrees or more while steering continues. Errors use the reachable
-native target. One lagging wheel reduces the whole batch, preserving wheel-speed
-ratios and mounting signs. Recovery starts from the last emitted wheel-speed peak
-and uses the platform's existing linear acceleration limit and candidate timestamps;
-duplicate samples add no acceleration allowance. Neutral and authority resets
-clear this ramp. Both supervised and manual-only authorities use this policy.
+Manual traction can move while steering corrects toward the reachable native
+target. The traction ramp starts from the last emitted wheel-speed peak and uses
+the platform's linear acceleration limit and candidate timestamps. It preserves
+wheel-speed ratios and mounting signs. Duplicate samples add no acceleration
+allowance. Neutral and authority resets clear the ramp. Both supervised and
+manual-only authorities use this policy.
 
 Topics remain:
 

@@ -127,6 +127,8 @@ int main(int argc, char** argv)
     });
     if (software_enable_diagnostics)
     { options.append_parameter_override("software_enable_diagnostics", true); }
+    if (align_on_enable)
+    { options.append_parameter_override("startup_timeout", 5.0); }
     if (sdo_only)
     {
       auto impossible = options;
@@ -163,6 +165,7 @@ int main(int argc, char** argv)
     std::map<unsigned, bool> software_enable_readback;
     bool inject_overspeed = false, reject_current_mode = false;
     bool drop_motion_sdos = false, ignore_enable_writes = false;
+    bool drop_steering_stop_ack = false, steering_stop_ack_dropped = false;
     // Fault injection affects one drive only: the complete enable batch must
     // wait for every member, even if all other cached observations look ready.
     unsigned enable_reply_fault = 0;
@@ -220,6 +223,9 @@ int main(int argc, char** argv)
           if ((probe_mode && enable_reply_fault == 1) || (probe_state && enable_reply_fault == 2)) { continue; }
           if (drop_motion_sdos && frame.id == 0x600 + node && frame.data[0] == READ_FROM_DEVICE &&
               (index == 0x3762 || index == 0x3A04)) { continue; }
+          if (drop_steering_stop_ack && node == 5 && frame.id == 0x605 && frame.data[0] != READ_FROM_DEVICE &&
+              index == MICONTROL_CLEAR_ERROR_STATUS && intFromFrame(frame, 4) == 5)
+          { steering_stop_ack_dropped = true; continue; }
           if (reply.id < 0x580 && !controller.enabled()) { continue; }
           if (inject_overspeed && node % 2 == 0 && reply.id == 0x180 + node && reply.dlc == 8)
           { intToFrame(reply, 4, 5000); }
@@ -442,13 +448,15 @@ int main(int argc, char** argv)
             ticksToAngle(home_targets.at(nodes[i]), 4096)) <= 2 * M_PI / 4096,
             "fresh steering feedback confirms the selected multi-turn home");
       }
-      // Every later B2 cycle must align again; a jam must time out disabled.
+      // Every later B2 cycle tries to align again. A jam times out with the
+      // drives still enabled after an acknowledged stop and fresh feedback.
       enable = false; resetting = false; reset_id = 0;
       require(spin_until([&] { return std::all_of(controllers.begin(), controllers.end(), [](const auto& c) { return !c.second.enabled(); }); }, 2),
               "disable before the second recovery");
       controllers.at(5).setInitialPosition(nearest_home ? 2049 : 119); jam_steering = true; reset_id = 2;
       const auto before_jam = transmitted.size();
       reset();
+      moving = true;
       if (nearest_home)
       {
         require(spin_until([&] { return std::any_of(transmitted.begin() + before_jam, transmitted.end(), [](const Frame& f) {
@@ -456,10 +464,10 @@ int main(int argc, char** argv)
         }); }, 6), "half-turn boundary starts with target 4096");
         cross_home_boundary = true;
       }
-      require(spin_until([&] { return all([](const auto& m) { return m.startup_failed; }) &&
-          std::all_of(controllers.begin(), controllers.end(), [](const auto& c) { return !c.second.enabled(); }); }, 6),
-          "a jammed steering unit must fail alignment and disable every drive");
-      require(!traction_moved(before_alignment), "a jam cannot release traction motion");
+      require(spin_until([&] { return all([](const auto& m) {
+        return m.startup_complete && !m.startup_failed && m.enabled && m.feedback_fresh && m.position_valid;
+      }); }, 6), "healthy drives must complete recovery after a jammed steering unit times out and stops");
+      require(!traction_moved(before_jam), "traction must remain zero throughout the jammed homing attempt");
       if (nearest_home)
       {
         require(std::none_of(transmitted.begin() + before_jam, transmitted.end(), [](const Frame& f) {
@@ -468,11 +476,17 @@ int main(int argc, char** argv)
         cross_home_boundary = false;
       }
       spin_until([] { return false; }, .4);
-      require(all([](const auto& m) { return m.startup_failed; }) &&
-          std::all_of(controllers.begin(), controllers.end(), [](const auto& c) { return !c.second.enabled(); }),
-          "alignment failure must stay disabled under the same repeated reset ID");
+      require(all([](const auto& m) { return m.startup_complete && m.enabled; }),
+          "a repeated reset ID must keep the verified recovery available");
+      require(!traction_moved(before_jam), "the supervisor must release recovery before traction can move");
+      const auto after_jam = transmitted.size();
+      resetting = false; reset_id = 0;
+      require(spin_until([&] { return traction_moved(after_jam); }, 2),
+          "fresh authorized motion must reach traction even though the steering remains off home");
       // A new authorized recovery may retry, but an E-stop must interrupt it.
-      enable = false; resetting = false; reset_id = 0; jam_steering = false;
+      moving = false; enable = false; resetting = false; reset_id = 0; jam_steering = false;
+      require(spin_until([&] { return std::all_of(controllers.begin(), controllers.end(), [](const auto& c) { return !c.second.enabled(); }); }, 2),
+          "disable before repositioning the controller model for the safety case");
       controllers.at(5).setInitialPosition(119); reset_id = 3;
       const auto before_safety = transmitted.size();
       reset();
@@ -483,7 +497,7 @@ int main(int argc, char** argv)
       require(spin_until([&] { return all([](const auto& m) { return m.startup_failed; }) &&
           std::all_of(controllers.begin(), controllers.end(), [](const auto& c) { return !c.second.enabled(); }); }, 2),
           "safety stop must interrupt alignment and disable all drives");
-      require(!traction_moved(before_alignment), "safety interruption cannot release traction");
+      require(!traction_moved(before_safety), "safety interruption cannot release traction");
       enable = false; resetting = false; reset_id = 0; safety_stop = false;
       controllers.at(5).setInitialPosition(119); reset_id = 4;
       const auto before_feedback = transmitted.size();
@@ -495,8 +509,24 @@ int main(int argc, char** argv)
       require(spin_until([&] { return all([](const auto& m) { return m.startup_failed; }) &&
           std::all_of(controllers.begin(), controllers.end(), [](const auto& c) { return !c.second.enabled(); }); }, 2),
           "stale motion feedback must interrupt alignment and disable all drives");
-      require(!traction_moved(before_alignment), "feedback loss cannot release traction");
-      std::cout << "PASS: B2 nearest-home alignment, traction inhibition, repeated recovery, jam timeout, safety stop and feedback loss\n";
+      require(!traction_moved(before_feedback), "feedback loss cannot release traction");
+
+      enable = false; resetting = false; reset_id = 0; drop_motion_sdos = false;
+      controllers.at(5).setInitialPosition(119); jam_steering = true; reset_id = 5;
+      const auto before_unconfirmed_stop = transmitted.size();
+      reset();
+      require(spin_until([&] { return std::any_of(transmitted.begin() + before_unconfirmed_stop, transmitted.end(), [](const Frame& f) {
+        return f.id == 0x605 && f.data[0] != READ_FROM_DEVICE && shortFromFrame(f, 1) == 0x3790 && intFromFrame(f, 4) == 0;
+      }); }, 6), "jammed steering must receive a home target before the stop acknowledgement is dropped");
+      drop_steering_stop_ack = true;
+      require(spin_until([&] { return steering_stop_ack_dropped; }, 3), "homing timeout must request a steering stop");
+      require(all([](const auto& m) { return m.startup_pending && !m.startup_complete; }),
+          "recovery must remain pending without a steering stop acknowledgement");
+      require(spin_until([&] { return all([](const auto& m) { return m.startup_failed; }) &&
+          std::all_of(controllers.begin(), controllers.end(), [](const auto& c) { return !c.second.enabled(); }); }, 4),
+          "a stop that cannot be confirmed must time out and disable every drive");
+      require(!traction_moved(before_unconfirmed_stop), "an unconfirmed steering stop cannot release traction");
+      std::cout << "PASS: B2 steering alignment, traction recovery after a jam, safety stop, feedback loss and unconfirmed stop\n";
       if (sender_executor) { sender_executor->stop(); }
       rclcpp::shutdown(); return 0;
     }

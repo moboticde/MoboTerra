@@ -30,10 +30,10 @@ SDO control and feedback. It does not configure drive PDO mappings or transmit
 drive SYNC. All eight drives are required for complete feedback.
 
 Drive enable waits for a new B2 request after startup or a blocking readiness
-loss. The current profile enables nearest-home steering alignment at 1.2 rad/s;
-traction remains zero during recovery. Normal manual steering is 0.3 rad/s and
-B1 steering boost is 0.6 rad/s. Returning controls to neutral can command
-steering home after traction standstill. These are configured software values,
+loss. B2 enables at the measured steering angles with zero traction during
+recovery. Normal manual steering is 0.3 rad/s and B1 steering boost is 0.6 rad/s.
+Returning controls to neutral can command steering home at 1.2 rad/s after
+traction standstill. These are configured software values,
 not measured accuracy or physical stopping-time guarantees.
 
 The PAIL mapping is marked verified in source. No held deadman is configured;

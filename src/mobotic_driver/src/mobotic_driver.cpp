@@ -1793,7 +1793,8 @@ void MoboticDriver::advanceStartup()
 
 bool MoboticDriver::steeringAlignmentPending() const
 {
-  return steering_alignment_ == SteeringAlignment::WAITING || steering_alignment_ == SteeringAlignment::MOVING;
+  return steering_alignment_ == SteeringAlignment::WAITING || steering_alignment_ == SteeringAlignment::MOVING ||
+      steering_alignment_ == SteeringAlignment::STOPPING;
 }
 
 bool MoboticDriver::steeringAlignmentPermitted() const
@@ -1823,14 +1824,40 @@ void MoboticDriver::advanceSteeringAlignment()
       authority_.reset_id != 0 && authority_.reset_id == reset_id_ && !authority_.safety_stop_active &&
       !authority_.transition_in_progress && authority_.authority_generation == steering_alignment_generation_ &&
       authority_.supervisor_instance == steering_alignment_supervisor_;
-  if (!context_valid || std::chrono::duration<double>(steady - steering_alignment_started_).count() >= steering_alignment_timeout_ ||
-      (steering_alignment_ == SteeringAlignment::MOVING && !steeringAlignmentPermitted()))
+  const double elapsed = std::chrono::duration<double>(steady - steering_alignment_started_).count();
+  const bool timed_out = elapsed >= steering_alignment_timeout_;
+  const bool permitted = steeringAlignmentPermitted();
+  const bool waiting = steering_alignment_ == SteeringAlignment::WAITING;
+  if (!context_valid || (!waiting && !permitted) || (waiting && timed_out) || elapsed >= startup_timeout_)
   {
     RCLCPP_ERROR(this->get_logger(), "Steering alignment interrupted, feedback lost or timed out; drives disabled. Keep controls neutral and press B2 to retry after correcting the cause.");
     failStartup(true);
     return;
   }
-  if (!steeringAlignmentPermitted()) { return; }
+  if (!permitted) { return; }
+  if (steering_alignment_ == SteeringAlignment::STOPPING)
+  {
+    for (const auto& [name, drive] : drives_)
+    {
+      (void)name;
+      if (!drive.isTractionJoint() && !sdo_channels_.at(drive.rawCanNodeID()).steeringStopAcknowledged())
+      {
+        steering_alignment_motion_after_ns_ = 0;
+        return;
+      }
+    }
+    if (steering_alignment_motion_after_ns_ == 0)
+    { steering_alignment_motion_after_ns_ = now.nanoseconds(); }
+    for (const auto& [name, drive] : drives_)
+    {
+      if (std::abs(drive.velocityFeedbackRadPerSec()) > 0.05) { return; }
+      for (const auto stamp : motion_sample_stamp_ns_.at(name))
+      { if (stamp <= steering_alignment_motion_after_ns_) { return; } }
+    }
+    steering_alignment_ = SteeringAlignment::COMPLETE;
+    RCLCPP_WARN(this->get_logger(), "Steering homing timed out. Steering stop and fresh standstill verified. Continuing drive recovery at measured steering positions.");
+    return;
+  }
   bool fresh_after_enable = true;
   for (const auto& [name, drive] : drives_)
   {
@@ -1839,7 +1866,7 @@ void MoboticDriver::advanceSteeringAlignment()
     { fresh_after_enable = fresh_after_enable && stamp > steering_alignment_after_ns_; }
   }
   if (!fresh_after_enable) { return; }
-  const bool beginning = steering_alignment_ == SteeringAlignment::WAITING;
+  const bool beginning = waiting;
   if (beginning)
   {
     // Validate the complete batch before admitting any alignment target. Never
@@ -1889,6 +1916,21 @@ void MoboticDriver::advanceSteeringAlignment()
     steering_alignment_ = SteeringAlignment::COMPLETE;
     sendStopToAllDrives();
     RCLCPP_INFO(this->get_logger(), "Steering alignment complete: all steering positions within 1 degree (or finer one-count tolerance) of nearest home with fresh standstill feedback.");
+    return;
+  }
+  if (timed_out)
+  {
+    // A missed home with valid drive feedback can be retried by neutral
+    // steering return later. First cancel the homing moves and prove standstill.
+    if (steering_alignment_target_ack_ns_.size() != steering_alignment_targets_.size())
+    {
+      RCLCPP_ERROR(this->get_logger(), "Steering target acknowledgement timed out. Disabling drives.");
+      failStartup(true);
+      return;
+    }
+    steering_alignment_ = SteeringAlignment::STOPPING;
+    steering_alignment_motion_after_ns_ = 0;
+    sendStopToAllDrives();
     return;
   }
   if (std::chrono::duration<double>(steady - last_steering_alignment_command_).count() < 0.1) { return; }
