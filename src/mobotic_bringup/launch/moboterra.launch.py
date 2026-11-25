@@ -181,6 +181,9 @@ def _launch_setup(context):
         # driver_config unchanged for hardware deployments.
         parameters=[driver_config, {
             'virtual_position_source': True,
+            # Eight virtual processes can reply more than 5 ms apart on the
+            # Pi. Allow 50 ms for a coherent simulated SDO feedback set.
+            'sample_skew_budget': 0.05,
             'watchdog_timeout': driver_config['supervisor_timeout'],
         }],
         output='screen',

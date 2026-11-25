@@ -95,6 +95,8 @@ def main():
         enable_future = None
         enable_requested = False
         next_enable_attempt = 0.0
+        healthcheck = Path('/usr/local/bin/moboterra-healthcheck')
+        health_checked = not healthcheck.exists()
         try:
             deadline = time.monotonic() + 60
             ready_since = None
@@ -102,6 +104,16 @@ def main():
                 if launch.poll() is not None:
                     raise RuntimeError('Virtual launch exited before validation')
                 rclpy.spin_once(node, timeout_sec=0.2)
+                names = {name for name, namespace in node.get_node_names_and_namespaces()
+                         if namespace == '/moboterra'}
+                if not health_checked:
+                    if expected <= names:
+                        # Check graph discovery before B2. A late DDS participant
+                        # can briefly interrupt simulated feedback on the Pi.
+                        # Require fresh, sustained readiness after that probe.
+                        check_runtime_health(healthcheck, node)
+                        health_checked = True
+                    continue
                 if enable_future is not None and enable_future.done():
                     result = enable_future.result()
                     enable_requested = result.success
@@ -118,8 +130,6 @@ def main():
                         and mode is not None and not mode.drives_enabled and not mode.reset_in_progress
                         and 'B2_ENABLE_REQUIRED' in mode.reason_codes):
                     enable_future = toggle.call_async(Trigger.Request())
-                names = {name for name, namespace in node.get_node_names_and_namespaces()
-                         if namespace == '/moboterra'}
                 ready = (expected <= names and {'joints', 'odom', 'modules', 'diagnostics', 'mode'} <= samples.keys()
                          and all(time.monotonic() - received[key] <= 0.5
                                  for key in ('joints', 'odom', 'modules', 'mode')))
@@ -150,12 +160,9 @@ def main():
             else:
                 raise RuntimeError(f'Virtual startup timed out: nodes={sorted(names)}, '
                                    f'messages={sorted(samples)}')
-            healthcheck = Path('/usr/local/bin/moboterra-healthcheck')
-            if healthcheck.exists():
-                check_runtime_health(healthcheck, node)
-                if (launch.poll() is not None or time.monotonic() - received['mode'] > 0.5
-                        or not mode_ready(samples['mode'])):
-                    raise RuntimeError('Virtual stack lost readiness during the runtime healthcheck')
+            if (launch.poll() is not None or time.monotonic() - received['mode'] > 0.5
+                    or not mode_ready(samples['mode'])):
+                raise RuntimeError('Virtual stack lost readiness after validation')
             print(f'PASS: virtual nodes, {len(expected_joints)} joints, '
                   f'{len(expected_modules)} enabled wheel modules, supervisor readiness, odometry and diagnostics',
                   flush=True)

@@ -440,8 +440,11 @@ class SocketCanLaunchTest(unittest.TestCase):
                  if action.kind == 'Node' and action.kwargs.get('executable') == 'mobotic_driver']
         self.assertEqual(len(nodes), 2)
         self.assertEqual(nodes[0].kwargs['parameters'][0], nodes[1].kwargs['parameters'][0])
+        self.assertEqual(nodes[0].kwargs['parameters'][0]['sample_skew_budget'], 0.005)
+        self.assertEqual(nodes[0].kwargs['parameters'][0]['physical_sample_skew_budget'], 0.1)
         self.assertEqual(nodes[1].kwargs['parameters'][1], {
             'virtual_position_source': True,
+            'sample_skew_budget': 0.05,
             'watchdog_timeout': 0.3,
         })
 

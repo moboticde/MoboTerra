@@ -219,6 +219,16 @@ traction for every module. Feedback requires all eight joint samples. Geometry
 and units come from the selected four-module configuration. The models do not
 represent physical motor, brake or safety behavior.
 
+The virtual driver allows 50 ms of sample skew across the eight independently
+scheduled drive processes. This keeps installation validation working on Raspberry
+Pi 5 as well as AMD64 PCs, using the same Git source and image build. The override
+applies only to the virtual driver; physical feedback budgets and command
+freshness checks retain their configured values.
+The installation smoke check runs graph health discovery before requesting
+virtual drive enable, then requires three seconds of fresh, complete feedback
+and supervisor readiness. This separates DDS discovery startup from the
+simulated enable/recovery proof.
+
 ### Drive the virtual platform with a PAIL CAN joystick
 
 The confirmed receiver for this test is node 10 at 250 kbit/s. Use the separate
