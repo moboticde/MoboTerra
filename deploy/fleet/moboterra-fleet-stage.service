@@ -1,0 +1,11 @@
+[Unit]
+Description=Stage an approved MoboTerra fleet release
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/moboterra-fleet stage
+TimeoutStartSec=30min
+UMask=0077
