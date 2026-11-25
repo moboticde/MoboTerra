@@ -65,6 +65,24 @@ class ComponentHealthTest(unittest.TestCase):
         self.fixture.advance(.101)
         self.assertFalse(self.node._component_health_fresh('kinematics', self.fixture.platform.now))
 
+    def test_clock_reversal_accepts_fresh_health_and_requires_new_b2(self):
+        self.report(source=10)
+        self.node.command_accept_after = h.Time(10)
+        self.node.manual_command = self.fixture.velocity()
+        self.node.motion_inputs_ready = True
+        self.fixture.platform.now = h.Time(8)
+        self.report(source=8)
+        self.assertTrue(self.node._component_health_fresh('kinematics', self.fixture.platform.now))
+        self.assertTrue(self.node.operator_drives_disabled)
+        self.assertFalse(self.node.motion_inputs_ready)
+        self.assertIsNone(self.node.manual_command)
+        self.assertIsNone(self.node.wheel_status_received)
+        self.assertIsNone(self.node.battery_received)
+        self.assertEqual(self.node.command_accept_after.nanoseconds, h.Time(8).nanoseconds)
+        report = self.node.component_health['kinematics']
+        self.report(source=10, reported=10)
+        self.assertIs(self.node.component_health['kinematics'], report)
+
     def test_invalid_monitoring_and_active_faults_still_inhibit_motion_immediately(self):
         for valid, fault in ((False, False), (True, True)):
             with self.subTest(valid=valid, fault=fault):

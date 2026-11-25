@@ -6,8 +6,7 @@ services:
     container_name: moboterra-current-stack
     # Linux host networking exposes the existing SocketCAN and scanner links.
     network_mode: host
-    # Match native DDS shared-memory communication with host ROS/RViz tools.
-    ipc: host
+    ipc: private
     # Retain the launcher's native/orphan process checks on the same PC.
     pid: host
     user: ${MOBOTERRA_UID:?}:${MOBOTERRA_GID:?}
@@ -20,6 +19,8 @@ services:
       ROBOT_NAME: ${MOBOTERRA_ROBOT_NAME:?}
       MOBOTERRA_RESTART_SOCKET: ${MOBOTERRA_RESTART_SOCKET_DIR:+/opt/moboterra-restart/restart.sock}
       MOBOTERRA_HOST_RESTART: ${MOBOTERRA_HOST_RESTART:-false}
+      # Ubuntu can remove the operator UID's host DDS shared memory at logout.
+      FASTDDS_BUILTIN_TRANSPORTS: UDPv4
     command: [bash, scripts/start_MoboTerra, "start_rviz:=false"]
     volumes:
       - type: bind

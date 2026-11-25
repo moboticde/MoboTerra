@@ -14,8 +14,6 @@ class ScannerPolicyTest(unittest.TestCase):
         self.fixture.setUp()
         self.platform = self.fixture.fixture
         self.node = self.fixture.node
-        self.node.safety_source = 'flexisoft'
-        self.node.require_flexisoft_telemetry = False
         self.node.selected_mode = harness.MODES.AUTONOMOUS
         self.node.motion_inputs_ready = True
         del self.node._source_gate
@@ -100,36 +98,31 @@ class ScannerPolicyTest(unittest.TestCase):
         self.assertEqual(self.node.last_output, [0.0] * 3)
         final = self.node.final_command_publisher.messages[-1]
         self.assertTrue(all(m.traction_velocity == 0 and m.steering_profile_velocity == 0 for m in final.modules))
-        self.assertFalse(self.node._safety_gate(self.platform.now)[0])
+        self.assertFalse(self.node._scanner_gate(self.platform.now)[0])
         self.assertTrue(self.node._system_conditions(self.platform.now)[1])
         self.assertNotIn(123, self.node.velocity_ledger)
 
-    def test_red_from_either_scanner_has_priority_over_yellow_and_override(self):
-        self.node.safety_source = 'flexisoft'
-        self.node.require_flexisoft_telemetry = True
-        self.node.safety_state.safety_override_active = True
+    def test_red_from_either_scanner_has_priority_over_yellow(self):
         self.field(yellow=True)
         self.field('rear_right', red=True)
-        self.assertFalse(self.node._safety_gate(self.platform.now)[0])
+        self.assertFalse(self.node._scanner_gate(self.platform.now)[0])
         self.field('rear_right')
-        self.assertTrue(self.node._safety_gate(self.platform.now)[0])
+        self.assertTrue(self.node._scanner_gate(self.platform.now)[0])
         self.assertTrue(self.node._warning_active())
         self.field()
-        self.assertTrue(self.node._warning_active())  # FlexiSoft override still caps speed.
-        self.node.safety_state.safety_override_active = False
         self.assertFalse(self.node._warning_active())
 
     def test_missing_invalid_or_stale_either_scanner_inhibits_motion(self):
         for name in self.node.scanner_states:
             original = self.node.scanner_states[name]
             self.node.scanner_states[name] = (None, None)
-            self.assertFalse(self.node._safety_gate(self.platform.now)[0])
+            self.assertFalse(self.node._scanner_gate(self.platform.now)[0])
             self.node.scanner_states[name] = original
             self.field(name, known=False)
-            self.assertFalse(self.node._safety_gate(self.platform.now)[0])
+            self.assertFalse(self.node._scanner_gate(self.platform.now)[0])
             self.field(name)
         self.platform.now = harness.Time(10.4)
-        self.assertFalse(self.node._safety_gate(self.platform.now)[0])
+        self.assertFalse(self.node._scanner_gate(self.platform.now)[0])
 
     def test_heartbeats_do_not_extend_original_acquisition_lifetime(self):
         state = self.field()
@@ -163,7 +156,7 @@ class ScannerPolicyTest(unittest.TestCase):
         generation = self.node.authority_generation
         self.field(yellow=True)
         self.assertEqual(self.node.authority_generation, generation)
-        self.assertTrue(self.node._safety_gate(self.platform.now)[0])
+        self.assertTrue(self.node._scanner_gate(self.platform.now)[0])
         self.field()
         self.assertEqual(self.node.authority_generation, generation)
 

@@ -62,12 +62,6 @@ POLICY_TYPES = {
         "max_linear_speed": "number",
         "max_angular_speed": "number"
     },
-    "safety": {
-        "accept_timeout": "number",
-        "status_timeout": "number",
-        "publish_period": "number",
-        "estop_implies_sto": "boolean"
-    },
     "scanners": {
         "interface_ip": "string",
         "host_udp_port": "integer",

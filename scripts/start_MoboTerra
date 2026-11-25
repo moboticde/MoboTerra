@@ -45,7 +45,7 @@ if command -v systemctl >/dev/null && systemctl is-active --quiet moboterra-supe
   exit 1
 fi
 python3 - <<'PY'
-import json, os, pathlib, socket, subprocess
+import json, os, pathlib, subprocess
 from ament_index_python.packages import get_package_prefix
 from mobotic_config.configuration import Configuration
 for package, executables in {
@@ -62,7 +62,7 @@ for package, executables in {
 node_executables = {
     'manual_drive_control', 'mobotic_driver', 'mobotic_kinematics', 'mobotic_odometry', 'mobotic_supervisor',
     'romb_kinematics', 'romb_kinematics_adapter', 'qemu-x86_64-static',
-    'remdevice_control', 'manual_control', 'flexisoft_tcp_bridge', 'safety_monitor',
+    'remdevice_control', 'manual_control',
     'vanguard_battery_monitor', 'platform_diagnostics', 'scanner_safety_adapter',
     'scanner_evaluation_projection', 'robot_state_publisher', 'sick_safetyscanners2_node',
     'socket_can_sender_node_exe', 'socket_can_receiver_node_exe', 'paced_socket_can_sender',
@@ -86,12 +86,6 @@ for process in pathlib.Path('/proc').iterdir():
             continue
         if environment.get(b'ROS_DOMAIN_ID', b'0') == b'42':
             raise SystemExit(f'Stop the existing/orphaned MoboTerra node (PID {process.name}) before relaunching.')
-with socket.socket() as listener_check:
-    listener_check.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        listener_check.bind(('0.0.0.0', 9100))
-    except OSError as error:
-        raise SystemExit(f'FlexiSoft TCP port 9100 is unavailable: {error}. Stop the previous listener before relaunching.')
 can_settings = Configuration().platform['can']
 for interface, bitrate in dict((can_settings[role]['interface'], can_settings[role]['bitrate'])
                                for role in ('drives', 'battery')).items():

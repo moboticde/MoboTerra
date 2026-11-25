@@ -1,5 +1,5 @@
 import rclpy
-from mobotic_interfaces.msg import BatterySystemState, SafetyIOState, SafetyState
+from mobotic_interfaces.msg import BatterySystemState, ScannerSafetyState
 from rclpy.node import Node
 
 
@@ -16,54 +16,33 @@ class MockPlatformState(Node):
             raise ValueError('publish_period must be positive')
         self.frame_id = str(self.get_parameter('frame_id').value)
 
-        self.safety_publisher = self.create_publisher(
-            SafetyState, 'safety/state', 1
-        )
-        self.safety_io_publisher = self.create_publisher(
-            SafetyIOState, 'safety/io_state', 1
-        )
+        self.scanner_publishers = {
+            location: self.create_publisher(
+                ScannerSafetyState, f'scanner/{location}/safety_zone_status', 1)
+            for location in ('front_left', 'rear_right')
+        }
         self.battery_publisher = self.create_publisher(
             BatterySystemState, 'battery/system_state', 1
         )
         self.timer = self.create_timer(publish_period, self._publish)
         self.get_logger().warning(
-            'Publishing MOCK safety and battery readiness. '
+            'Publishing MOCK scanner and battery readiness. '
             'This node must never be used with physical drives.'
         )
 
     def _publish(self):
         stamp = self.get_clock().now().to_msg()
 
-        safety = SafetyState()
-        safety.header.stamp = stamp
-        safety.header.frame_id = self.frame_id
-        safety.communication_ok = True
-        safety.physical_state_known = True
-        safety.system_ready = True
-        safety.motion_permitted = True
-        safety.protective_stop_active = False
-        safety.warning_field_active = False
-        safety.emergency_stop_active = False
-        safety.sto_active = False
-        safety.safety_override_active = False
-        safety.status_message = 'virtual platform ready (mock state)'
-        self.safety_publisher.publish(safety)
-
-        safety_io = SafetyIOState()
-        safety_io.header.stamp = stamp
-        safety_io.header.frame_id = self.frame_id
-        safety_io.emergency_stop_active = False
-        safety_io.emergency_stop_state_known = True
-        safety_io.scanner_state_known = True
-        safety_io.safety_enable_active = True
-        safety_io.sto_active = False
-        safety_io.front_left_protective_field_clear = True
-        safety_io.front_left_warning_field_clear = True
-        safety_io.front_left_ossd_active = True
-        safety_io.rear_right_protective_field_clear = True
-        safety_io.rear_right_warning_field_clear = True
-        safety_io.rear_right_ossd_active = True
-        self.safety_io_publisher.publish(safety_io)
+        for location, publisher in self.scanner_publishers.items():
+            scanner = ScannerSafetyState()
+            scanner.header.stamp = stamp
+            scanner.header.frame_id = self.frame_id
+            scanner.scanner_id = location
+            scanner.communication_ok = True
+            scanner.protective_state_known = scanner.warning_state_known = True
+            scanner.protective_field_clear = scanner.warning_field_clear = True
+            scanner.source = 'virtual scanner fixture'
+            publisher.publish(scanner)
 
         battery = BatterySystemState()
         battery.header.stamp = stamp

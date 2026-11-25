@@ -315,8 +315,9 @@ positive left steering. The existing teleop law multiplies steering by forward
 input: it reverses yaw with travel direction and does not rotate at rest.
 Set inversion from actual physical directions, not guessed U/D names.
 Calibration applies to the received magnitude after receiver scaling/offset.
-RP2 is not used as a software mode, reset or fabricated permission; monitor its
-independent Flexi Soft safety result through the safety interfaces.
+RP2 selects the scanner policy when the verified D5 mapping is configured.
+Monitor the selector on `operator/scanner_selector` and confirm its effect in
+`vehicle/mode`.
 
 For installed containers, edit `/etc/moboterra/platform.yaml` on the robot; it
 is mounted read-only into the container. Preserve an existing host profile when
@@ -401,10 +402,12 @@ selector edge clears buffered motion. Safety Enabled restores the ordinary
 red/unknown scanner stop and yellow speed policy. Missing or malformed selector
 state is treated as Safety Enabled, so the scanner gate remains mandatory rather
 than granting the scanner exception. This
-software selector does not change the physical safety wiring. Four-module
-FlexiSoft communication, E-stop, STO and safety-enable remain required; only
-scanner protective-field/OSSD stops are bypassed. PLC motion denial without a
-known scanner protective-stop cause remains inhibited.
+software selector leaves the independent stop and STO circuit in force.
+
+Once the drives are initialized and enabled, a drive or motion feedback
+interruption pauses motion while the supervisor keeps the enable request active.
+After feedback recovers, return the controls to neutral and issue a fresh
+command. A feedback pause requires no B2 press.
 
 ## Receiver EEPROM and CAN-ID fault recovery
 
@@ -660,13 +663,3 @@ acknowledgement, zero error register, and fresh neutral radio inputs before
 resuming. Do not repeat EEPROM saves or clear errors blindly; a recurring write
 or EEPROM error needs supplier diagnosis. Recovery records for this machine are
 under `~/robot_repair/receiver-can-repair/`.
-
-### RP2/FlexiSoft safety-selector disagreement
-
-With verified D5 mapping and FlexiSoft telemetry enabled, RP2 Safety Enabled
-(D5 low) plus PLC override active blocks all motion and enable/reset admission.
-The supervisor reports `SAFETY_SELECTOR_MISMATCH` and SAFETY, immediately clears
-buffered commands and publishes zero targets. Once consistent, motion requires
-fresh commands and normal manual rearming. This does not write to FlexiSoft or
-change the hardware safety chain. Do not interpret unavailable/stale RP2 data as
-agreement while the PLC still reports override.

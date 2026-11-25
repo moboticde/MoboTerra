@@ -11,7 +11,7 @@ does not establish continuity across controller coordinate resets.
 Older test descriptions below are commissioning scenarios, not completed checks
 of the updated interface. Full Jazzy/ROS/SocketCAN validation remains required.
 
-ROS observes the hardware safety chain. The miControl/FlexiSoft chain performs physical STO;
+ROS observes the hardware safety chain. The independent hardware circuit performs physical STO;
 none of the changes here implement or replace a safety-rated stop function.
 A driver/OS/CAN failure cannot be handled by a watchdog inside that failed process.
 Verify the independent hardware watchdog/STO and brake behavior on the machine.
@@ -33,9 +33,6 @@ Use [the active configuration guide](four_module_setup.md) and
   Current MoboTerra retains a receiver-only battery ROS transport under
   `battery_can` on the shared physical `can0`, with monitor input `battery_can/can_rx`. Neither
   this change nor the read-only monitor adds operating-consent/HV commands.
-- `sick_flexisoft_eth_comm/src/sick_flexisoft_eth_comm.cpp`: 15-byte TCP telegram,
-  port 9100, byte 14; OSSD masks 0x03/0x0C, estop 0x10, override 0x20, warning
-  masks 0x80/0x40. The complete bytes are now published as `flexisoft/telegram`.
 - `mobotic_launch/launch/mobotic-etp.launch.py`: scanner settings, front scanner
   10.60.20.52, host 10.60.20.186. Rear 10.60.20.53 was supplied by the user.
 - `debug/can_rosbag_recorder.py`: ELMO read-only SDO objects 0x2086:0 (STO status)
@@ -122,12 +119,8 @@ platform; matching source settings is not hardware commissioning.
 
 ## STO visibility limitations
 
-The reference FlexiSoft byte has no independent STO or safety-enable bit.
-`SafetyIOState.sto_state_known` / `safety_enable_state_known` therefore remain false
-with the supplied configuration. `sto_active` on communication loss or estop is
-a conservative ROS interlock, not proof that hardware STO has physically engaged.
-`flexisoft_status_raw` records the last byte; use `SafetyState.communication_ok`
-to determine whether it is fresh.
+Scanner field evaluations describe protective and warning fields. Physical
+OSSD and STO require their own independent feedback or commissioning checks.
 
 ELMO diagnostics expose `sto_0x2086_raw`, `digital_inputs_0x60FD_raw` and their
 `*_fresh` flags per traction drive. Unsupported SDOs, aborts and aged responses
@@ -211,7 +204,7 @@ timeouts use a steady clock and also check message header age.
 
 Coverage: supervisor lease, joint-command watchdog, per-drive CAN freshness and
 faults, CAN error frames, raw ELMO safety registers, battery telemetry/readiness/SOC,
-FlexiSoft readiness/unmapped signals, mode/transition status, joystick and both scans.
+mode/transition status, joystick, both scans and both scanners' evaluated field status.
 Warnings for unmapped signals are expected; they must not be interpreted as
 verified hardware safety. Diagnostics only observe and never issue commands.
 
@@ -226,8 +219,8 @@ This does not configure bitrate, bus-off recovery, drive reset or enable.
 An external bridge used with `start_socketcan:=false` must opt in similarly.
 No observed error frames must not be treated as proof of bus health.
 
-The platform node subscribes to `battery/system_state` (0.6 s), `safety/state`,
-`safety/io_state` and `vehicle/mode` (0.3 s), optionally `operator/state`
+The platform node subscribes to `battery/system_state` (0.6 s),
+`vehicle/mode` (0.3 s), optionally `operator/state`
 (0.3 s) and both `scanner/<location>/scan` streams (0.5 s). It publishes at 2 Hz.
 It does not directly subscribe to `joint_states`, `wheel_modules/status`,
 `battery/state`, `vehicle/measured_velocity` or CAN; driver diagnostics cover CAN/wheel freshness.
@@ -245,8 +238,8 @@ uses the configured address; override `scanner_host_ip` if necessary:
 ```bash
 ros2 launch mobotic_bringup moboterra.launch.py scanner_host_ip:=10.60.20.186
 ros2 topic echo /moboterra/diagnostics
-ros2 topic echo /moboterra/safety/io_state
-ros2 topic echo /moboterra/flexisoft/telegram
+ros2 topic echo /moboterra/scanner/front_left/safety_zone_status
+ros2 topic echo /moboterra/scanner/rear_right/safety_zone_status
 ros2 topic hz /moboterra/scanner/front_left/scan
 ros2 topic hz /moboterra/scanner/rear_right/scan
 ```
@@ -288,7 +281,7 @@ terminate only the supervisor process, ensure no automatic respawn during this t
 and confirm CAN disable requests and physical stopping/braking while a joint
 publisher continues. Bringup normally enables supervisor respawn, so a short
 restart may complete before the timeout. Also test low SOC, battery telegram loss,
-FlexiSoft disconnect, occupied fields and missing scan streams separately.
+scanner disconnect, occupied fields and missing scan streams separately.
 Test joystick loss while commanding motion: confirm zero output and inactive
 manual state after the timeout, then reconnect with neutral axes and no buttons
 pressed. Output must remain zero. With nonzero input, verify acceleration restarts
@@ -441,17 +434,6 @@ velocity/current on the next supervisor cycle. Keep
 `direct_steering_encoder_resolutions` aligned with the driver's steering
 `drives.resolutions`. Numeric CAN bounds are not mechanical steering limits;
 verify physical travel and calibration before operating the vehicle.
-
-On a secured ROS integration setup, occupy the configured FlexiSoft TCP port
-before launching bringup. The bridge must log a fatal listener error, exit with
-nonzero status and retry with a 1 s respawn delay, not leave an inert ROS process.
-Release the port and verify that a new bridge instance accepts the hardware client.
-Without new complete telegrams, `safety/state` must remain inhibited after the
-configured 0.25 s status timeout; a process restart is not readiness evidence.
-Also disconnect/reconnect the TCP client: the listener should stay running and
-discard partial telegrams from the old connection. Stop launch with a client
-connected and confirm clean shutdown without an unintended restart. Unexpected
-worker termination is checked every 0.1 s using steady time even if ROS time pauses.
 
 ## Wheel odometry commissioning
 

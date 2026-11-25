@@ -64,13 +64,9 @@ is cancelled on lost permission. During an acknowledged reset, the supervisor
 may authorize zero-target re-enable to reacquire feedback while ordinary motion
 and fault-latch clearance remain blocked until recovery is verified.
 
-FlexiSoft Ethernet feedback has an explicit role in the shared profile.
-`safety.telemetry_required: false` selects monitoring only (the four-module
-default); the physical safety controller operates the drive STO chain independently.
-Ethernet safety messages do not affect supervisor control in that role. Direct
-scanner fields, operator STOP, battery/drive readiness, known active drive STO
-and watchdogs retain their checks. `true` selects the additional FlexiSoft
-software interlocks; older profiles omitting this field retain that behavior.
+Supervised motion uses direct scanner fields, operator STOP, battery and drive
+readiness, known active drive STO and watchdogs. The physical STO circuit
+operates independently.
 
 See the [complete ROS interface manual](ros_interface_manual.md) for message
 fields, feedback units, mode transitions, recovery, scanner data and hardware

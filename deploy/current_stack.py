@@ -24,6 +24,12 @@ RESTART_SOCKET_DIR = '/run/moboterra-restart'
 ENV_FILE = ROOT / 'runtime/docker-stack.env'
 ROBOT_NETWORK = IPv4Network('192.168.0.0/16')
 SCANNER_SUFFIXES = {'front_left': 5, 'rear_right': 6}
+USB_DEVICES = Path('/sys/bus/usb/devices')
+CAN0_DEVICE = Path('/sys/class/net/can0/device')
+CANDLELIGHT_USB_ID = ('1d50', '606f')
+CAN_COMMAND_TIMEOUT = 5
+CAN_USB_TIMEOUT = 15
+CAN_RETRY_DELAY = 60
 sys.path[:0] = [str(ROOT / 'src/mobotic_config'), str(ROOT / 'src/mobotic_kinematics')]
 
 
@@ -56,18 +62,22 @@ def can_plan(platform):
     return result
 
 
+class CanLinkError(ValueError):
+    """The physical CAN link failed its startup checks."""
+
+
 def validate_link(info, interface, bitrate, listen_only):
     if info.get('linkinfo', {}).get('info_kind') != 'can':
         raise ValueError(f'{interface} is not a physical SocketCAN interface')
     data = info['linkinfo']['info_data']
     if 'UP' not in info['flags']:
-        raise ValueError(f'{interface} is not UP')
+        raise CanLinkError(f'{interface} is not UP')
     if data.get('bittiming', {}).get('bitrate') != bitrate:
-        raise ValueError(f'{interface} must already use {bitrate} bit/s when UP; stop and configure it explicitly')
+        raise CanLinkError(f'{interface} must use {bitrate} bit/s')
     if ('LISTEN-ONLY' in data.get('ctrlmode', [])) != listen_only:
-        raise ValueError(f'{interface} has the wrong listen-only mode')
+        raise CanLinkError(f'{interface} has the wrong listen-only mode')
     if data.get('state') == 'BUS-OFF':
-        raise ValueError(f'{interface} is BUS-OFF; operator recovery is required')
+        raise CanLinkError(f'{interface} is BUS-OFF')
 
 
 @contextmanager
@@ -115,31 +125,111 @@ def robot_ethernet_address(host_ip=None):
     return matches[0] if matches else None
 
 
-def prepare_can(plan, deadline):
-    """Configure only DOWN links; never cycle a live bus or clear BUS-OFF."""
-    pending = set(plan)
-    while pending:
-        for interface in sorted(pending):
-            probe = subprocess.run(['ip', '-json', '-details', 'link', 'show', 'dev', interface],
-                                   capture_output=True, text=True)
-            if probe.returncode:
-                continue
+def prepare_can_link(interface, bitrate, listen_only, deadline):
+    show = ['ip', '-json', '-details', 'link', 'show', 'dev', interface]
+    while True:
+        probe = subprocess.run(show, capture_output=True, text=True, timeout=CAN_COMMAND_TIMEOUT)
+        if probe.returncode == 0:
             info = json.loads(probe.stdout)[0]
-            if info.get('linkinfo', {}).get('info_kind') != 'can':
-                raise ValueError(f'{interface} is not a physical SocketCAN interface')
-            bitrate, listen_only = plan[interface]
-            if 'UP' not in info['flags']:
-                run(['ip', 'link', 'set', 'dev', interface, 'type', 'can', 'bitrate', str(bitrate),
-                     'listen-only', 'on' if listen_only else 'off', 'restart-ms', '0'])
-                run(['ip', 'link', 'set', 'dev', interface, 'up'])
-                info = json.loads(run(['ip', '-json', '-details', 'link', 'show', 'dev', interface],
-                                      capture_output=True, text=True).stdout)[0]
-            validate_link(info, interface, bitrate, listen_only)
-            pending.remove(interface)
-        if pending:
-            if time.monotonic() >= deadline:
-                raise RuntimeError('Missing CAN interfaces: ' + ', '.join(sorted(pending)))
-            time.sleep(1)
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f'Missing CAN interface: {interface}')
+        time.sleep(min(1, remaining))
+
+    if info.get('linkinfo', {}).get('info_kind') != 'can':
+        raise ValueError(f'{interface} is not a physical SocketCAN interface')
+    set_link = ['ip', 'link', 'set', 'dev', interface]
+    cycle_at_start = interface == 'can0'
+    if cycle_at_start:
+        run([*set_link, 'down'], timeout=CAN_COMMAND_TIMEOUT)
+    if cycle_at_start or 'UP' not in info['flags']:
+        run([*set_link, 'type', 'can', 'bitrate', str(bitrate), 'listen-only',
+             'on' if listen_only else 'off', 'restart-ms', '0'], timeout=CAN_COMMAND_TIMEOUT)
+        run([*set_link, 'up'], timeout=CAN_COMMAND_TIMEOUT)
+        info = json.loads(run(show, capture_output=True, text=True, timeout=CAN_COMMAND_TIMEOUT).stdout)[0]
+    validate_link(info, interface, bitrate, listen_only)
+
+
+def usb_identity(device):
+    try:
+        return tuple((device / name).read_text().strip() for name in ('idVendor', 'idProduct'))
+    except FileNotFoundError:
+        return None
+
+
+def restart_can_adapter(usb_port):
+    try:
+        device = CAN0_DEVICE.resolve(strict=True).parent
+    except FileNotFoundError:
+        device = None
+
+    if usb_port:
+        port_device = USB_DEVICES / usb_port
+        identity = usb_identity(port_device)
+        if ((device is not None and device.name != usb_port)
+                or (identity is not None and identity != CANDLELIGHT_USB_ID)):
+            raise RuntimeError(f'USB port {usb_port} does not match the candleLight adapter for can0')
+        separator = '.' if '.' in usb_port else '-'
+        hub, port = usb_port.rsplit(separator, 1)
+        command = ['uhubctl', '-e', '-l', hub, '-p', port, '-a']
+        print(f'Power-cycling USB-to-CAN adapter port {usb_port}', flush=True)
+        try:
+            run([*command, 'cycle', '-d', '2'], timeout=CAN_USB_TIMEOUT)
+        except subprocess.SubprocessError:
+            run([*command, 'on'], timeout=CAN_USB_TIMEOUT)
+            raise
+        return
+
+    if device is None:
+        adapters = [entry for entry in USB_DEVICES.iterdir() if usb_identity(entry) == CANDLELIGHT_USB_ID]
+        if len(adapters) != 1:
+            raise RuntimeError('Expected one visible candleLight adapter for USB reset')
+        device = adapters[0]
+    if usb_identity(device) != CANDLELIGHT_USB_ID:
+        raise RuntimeError(f'The USB device for can0 at {device.name} is not a candleLight adapter')
+    bus = int((device / 'busnum').read_text())
+    number = int((device / 'devnum').read_text())
+    print(f'Resetting USB-to-CAN adapter at {device.name}', flush=True)
+    run(['usbreset', f'{bus:03d}/{number:03d}'], timeout=CAN_USB_TIMEOUT)
+
+
+CAN_SETUP_ERRORS = (CanLinkError, TimeoutError, subprocess.SubprocessError)
+
+
+def recover_can0(bitrate, listen_only, initial_error):
+    usb_port = os.environ.get('MOBOTERRA_CAN_USB_PORT', '')
+    if usb_port and not re.fullmatch(r'[1-9][0-9]*-[1-9][0-9]*(?:\.[1-9][0-9]*)*', usb_port):
+        raise ValueError('MOBOTERRA_CAN_USB_PORT must be a USB device path such as 1-2 or 1-2.3')
+    print(f'Initial CAN startup failed: {initial_error}', flush=True)
+    for attempt in (1, 2):
+        if attempt == 2:
+            print(f'Retrying USB-to-CAN recovery in {CAN_RETRY_DELAY} seconds', flush=True)
+            time.sleep(CAN_RETRY_DELAY)
+        print(f'USB-to-CAN recovery attempt {attempt}/2', flush=True)
+        try:
+            restart_can_adapter(usb_port)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f'USB-to-CAN reset did not complete: {error}', flush=True)
+        try:
+            prepare_can_link('can0', bitrate, listen_only, time.monotonic() + CAN_USB_TIMEOUT)
+        except CAN_SETUP_ERRORS as error:
+            print(f'can0 recovery attempt {attempt}/2 failed: {error}', flush=True)
+        else:
+            print(f'can0 recovered at {bitrate} bit/s', flush=True)
+            return
+    raise RuntimeError('Reconnect USB-to-CAN Adapter')
+
+
+def prepare_can(plan, deadline):
+    """Cycle can0 at startup and configure other links only when down."""
+    for interface, (bitrate, listen_only) in sorted(plan.items()):
+        try:
+            prepare_can_link(interface, bitrate, listen_only, deadline)
+        except CAN_SETUP_ERRORS as error:
+            if interface != 'can0':
+                raise
+            recover_can0(bitrate, listen_only, error)
 
 
 def prepare_stack(wait_seconds=60):
@@ -203,7 +293,7 @@ ExecStartPre=/usr/bin/python3 {systemd_quote(root / 'deploy/current_stack.py')} 
 ExecStart={compose} up --no-build --abort-on-container-exit --exit-code-from robot
 ExecStop={compose} stop --timeout 45
 Restart=no
-TimeoutStartSec=90
+TimeoutStartSec=300
 TimeoutStopSec=60
 
 [Install]
@@ -494,7 +584,7 @@ def main():
             if os.geteuid() != 0:
                 raise RuntimeError('CAN preparation requires root')
             prepare_stack()
-    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         raise SystemExit(str(error)) from error
 
 

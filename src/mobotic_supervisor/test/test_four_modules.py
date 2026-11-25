@@ -28,9 +28,8 @@ class FourModuleSupervisorTest(unittest.TestCase):
         for name, (state, _) in node.scanner_states.items():
             state.header.stamp = self.now.to_msg()
             node.scanner_states[name] = (state, self.now)
-        node.safety_received = node.safety_io_received = node.battery_received = self.now
-        for state in (node.safety_state, node.safety_io_state, node.battery_state):
-            state.header.stamp = self.now.to_msg()
+        node.battery_received = self.now
+        node.battery_state.header.stamp = self.now.to_msg()
         node.wheel_status_received = self.now
         node.wheel_status = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()), modules=[
             SimpleNamespace(name=name, enabled=True, error_code=0, feedback_fresh=True)

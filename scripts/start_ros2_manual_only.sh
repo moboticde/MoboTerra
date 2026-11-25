@@ -6,5 +6,5 @@ if [[ "${1:-}" == "--check" ]]; then
   exec "$PROJECT_ROOT/scripts/start_MoboTerra" "$@"
 fi
 exec "$PROJECT_ROOT/scripts/start_MoboTerra" \
-  start_safety:=false start_battery:=false \
+  start_battery:=false \
   "$@" control_mode:=manual_only

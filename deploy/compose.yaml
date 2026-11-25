@@ -33,7 +33,6 @@ services:
       - driver_parameters_file:=${DRIVER_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/driver.yaml}
       - supervisor_parameters_file:=${SUPERVISOR_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/supervisor.yaml}
       - manual_parameters_file:=${MANUAL_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/manual_control.yaml}
-      - safety_parameters_file:=${SAFETY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/safety.yaml}
       - battery_parameters_file:=${BATTERY_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/battery.yaml}
       - kinematics_parameters_file:=${KINEMATICS_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/kinematics.yaml}
       - diagnostics_parameters_file:=${DIAGNOSTICS_PARAMETERS_FILE:-/opt/moboterra/share/mobotic_config/config/diagnostics.yaml}

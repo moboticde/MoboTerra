@@ -170,8 +170,6 @@ class CommandRecoveryTest(unittest.TestCase):
     def test_readiness_loss_and_recovery_between_ticks_invalidate_commands(self):
         for input_name, bad_field, value, callback_name in (
             ('wheel_status', 'feedback_fresh', False, '_wheel_status_callback'),
-            ('safety_state', 'motion_permitted', False, '_safety_callback'),
-            ('safety_io_state', 'emergency_stop_active', True, '_safety_io_callback'),
             ('battery_state', 'system_ready', False, '_battery_callback'),
         ):
             with self.subTest(input=input_name):
@@ -193,12 +191,12 @@ class CommandRecoveryTest(unittest.TestCase):
                 self.assertIsNone(self.node.autonomy_command)
                 self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0)
 
-    def test_direct_safety_override_recovery_requires_new_command(self):
+    def test_direct_protective_stop_recovery_requires_new_command(self):
         self.node.selected_mode = harness.MODES.KINEMATICOFF
         self.node._autonomy_joint_callback(self.joints())
-        self.node.safety_state.safety_override_active = True
+        self.node.scanner_states['front_left'][0].protective_field_clear = False
         self.node._control()
-        self.node.safety_state.safety_override_active = False
+        self.node.scanner_states['front_left'][0].protective_field_clear = True
         self.advance(0.02)
         self.node._control()
         self.assertEqual(self.node.direct_command_publisher.messages[-1].velocity, [0.0] * 4)

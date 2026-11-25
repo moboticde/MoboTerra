@@ -18,7 +18,6 @@ class ReducedSpeedLimitTest(unittest.TestCase):
         n.expected_module_names = names
         n.expected_steering_joint_names = [name + '_steering' for name in names]
         n.expected_traction_joint_names = [name + '_traction' for name in names]
-        n.safety_source = 'flexisoft'
         n.direct_traction_control_mode = 'velocity'
         n.warning_speed_limit = 1.0  # An overlay must never raise the absolute cap.
         n.max_acceleration_linear = n.max_acceleration_angular = 100
@@ -27,12 +26,8 @@ class ReducedSpeedLimitTest(unittest.TestCase):
         n.override_speed_scale = .01  # Legacy percentage must not set the limit.
         if condition == 'scanner_yellow':
             n.scanner_states['front_left'][0].warning_field_clear = False
-        elif condition == 'plc_yellow':
-            n.safety_state.warning_field_active = True
-        elif condition == 'plc_io_yellow':
-            n.safety_io_state.rear_right_warning_field_clear = False
-        elif condition == 'flexisoft_disabled':
-            n.safety_state.safety_override_active = True
+        elif condition == 'rear_scanner_yellow':
+            n.scanner_states['rear_right'][0].warning_field_clear = False
         elif condition == 'rp2_disabled':
             n.operator_scanner_override_enabled = True
             n.manual_state = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()),
@@ -54,10 +49,8 @@ class ReducedSpeedLimitTest(unittest.TestCase):
 
     def cases(self):
         for count in (2, 4):
-            for condition in ('scanner_yellow', 'plc_yellow', 'plc_io_yellow', 'flexisoft_disabled'):
+            for condition in ('scanner_yellow', 'rear_scanner_yellow', 'rp2_disabled'):
                 yield count, condition
-        yield 2, 'rp2_disabled'
-        yield 4, 'rp2_disabled'
 
     def test_final_wheels_are_bounded_for_every_warning_source_and_supported_mode(self):
         for count, condition in self.cases():
@@ -145,8 +138,7 @@ class ReducedSpeedLimitTest(unittest.TestCase):
 
     def test_green_normal_boost_and_reduced_speed_matrix(self):
         for count in (2, 4):
-            for condition in ('clear', 'scanner_yellow', 'plc_yellow', 'plc_io_yellow',
-                              'flexisoft_disabled', 'rp2_disabled'):
+            for condition in ('clear', 'scanner_yellow', 'rear_scanner_yellow', 'rp2_disabled'):
                 for requested in (1., 2.):
                     with self.subTest(count=count, condition=condition, requested=requested):
                         msg = self.configure(count, condition)
@@ -169,12 +161,12 @@ class ReducedSpeedLimitTest(unittest.TestCase):
         for count in (2, 4):
             for radius in (.1, .325, .5):
                 with self.subTest(count=count, radius=radius):
-                    msg = self.configure(count, 'flexisoft_disabled')
+                    msg = self.configure(count, 'rp2_disabled')
                     self.node.wheel_radius = radius
                     self.node._emit_final(msg, self.now.to_msg(), self.now, h.WheelModuleCommandArray.MOTION)
                     self.assertAlmostEqual(max(abs(m.traction_velocity)
                         for m in self.node.final_command_publisher.messages[-1].modules), .3)
-                    self.node.safety_state.safety_override_active = False
+                    self.node.operator_selector.buttons[10] = 0
                     self.node._emit_final(msg, self.now.to_msg(), self.now, h.WheelModuleCommandArray.MOTION)
                     self.assertEqual([m.traction_velocity for m in self.node.final_command_publisher.messages[-1].modules],
                         msg.velocity[count:])

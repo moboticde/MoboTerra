@@ -162,7 +162,7 @@ mounts. Evidence and source solid indices are in `meshes/scanner_frames.json`.
 These are **nominal CAD/manufacturer extrinsics**, not surveyed/calibrated
 hardware values. Verify device identity, corner/IP association, height and an
 outward known-target scan on secured hardware before localization use. They do
-not change scanner protective fields, FlexiSoft configuration or STO logic.
+not change scanner protective fields or STO logic.
 Run the standalone description launch to publish them on `/moboterra/tf_static`;
 scan data alone does not publish the transforms.
 

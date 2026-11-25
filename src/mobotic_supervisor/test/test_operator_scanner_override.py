@@ -2,6 +2,7 @@
 import math
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import test_enable_gate as h
 import test_interface_update as interfaces
 
@@ -12,8 +13,6 @@ class OperatorScannerOverrideTest(unittest.TestCase):
         fixture.setUp()
         self.f = fixture.fixture
         self.n = fixture.node
-        self.n.safety_source = 'flexisoft'
-        self.n.require_flexisoft_telemetry = False
         self.n.selected_mode = h.MODES.MANUAL
         self.n.operator_scanner_override_enabled = True
         self.n.get_clock = lambda: SimpleNamespace(now=lambda: self.f.now)
@@ -33,36 +32,36 @@ class OperatorScannerOverrideTest(unittest.TestCase):
     def test_disabled_ignores_red_and_missing_scanner_fields(self):
         for name in self.n.scanner_states:
             self.n.scanner_states[name] = (None, None)
-        self.assertTrue(self.n._safety_gate(self.f.now)[0])
+        self.assertTrue(self.n._scanner_gate(self.f.now)[0])
         errors, stop = self.n._system_conditions(self.f.now)
         self.assertFalse(any(x.startswith('SCANNER_') for x in errors))
         self.assertFalse(stop)
 
     def test_enabled_requires_both_scanners(self):
         self.select(False)
-        self.assertTrue(self.n._safety_gate(self.f.now)[0])
+        self.assertTrue(self.n._scanner_gate(self.f.now)[0])
         self.n.scanner_states['front_left'] = (None, None)
-        self.assertFalse(self.n._safety_gate(self.f.now)[0])
+        self.assertFalse(self.n._scanner_gate(self.f.now)[0])
 
     def test_unavailable_selector_requires_scanners_instead_of_exempting_them(self):
         for field, value in (('connected', False), ('estop_pressed', True), ('estop_state_known', False)):
             original = getattr(self.n.manual_state, field)
             setattr(self.n.manual_state, field, value)
-            self.assertTrue(self.n._safety_gate(self.f.now)[0])
+            self.assertTrue(self.n._scanner_gate(self.f.now)[0])
             self.n.scanner_states['front_left'] = (None, None)
-            self.assertFalse(self.n._safety_gate(self.f.now)[0])
+            self.assertFalse(self.n._scanner_gate(self.f.now)[0])
             self.n.scanner_states['front_left'] = (SimpleNamespace(
                 header=SimpleNamespace(stamp=self.f.now.to_msg()), scanner_id='front_left',
                 communication_ok=True, protective_state_known=True, warning_state_known=True,
                 protective_field_clear=True, warning_field_clear=True), self.f.now)
             setattr(self.n.manual_state, field, original)
         self.n.operator_selector.header.stamp = h.Time(9).to_msg()
-        self.assertTrue(self.n._safety_gate(self.f.now)[0])
+        self.assertTrue(self.n._scanner_gate(self.f.now)[0])
 
     def test_autonomy_cannot_use_scanner_exemption(self):
         for mode in (h.MODES.AUTONOMOUS, h.MODES.KINEMATICOFF):
             self.n.selected_mode = mode
-            self.assertFalse(self.n._safety_gate(self.f.now)[0])
+            self.assertFalse(self.n._scanner_gate(self.f.now)[0])
 
     def test_battery_and_drive_sto_checks_remain_required(self):
         self.n.battery_state.system_ready = False
@@ -107,9 +106,9 @@ class OperatorScannerOverrideTest(unittest.TestCase):
     def test_malformed_selector_does_not_exempt_scanners(self):
         for buttons in ([0]*10, [0]*10+[2], []):
             self.n.operator_selector.buttons = buttons
-            self.assertTrue(self.n._safety_gate(self.f.now)[0])
+            self.assertTrue(self.n._scanner_gate(self.f.now)[0])
             self.n.scanner_states['front_left'] = (None, None)
-            self.assertFalse(self.n._safety_gate(self.f.now)[0])
+            self.assertFalse(self.n._scanner_gate(self.f.now)[0])
             self.n.scanner_states['front_left'] = (SimpleNamespace(
                 header=SimpleNamespace(stamp=self.f.now.to_msg()), scanner_id='front_left',
                 communication_ok=True, protective_state_known=True, warning_state_known=True,
@@ -124,8 +123,6 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
         self.n, self.f = fixture.n, fixture.f
         self.select = fixture.select
         n = self.n
-        n.safety_source = 'flexisoft'
-        n.require_flexisoft_telemetry = True
         names = ['front_left', 'front_right', 'rear_left', 'rear_right']
         n.expected_module_names = names
         n.expected_steering_joint_names = [name + '_steering' for name in names]
@@ -138,69 +135,24 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
         n.joint_state.position = [0.0] * 8
         n.joint_state.velocity = [0.0] * 8
         n.scanner_states = {name: (None, None) for name in n.scanner_states}
-        # Fresh PLC explicitly identifies a scanner protective stop, without
-        # an E-stop, STO or safety-enable problem. RP2 must bypass only this.
-        n.safety_state.protective_stop_active = True
-        n.safety_state.motion_permitted = False
-        n.safety_io_state.scanner_state_known = True
-        n.safety_io_state.front_left_protective_field_clear = False
-        n.safety_io_state.front_left_ossd_active = False
-        self.assertTrue(n._safety_gate(self.f.now)[0])
 
-    def test_bypass_accepts_missing_and_red_fields_but_keeps_plc_required(self):
-        errors, stop = self.n._system_conditions(self.f.now)
-        self.assertFalse(any(x.startswith('SCANNER_') for x in errors))
-        self.assertFalse(stop)
-        for field in ('safety_state', 'safety_io_state'):
-            message = getattr(self.n, field)
-            setattr(self.n, field, None)
-            self.assertFalse(self.n._safety_gate(self.f.now)[0])
-            setattr(self.n, field, message)
-
-    def test_independent_plc_stops_and_readiness_never_bypassed(self):
-        cases = [('safety_state', 'communication_ok', False),
-                 ('safety_state', 'system_ready', False),
-                 ('safety_state', 'emergency_stop_active', True),
-                 ('safety_state', 'sto_active', True),
-                 ('safety_io_state', 'emergency_stop_active', True),
-                 ('safety_io_state', 'sto_active', True),
-                 ('safety_io_state', 'safety_enable_active', False)]
-        for message, field, value in cases:
-            with self.subTest(message=message, field=field):
-                obj = getattr(self.n, message)
-                previous = getattr(obj, field)
-                setattr(obj, field, value)
-                self.assertFalse(self.n._safety_gate(self.f.now)[0])
-                self.assertFalse(self.n._enable_gate(self.f.now)[0])
-                setattr(obj, field, previous)
-
-    def test_stale_plc_selector_or_operator_cannot_authorize_bypass(self):
-        for cause in ('safety_stamp', 'io_stamp', 'safety_receipt', 'io_receipt',
-                      'selector_stamp', 'selector_receipt', 'operator_stamp',
+    def test_stale_selector_or_operator_cannot_authorize_bypass(self):
+        for cause in ('selector_stamp', 'selector_receipt', 'operator_stamp',
                       'operator_receipt', 'radio_loss', 'operator_estop', 'invalid_selector'):
             with self.subTest(cause=cause):
                 self.setUp()
                 if cause.endswith('_stamp'):
-                    obj = {'safety_stamp': self.n.safety_state, 'io_stamp': self.n.safety_io_state,
-                           'selector_stamp': self.n.operator_selector,
+                    obj = {'selector_stamp': self.n.operator_selector,
                            'operator_stamp': self.n.manual_state}[cause]
                     obj.header.stamp = h.Time(9).to_msg()
                 elif cause.endswith('_receipt'):
-                    field = {'safety_receipt': 'safety_received', 'io_receipt': 'safety_io_received',
-                             'selector_receipt': 'operator_selector_received',
+                    field = {'selector_receipt': 'operator_selector_received',
                              'operator_receipt': 'manual_state_received'}[cause]
                     setattr(self.n, field, h.Time(9))
                 elif cause == 'radio_loss': self.n.manual_state.connected = False
                 elif cause == 'operator_estop': self.n.manual_state.estop_pressed = True
                 else: self.n.operator_selector.buttons[-1] = 2
-                self.assertFalse(self.n._safety_gate(self.f.now)[0])
-
-    def test_unknown_plc_motion_prohibition_is_not_a_scanner_exemption(self):
-        self.n.safety_io_state.scanner_state_known = False
-        self.assertFalse(self.n._safety_gate(self.f.now)[0])
-        self.n.safety_io_state.scanner_state_known = True
-        self.n.safety_state.protective_stop_active = False
-        self.assertFalse(self.n._safety_gate(self.f.now)[0])
+                self.assertFalse(self.n._scanner_gate(self.f.now)[0])
 
     def test_red_scanner_callback_does_not_stop_authorized_bypass(self):
         self.f.now = h.Time(10.001)
@@ -208,7 +160,7 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
             scanner_id='front_left', communication_ok=True, protective_state_known=True,
             warning_state_known=True, protective_field_clear=False, warning_field_clear=False)
         self.n._scanner_callback('front_left', msg)
-        self.assertTrue(self.n._safety_gate(self.f.now)[0])
+        self.assertTrue(self.n._scanner_gate(self.f.now)[0])
         self.assertFalse(self.n._system_conditions(self.f.now)[1])
 
     def test_auto_requests_and_current_auto_motion_are_rejected(self):
@@ -216,7 +168,7 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertFalse(self.n._request_mode(mode)[0])
                 self.n.selected_mode = mode
-                self.assertFalse(self.n._safety_gate(self.f.now)[0])
+                self.assertFalse(self.n._scanner_gate(self.f.now)[0])
                 self.n.selected_mode = h.MODES.MANUAL
 
     def test_battery_and_each_drive_still_required(self):
@@ -263,12 +215,12 @@ class FourModuleOperatorScannerOverrideTest(unittest.TestCase):
         self.n._operator_selector_callback(msg)
         self.assertIsNone(self.n.manual_command)
         self.assertEqual(self.n.last_output, [0, 0, 0])
-        self.assertFalse(self.n._safety_gate(self.f.now)[0])
+        self.assertFalse(self.n._scanner_gate(self.f.now)[0])
         self.assertTrue(all(m.traction_velocity == 0
                             for m in self.n.final_command_publisher.messages[-1].modules))
 
 
-class FourModuleMonitoringOnlyScannerOverrideTest(unittest.TestCase):
+class FourModuleScannerAvailabilityTest(unittest.TestCase):
     """Physical four-miControl profile with disconnected Ethernet scanners."""
 
     def setUp(self):
@@ -276,9 +228,6 @@ class FourModuleMonitoringOnlyScannerOverrideTest(unittest.TestCase):
         fixture.setUp()
         self.n, self.f = fixture.n, fixture.f
         self.select = fixture.select
-        self.n.require_flexisoft_telemetry = False
-        self.n.safety_state = self.n.safety_io_state = None
-        self.n.safety_received = self.n.safety_io_received = None
         # Exercise fault reporting beyond discovery and feedback grace periods.
         self.n.started_at = h.Time(1)
         self.n.startup_grace = 0.0
@@ -288,7 +237,7 @@ class FourModuleMonitoringOnlyScannerOverrideTest(unittest.TestCase):
     def test_disconnected_scanners_allow_manual_enable_without_scanner_faults(self):
         self.assertEqual(len(self.n.expected_module_names), 4)
         self.assertTrue(all(state == (None, None) for state in self.n.scanner_states.values()))
-        self.assertTrue(self.n._safety_gate(self.f.now)[0])
+        self.assertTrue(self.n._scanner_gate(self.f.now)[0])
         self.assertTrue(self.n._enable_gate(self.f.now)[0])
         self.assertTrue(self.n._base_gate(self.f.now)[0])
         self.assertEqual(self.n._system_conditions(self.f.now), ([], False))
@@ -322,6 +271,108 @@ class FourModuleMonitoringOnlyScannerOverrideTest(unittest.TestCase):
         self.n.operator_selector.header.stamp = h.Time(9).to_msg()
         self.assertIsNone(self.n._operator_selector_value(self.f.now))
         self.assertFalse(self.n._enable_gate(self.f.now)[0])
+
+
+class RestrictedManualFeedbackTest(unittest.TestCase):
+    def setUp(self):
+        fixture = FourModuleScannerAvailabilityTest()
+        fixture.setUp()
+        self.n, self.f = fixture.n, fixture.f
+        self.select = fixture.select
+        del self.n._source_gate, self.n._publish_mode_state
+        mode_state = patch.dict(h.namespace, VehicleModeState=interfaces.State)
+        mode_state.start()
+        self.addCleanup(mode_state.stop)
+        self.n.manual_state.controls_neutral = False
+        self.n._control()
+        self.assertTrue(self.n.module_command_publisher.messages[-1].enable)
+
+    def command(self):
+        cmd = h.TwistStamped()
+        cmd.header.stamp = self.f.now.to_msg()
+        cmd.twist.linear.x = 1.0
+        self.n._manual_command_callback(cmd)
+
+    def assert_feedback_pause(self, code):
+        self.n._control()
+        self.assertTrue(self.n.module_command_publisher.messages[-1].enable)
+        state = self.n.mode_state_publisher.messages[-1]
+        self.assertFalse(state.motion_permitted or state.error_active)
+        self.assertIn(code, state.reason_codes)
+        self.assertNotIn('B2_ENABLE_REQUIRED', state.reason_codes)
+        self.assertIsNone(self.n.manual_command)
+        self.assertEqual(self.n.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
+
+    def test_status_timeout_clears_motion_until_fresh_feedback_and_neutral(self):
+        self.command()
+        self.n._control()
+        self.assertTrue(self.n.mode_state_publisher.messages[-1].motion_permitted)
+        self.n.wheel_status_received = h.Time(9)
+        self.assert_feedback_pause('DRIVER_MONITOR_LOST')
+
+        self.n._wheel_status_callback(self.n.wheel_status)
+        self.command()
+        self.n._control()
+        self.assertFalse(self.n.mode_state_publisher.messages[-1].motion_permitted)
+
+        self.f.now = h.Time(10.01)
+        self.n.manual_state.header.stamp = self.f.now.to_msg()
+        self.n.manual_state.controls_neutral = True
+        self.n._manual_state_callback(self.n.manual_state)
+        self.assertIsNone(self.n.manual_command)
+        self.f.now = h.Time(10.02)
+        self.n.manual_state.header.stamp = self.f.now.to_msg()
+        self.n.manual_state.controls_neutral = False
+        self.n._manual_state_callback(self.n.manual_state)
+        self.command()
+        self.n._control()
+        self.assertTrue(self.n.mode_state_publisher.messages[-1].motion_permitted)
+        self.assertTrue(self.n.module_command_publisher.messages[-1].enable)
+
+    def test_drive_position_and_feedback_loss_pause_motion_during_startup_grace(self):
+        self.n.started_at = self.f.now
+        self.n.startup_grace = 1.0
+        module = self.n.wheel_status.modules[0]
+        self.command()
+        module.position_valid = module.feedback_fresh = False
+        self.assert_feedback_pause('POSITION_CONTINUITY_UNKNOWN:' + module.name)
+        self.assertIn('DRIVE_FEEDBACK_LOST:' + module.name,
+                      self.n.mode_state_publisher.messages[-1].reason_codes)
+
+    def test_kinematics_timeout_pauses_but_active_fault_withdraws_enable(self):
+        self.command()
+        self.n.required_health_sources = ['kinematics']
+        self.n.component_health = {}
+        self.n.health_timeout = 0.3
+        self.assert_feedback_pause('COMPONENT_HEALTH_LOST:kinematics')
+        record = SimpleNamespace(header=SimpleNamespace(stamp=self.f.now.to_msg()),
+                                 monitoring_valid=True, fault_active=True)
+        self.n.component_health['kinematics'] = (record, self.f.now)
+        self.n._control()
+        self.assertFalse(self.n.module_command_publisher.messages[-1].enable)
+        self.assertTrue(self.n.operator_drives_disabled)
+
+    def test_charger_interlock_withdraws_enable_during_feedback_pause(self):
+        self.n.wheel_status_received = h.Time(9)
+        self.assert_feedback_pause('DRIVER_MONITOR_LOST')
+        self.n.battery_state.system_ready = False
+        self.n.battery_state.status_message = 'charging or charger mains connected'
+        self.n._control()
+        self.assertFalse(self.n.module_command_publisher.messages[-1].enable)
+        self.assertTrue(self.n.operator_drives_disabled)
+
+    def test_safety_enabled_requires_b2_after_feedback_timeout(self):
+        for name in self.n.scanner_states:
+            state = SimpleNamespace(
+                header=SimpleNamespace(stamp=self.f.now.to_msg()), scanner_id=name,
+                communication_ok=True, protective_state_known=True, warning_state_known=True,
+                protective_field_clear=True, warning_field_clear=True)
+            self.n._scanner_callback(name, state)
+        self.select(False)
+        self.n.wheel_status_received = h.Time(9)
+        self.n._control()
+        self.assertFalse(self.n.module_command_publisher.messages[-1].enable)
+        self.assertIn('B2_ENABLE_REQUIRED', self.n.mode_state_publisher.messages[-1].reason_codes)
 
 
 if __name__ == '__main__':

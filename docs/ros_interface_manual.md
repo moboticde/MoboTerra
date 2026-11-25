@@ -61,8 +61,6 @@ not an odometry measurement.
 | `battery/state` | `mobotic_interfaces/msg/BatteryPackState` | Alias for the primary pack |
 | `scanner/<location>/scan` | `sensor_msgs/msg/LaserScan` | Laser ranges; locations are `front_left` and `rear_right` |
 | `scanner/<location>/safety_zone_status` | `mobotic_interfaces/msg/ScannerSafetyState` | Direct scanner evaluation-path information and validity |
-| `safety/state` | `mobotic_interfaces/msg/SafetyState` | FlexiSoft monitoring and derived software safety state |
-| `safety/io_state` | `mobotic_interfaces/msg/SafetyIOState` | Mapped safety I/O and known flags |
 | `diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Component condition and fault details |
 | `tf`, `tf_static` | `tf2_msgs/msg/TFMessage` | Namespaced dynamic and static transforms |
 
@@ -267,10 +265,8 @@ inhibit motion. Safety Disabled permits only restricted MANUAL software scanner
 bypass at the reduced speed. Stale or invalid selector input cannot grant that
 bypass. LaserScan alone does not establish protective-field status.
 
-FlexiSoft Ethernet is monitoring-only with `safety.telemetry_required: false`.
-Its Ethernet messages do not supply an additional supervisor control gate in
-that role. The physical stop/STO circuit operates independently. If this setting
-is changed to true, the additional software telemetry gates must be commissioned.
+The physical stop and STO circuit operates independently of software scanner
+monitoring.
 
 Battery SOC below 20% is a warning, not a drive-enable or motion block. Invalid,
 missing or stale battery state, HV disconnection, applicable charging conditions

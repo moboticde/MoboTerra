@@ -5,7 +5,7 @@ import math
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from mobotic_interfaces.msg import BatterySystemState, OperatorState, SafetyIOState, SafetyState, VehicleModeState, ComponentHealth, ComponentHealthArray
+from mobotic_interfaces.msg import BatterySystemState, OperatorState, VehicleModeState, ComponentHealth, ComponentHealthArray
 from geometry_msgs.msg import TwistStamped
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
@@ -13,7 +13,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 
-from .diagnostic_health import OK, WARN, ERROR, freshness, battery_health, safety_health
+from .diagnostic_health import OK, WARN, ERROR, freshness, battery_health
 from .host_health import read_host_health
 
 
@@ -24,10 +24,6 @@ class PlatformDiagnostics(Node):
         self.declare_parameter('monitor_scanners', True)
         self.declare_parameter('monitor_odometry', True)
         self.declare_parameter('host_state_path', '')
-        self.declare_parameter('safety_source', 'flexisoft')
-        self.safety_source = str(self.get_parameter('safety_source').value)
-        if self.safety_source != 'flexisoft':
-            raise ValueError('unsupported safety_source')
         self.host_state_path = str(self.get_parameter('host_state_path').value)
         self.declare_parameter('minimum_battery_percentage', 0.2)
         self.minimum_soc = float(self.get_parameter('minimum_battery_percentage').value)
@@ -35,7 +31,7 @@ class PlatformDiagnostics(Node):
             raise ValueError('minimum_battery_percentage must be a fraction in [0, 1]')
         self.cache = {}
         deadlines = {}
-        for key, default in (('battery_timeout', 0.6), ('safety_timeout', 0.3),
+        for key, default in (('battery_timeout', 0.6),
                              ('mode_timeout', 0.3), ('manual_timeout', 0.25),
                              ('scanner_timeout', 0.5), ('odometry_timeout', 0.5),
                              ('publish_period', 0.5)):
@@ -46,8 +42,6 @@ class PlatformDiagnostics(Node):
         self.channels = {
             'vehicle/measured_velocity': (TwistStamped, deadlines['odometry_timeout']),
             'battery/system_state': (BatterySystemState, deadlines['battery_timeout']),
-            'safety/state': (SafetyState, deadlines['safety_timeout']),
-            'safety/io_state': (SafetyIOState, deadlines['safety_timeout']),
             'vehicle/mode': (VehicleModeState, deadlines['mode_timeout']),
         }
         if self.get_parameter('monitor_manual').value:
@@ -131,14 +125,6 @@ class PlatformDiagnostics(Node):
                     status.values = [KeyValue(key='minimum_soc', value=str(msg.minimum_percentage)),
                                      KeyValue(key='stale_participants', value=','.join(msg.stale_batteries)),
                                      KeyValue(key='faulted_participants', value=','.join(msg.faulted_batteries))]
-                elif topic == 'safety/state':
-                    level, status.message = safety_health(msg)
-                elif topic == 'safety/io_state':
-                    level = OK if msg.sto_state_known and msg.safety_enable_state_known else WARN
-                    status.message = 'Mapped hardware signals' if level == OK else 'Independent STO/enable signals unmapped; interlocks inferred'
-                    status.values = [KeyValue(key='flexisoft_status_raw', value=hex(msg.flexisoft_status_raw)),
-                                     KeyValue(key='sto_state_known', value=str(msg.sto_state_known)),
-                                     KeyValue(key='safety_enable_state_known', value=str(msg.safety_enable_state_known))]
                 elif topic == 'vehicle/mode':
                     level = ERROR if msg.error_active else OK if msg.motion_permitted else WARN
                     status.message = msg.status_message or 'Waiting for motion permission'

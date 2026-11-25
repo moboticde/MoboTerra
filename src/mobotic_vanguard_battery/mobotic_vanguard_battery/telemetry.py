@@ -3,9 +3,11 @@ import math
 
 
 def decode_soc(raw):
-    # Reference scale is 0.001563 percent/count (~1/640 percent).
-    # Accept full-scale rounding, never turn reserved/invalid data into a full battery.
-    return min(raw * 0.001563 / 100.0, 1.0) if 0 <= raw <= 64000 else math.nan
+    # Both installed packs report 0xFC40 (100.93% at the Vanguard scale)
+    # after a full charge. Keep the ROS fraction within its 0..1 range.
+    if not 0 <= raw <= 0xFC40:
+        return math.nan
+    return min(raw * 0.001563 / 100.0, 1.0)
 
 
 def decode_electrical(raw_voltage, raw_current):

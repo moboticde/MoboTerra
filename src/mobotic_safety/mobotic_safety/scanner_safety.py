@@ -8,7 +8,7 @@ from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
 from sick_safetyscanners2_interfaces.msg import RawMicroScanData
-from mobotic_interfaces.msg import SafetyIOState, ScannerSafetyState
+from mobotic_interfaces.msg import ScannerSafetyState
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
 
@@ -16,49 +16,31 @@ class ScannerSafetyAdapter(Node):
     def __init__(self):
         super().__init__('scanner_safety_adapter')
         self.declare_parameter('status_timeout', 0.3)
-        self.declare_parameter('scanner_source', 'scanner')
         self.declare_parameter('scanner_input_suffix', 'raw_data')
         self.timeout = float(self.get_parameter('status_timeout').value)
-        self.source = str(self.get_parameter('scanner_source').value)
         self.input_suffix = str(self.get_parameter('scanner_input_suffix').value)
         if self.input_suffix not in ('raw_data', 'evaluation_data'):
             raise ValueError('unsupported scanner input suffix')
         if not math.isfinite(self.timeout) or self.timeout <= 0:
             raise ValueError('status timeout must be positive and finite')
-        if self.source not in ('scanner', 'safety_io'):
-            raise ValueError('scanner_source must be scanner or safety_io')
-        self.state = None
         self.samples = {}
         self.sequences = {}
         self.paths = {}
         self._last_output_signatures = {}
         self._last_diagnostic_signatures = {}
         self._last_diagnostic_at = {}
-        self.input_subscriptions = []
-        if self.source == 'safety_io':
-            self.input_subscriptions.append(self.create_subscription(
-                SafetyIOState, 'safety/io_state', self._receive, 1))
-        else:
-            for name in ('front_left', 'rear_right'):
-                self.input_subscriptions.append(self.create_subscription(
-                    RawMicroScanData, f'scanner/{name}/{self.input_suffix}',
-                    lambda msg, location=name: self._receive_scanner(location, msg),
-                    qos_profile_sensor_data))
+        self.input_subscriptions = [
+            self.create_subscription(
+                RawMicroScanData, f'scanner/{name}/{self.input_suffix}',
+                lambda msg, location=name: self._receive_scanner(location, msg),
+                qos_profile_sensor_data)
+            for name in ('front_left', 'rear_right')
+        ]
         self.scanner_publishers = {name: self.create_publisher(ScannerSafetyState, f'scanner/{name}/safety_zone_status', 1)
                            for name in ('front_left', 'rear_right')}
         self.diagnostics = {name: self.create_publisher(DiagnosticArray, f'scanner/{name}/diagnostics', 1)
                             for name in self.scanner_publishers}
         self.timer = self.create_timer(0.05, self._publish)
-
-    def _receive(self, message):
-        if message.header.stamp.sec < 0 or not 0 <= message.header.stamp.nanosec < 1000000000:
-            return
-        stamp = Time.from_msg(message.header.stamp)
-        if stamp.nanoseconds <= 0 or not 0 <= (self.get_clock().now() - stamp).nanoseconds <= int(self.timeout * 1e9):
-            return
-        if self.state is None or Time.from_msg(message.header.stamp).nanoseconds > Time.from_msg(self.state.header.stamp).nanoseconds:
-            self.state = message
-            self._publish()
 
     def _receive_scanner(self, name, message):
         received = time.monotonic()
@@ -71,6 +53,8 @@ class ScannerSafetyAdapter(Node):
             if delta == 0 or (delta >= 0x80000000 and received - previous[1] <= self.timeout):
                 return
             restarted = delta >= 0x80000000
+        if restarted:
+            self.paths.pop(name, None)
         self.sequences[name] = (sequence, received)
         output = ScannerSafetyState()
         output.header.stamp = self.get_clock().now().to_msg()
@@ -85,9 +69,15 @@ class ScannerSafetyAdapter(Node):
                   and not state.application_error and not state.device_error
                   and not state.contamination_error and len(status) == len(safe) == len(valid))
         if usable:
-            # Learn valid paths; once observed, a path losing validity must
-            # never disappear into an apparent clear state.
-            paths = self.paths.setdefault(name, set())
+            # A monitoring case can select different outputs. Within a case,
+            # a path losing validity must still make the field state unknown.
+            monitoring_case = (
+                state.current_monitoring_case_no_table_1,
+                state.current_monitoring_case_no_table_2,
+                state.current_monitoring_case_no_table_3,
+                state.current_monitoring_case_no_table_4,
+            )
+            paths = self.paths.setdefault(name, {}).setdefault(monitoring_case, set())
             paths.update(i for i, flag in enumerate(valid) if flag)
             usable = bool(paths) and all(i < len(valid) and valid[i] for i in paths)
             protective = [i for i in sorted(paths) if i < len(safe) and safe[i]]
@@ -107,33 +97,18 @@ class ScannerSafetyAdapter(Node):
     def _publish(self):
         now = self.get_clock().now()
         for name, publisher in self.scanner_publishers.items():
-            output = ScannerSafetyState()
-            output.scanner_id = name
-            if self.source == 'scanner':
-                sample, received = self.samples.get(name, (None, None))
-                fresh = (sample is not None and 0 <= time.monotonic() - received <= self.timeout
-                         and 0 <= (now - Time.from_msg(sample.header.stamp)).nanoseconds <= int(self.timeout * 1e9))
-                if fresh:
-                    output = sample
-                else:
-                    output = ScannerSafetyState()
-                    output.scanner_id = name
-                    output.header.stamp = sample.header.stamp if sample is not None else now.to_msg()
-                    output.source = 'scanner Ethernet telemetry stale or missing'
+            sample, received = self.samples.get(name, (None, None))
+            fresh = (sample is not None and 0 <= time.monotonic() - received <= self.timeout
+                     and 0 <= (now - Time.from_msg(sample.header.stamp)).nanoseconds <= int(self.timeout * 1e9))
+            if fresh:
+                output = sample
             else:
-                valid = (self.state is not None and self.state.scanner_state_known and
-                         0 <= (now - Time.from_msg(self.state.header.stamp)).nanoseconds <= int(self.timeout * 1e9))
-                output.header = self.state.header if self.state is not None else output.header
-                output.communication_ok = valid
-                output.protective_state_known = output.warning_state_known = output.ossd_state_known = valid
-                if valid:
-                    output.protective_field_clear = getattr(self.state, name + '_protective_field_clear')
-                    output.warning_field_clear = getattr(self.state, name + '_warning_field_clear')
-                    output.ossd_active = getattr(self.state, name + '_ossd_active')
-                output.source = 'virtual safety I/O; field-set number unavailable'
+                output = ScannerSafetyState()
+                output.scanner_id = name
+                output.header.stamp = sample.header.stamp if sample is not None else now.to_msg()
+                output.source = 'scanner Ethernet telemetry stale or missing'
             valid = output.communication_ok and output.protective_state_known and output.warning_state_known
-            acquired = name in self.samples if self.source == 'scanner' else self.state is not None
-            stamp_ns = Time.from_msg(output.header.stamp).nanoseconds if acquired else 0
+            stamp_ns = Time.from_msg(output.header.stamp).nanoseconds if sample is not None else 0
             signature = (stamp_ns, output.communication_ok, output.protective_state_known,
                          output.warning_state_known, output.ossd_state_known,
                          output.protective_field_clear, output.warning_field_clear,

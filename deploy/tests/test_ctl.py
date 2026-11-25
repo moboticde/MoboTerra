@@ -84,6 +84,8 @@ class ControlTest(unittest.TestCase):
         self.assertIn('__ns:=/moboterra',command)
         self.assertIn('/tf:=/moboterra/tf',command)
         self.assertIn('1000:1000',command)
+        self.assertEqual(command[command.index('--ipc')+1],'private')
+        self.assertIn('FASTDDS_BUILTIN_TRANSPORTS=UDPv4',command)
         self.assertNotIn('--privileged',command)
         self.assertTrue(any('XAUTHORITY=' in value for value in command))
         self.assertTrue(any('exec rviz2' in value for value in command))

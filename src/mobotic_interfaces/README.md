@@ -10,7 +10,7 @@ Shared ROS 2 messages and services for the MoboTerra operator, vehicle superviso
 - `WheelModuleOperationCommand` is internal management: enable and one idempotent reset ID, bound to supervisor instance/generation. It has no motion targets or clear-errors boolean.
 - `WheelModuleStatusArray` contains one named record per configured module with separate `DriveStatus` for steering and traction. Currents are amperes; unknown values have known flags and NaN where appropriate.
 - Native device-state/control-mode values are controller-family-specific. Status/position readiness must not be interpreted as physical E-stop, brake or STO.
-- `ScannerSafetyState` exposes generic field/OSSD state and unknown field-set metadata. `SafetyTelegram` preserves gateway receipt time, connection epoch and sequence.
+- `ScannerSafetyState` exposes generic field/OSSD state and unknown field-set metadata.
 - `ComponentHealthArray` carries typed required-component health internally; it is not derived from the public mode's diagnostic severity.
 - `joint_states` uses standard JointState for actual joint position [rad] and velocity [rad/s]. Effort is empty: amperes are not torque.
 - Battery SOC/percentages are fractions (0.2 means 20%). Missing data does not mean zero or healthy.
@@ -26,7 +26,6 @@ This package declares Apache-2.0. Retain package license/copyright notices and r
 motion or B2 recovery; applications must use the explicit state flags rather
 than treating every reason code as a latched fault.
 
-`SAFETY_SELECTOR_MISMATCH` identifies fresh RP2 Safety Enabled conflicting with
-FlexiSoft override. It asserts `safety_stop_active`, clears `motion_permitted`
-and reports SAFETY, without latching ERROR by itself. The selected control mode
-is retained. Fresh command/manual-rearm requirements apply after it clears.
+`safety_stop_active` reports a confirmed protective scanner field, operator
+STOP or active drive STO. An unavailable scanner inhibits motion through
+readiness and can report `SCANNER_MONITOR_LOST:<location>`.

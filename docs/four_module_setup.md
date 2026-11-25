@@ -21,7 +21,6 @@ The base profile lists scanner host `192.168.1.200` and scanners `192.168.1.5`
 and `192.168.1.6`. For the Docker service, give the Ubuntu robot-facing
 Ethernet port a free `192.168.x.x` address on the scanner subnet. Startup
 detects the host address and uses that subnet for the scanners at `.5` and `.6`.
-FlexiSoft telemetry is received through TCP port 9100.
 
 ## Current behavior
 
@@ -46,8 +45,7 @@ Disabled position permits only reduced-speed MANUAL software scanner bypass,
 capped at 0.3 m/s. Both autonomous modes require a fresh Safety Enabled selector.
 Independent hardware safety wiring is unaffected by this software selection.
 
-FlexiSoft Ethernet is monitoring-only (`safety.telemetry_required: false`). Low
-SOC below 20% is advisory, as are receiver error-register reports under the
+Low SOC below 20% is advisory, as are receiver error-register reports under the
 current profile. Missing or invalid battery telemetry, charging/HV conditions,
 drive faults and applicable operator/sensor readiness still block their control
 paths. The machine handover must explicitly verify the configured policies.

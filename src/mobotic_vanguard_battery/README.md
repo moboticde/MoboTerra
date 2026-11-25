@@ -34,7 +34,8 @@ readiness. Stale status marks the participant absent and reports watchdog expiry
 `BatteryPackState` exposes voltage, current and fractional SOC and omits unsupported
 temperature and amp-hour fields. Update subscribers using the former `sensor_msgs/msg/BatteryState`
 type to `mobotic_interfaces/msg/BatteryPackState`.
-Reserved J1939 values must not appear as valid 100% SOC.
+The monitor caps near-full Vanguard readings through `0xFC40` at 100% SOC.
+Higher values, including `0xFFFE` and `0xFFFF`, are rejected.
 When `can_rx.header.stamp` is nonzero, each status/SOC/electrical sample retains
 its CAN acquisition time. Delayed romb consumes `telemetry_timeout` (default
 0.5 s) rather than starting another full timeout at callback time. Already stale

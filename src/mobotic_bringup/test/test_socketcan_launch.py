@@ -458,17 +458,17 @@ class SocketCanLaunchTest(unittest.TestCase):
         for key in ('encoder_resolution', 'gear_ratio'):
             self.assertIsInstance(node.kwargs['parameters'][0][key], float)
 
-    def test_flexisoft_respawn_is_delayed_in_both_launch_files(self):
+    def test_scanner_adapter_respawn_is_delayed_in_both_launch_files(self):
         integrated = namespace['generate_launch_description']()
         safety_source = SOURCE.parents[2] / 'mobotic_safety' / 'launch' / 'safety.launch.py'
         safety_namespace = {'generate_launch_description': resolved_factory(safety_source)}
         standalone = safety_namespace['generate_launch_description']()
         for description in (integrated, standalone):
-            bridge = next(action for action in description.args[0]
+            adapter = next(action for action in description.args[0]
                           if action.kind == 'Node'
-                          and action.kwargs.get('executable') == 'flexisoft_tcp_bridge')
-            self.assertTrue(bridge.kwargs['respawn'])
-            self.assertEqual(bridge.kwargs['respawn_delay'], 1.0)
+                          and action.kwargs.get('executable') == 'scanner_safety_adapter')
+            self.assertTrue(adapter.kwargs['respawn'])
+            self.assertEqual(adapter.kwargs['respawn_delay'], 1.0)
 
     def test_odometry_is_enabled_for_both_profiles_and_has_single_tf_owner_switch(self):
         arguments = {action.args[0]: action for action in self.actions if action.kind == 'DeclareLaunchArgument'}
@@ -512,11 +512,14 @@ class SocketCanLaunchTest(unittest.TestCase):
 
     def test_scanner_field_adapter_uses_real_ethernet_only_on_hardware(self):
         for stack in ('hardware', 'virtual'):
-            actions, _ = resolve(factory(SOURCE)(), {'stack_type': stack})
+            actions, context = resolve(factory(SOURCE)(), {'stack_type': stack})
             node = next(a for a in actions if a.kind == 'Node'
                         and a.kwargs.get('executable') == 'scanner_safety_adapter')
-            self.assertEqual(node.kwargs['parameters'][0]['scanner_source'],
-                             'scanner' if stack == 'hardware' else 'safety_io')
+            mock = next(a for a in actions if a.kind == 'Node'
+                        and a.kwargs.get('executable') == 'mock_platform_state')
+            self.assertEqual(node.kwargs['parameters'][0]['scanner_input_suffix'], 'evaluation_data')
+            self.assertEqual(node.kwargs['condition'].perform(context), stack == 'hardware')
+            self.assertEqual(mock.kwargs['condition'].perform(context), stack == 'virtual')
             self.assertTrue(node.kwargs['respawn'])
 
 

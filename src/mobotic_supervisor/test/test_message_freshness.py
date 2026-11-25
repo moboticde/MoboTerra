@@ -71,26 +71,19 @@ class MessageFreshnessTest(unittest.TestCase):
         self.assertIn('manual-control state stale', reason)
 
     def test_readiness_original_stamp_expiry_disables_and_clears_motion(self):
-        for name, callback, timeout in (
-            ('safety_state', '_safety_callback', 0.3),
-            ('safety_io_state', '_safety_io_callback', 0.3),
-            ('battery_state', '_battery_callback', 0.6),
-        ):
-            with self.subTest(input=name):
-                self.setUp()
-                self.node._autonomy_command_callback(self.platform.velocity())
-                delayed = copy.deepcopy(getattr(self.node, name))
-                delayed.header.stamp = harness.Time(10.0 - timeout + 0.01).to_msg()
-                original_stamp = delayed.header.stamp
-                getattr(self.node, callback)(delayed)
-                self.assertTrue(self.node._enable_gate(self.platform.platform.now)[0])
-                self.platform.advance(0.02)
-                delayed.header.stamp = original_stamp
-                setattr(self.node, name, delayed)
-                self.node._control()
-                self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
-                self.assertIsNone(self.node.autonomy_command)
-                self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
+        self.node._autonomy_command_callback(self.platform.velocity())
+        delayed = copy.deepcopy(self.node.battery_state)
+        delayed.header.stamp = harness.Time(9.41).to_msg()
+        original_stamp = delayed.header.stamp
+        self.node._battery_callback(delayed)
+        self.assertTrue(self.node._enable_gate(self.platform.platform.now)[0])
+        self.platform.advance(0.02)
+        delayed.header.stamp = original_stamp
+        self.node.battery_state = delayed
+        self.node._control()
+        self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
+        self.assertIsNone(self.node.autonomy_command)
+        self.assertEqual(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
 
     def test_wheel_report_stamp_expiry_blocks_motion_and_enable(self):
         delayed = copy.deepcopy(self.node.wheel_status)
@@ -151,10 +144,11 @@ class MessageFreshnessTest(unittest.TestCase):
         self.assertGreater(self.node.cmd_vel_publisher.messages[-1].twist.linear.x, 0.0)
 
     def test_receipt_clock_reversal_disables_even_with_valid_header(self):
-        self.node.safety_received = harness.Time(10.01)
+        scanner = self.node.scanner_states['front_left'][0]
+        self.node.scanner_states['front_left'] = (scanner, harness.Time(10.01))
         ready, reason = self.node._enable_gate(self.platform.platform.now)
         self.assertFalse(ready)
-        self.assertIn('safety state stale', reason)
+        self.assertIn('front_left scanner field data unavailable', reason)
 
     def test_standstill_still_requires_unexpired_original_feedback(self):
         self.node._request_mode(harness.MODES.MANUAL)

@@ -1,4 +1,4 @@
-"""Launch safety using the shared, validated platform profile."""
+"""Launch the standalone scanner field adapter."""
 from mobotic_config.launching import standalone_launch
 
 

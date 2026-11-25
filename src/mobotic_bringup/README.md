@@ -51,9 +51,8 @@ bash scripts/start_MoboTerra start_rviz:=false
 
 One launch starts the driver, kinematics, odometry, supervisor and platform diagnostics.
 By default it also starts the drive SocketCAN bridge, a separate receive-only
-battery CAN receiver, the selected operator provider,
-FlexiSoft bridge and safety monitor, Vanguard battery monitor and both
-SICK scanner nodes and the generic scanner-safety adapter. Autonomy is not launched.
+battery CAN receiver, the selected operator provider, the Vanguard battery
+monitor, both SICK scanner nodes and the scanner safety adapter.
 Wheel odometry does publish `odom -> base_link` on the namespaced `tf` topic.
 The shared [description](../mobotic_description/README.md) starts by default,
 including joint/static TF and CAD-envelope corner frames. Use start_description:=false
@@ -73,8 +72,6 @@ Drive frames remain on `can_rx`/`can_tx`. Battery frames are isolated on
 `battery_can/can_rx`; the battery monitor remaps its input there. No battery
 sender is launched, and this does not implement operating-consent/HV control.
 Several nodes respawn automatically, including the supervisor and driver.
-The FlexiSoft bridge exits on unexpected TCP worker failure and respawns after
-1 s; normal client disconnects are handled without restarting the process.
 
 The hardware bridge explicitly uses `filters=0:0,#1FFFFFFF`: all normal
 standard/extended traffic plus every SocketCAN error class. Error-frame reception
@@ -112,7 +109,6 @@ have not changed. `check_config` is read-only and does not configure OS interfac
 | `start_socketcan` | `true` | Start drive CAN bridge only |
 | `start_battery_socketcan` | `true` | Start receive-only battery CAN receiver when `start_battery=true` |
 | `start_manual_interface` | `true` | Start joystick and teleop/manual-control node |
-| `start_safety` | `true` | Start hardware FlexiSoft monitoring |
 | `start_battery` | `true` | Start hardware Vanguard monitor |
 | `start_scanners` | `true` | Start hardware scanners and scan-health monitoring |
 | `operator_can_interface` | empty | Optional receive-only PAIL CAN input in virtual mode, isolated from simulated drive traffic |
@@ -124,13 +120,13 @@ have not changed. `check_config` is read-only and does not configure OS interfac
 
 Overlay node policies using `driver_parameters_file`,
 `kinematics_parameters_file`, `manual_parameters_file`,
-`safety_parameters_file`, `battery_parameters_file`,
+`battery_parameters_file`,
 `supervisor_parameters_file`, `odometry_parameters_file`, `scanner_parameters_file`
 or `diagnostics_parameters_file`. These default to empty (no overlay). Use the
 `/**: ros__parameters:` format; matching old hardware entries are accepted, but
 conflicting hardware is rejected—edit `platform_config` instead. `publish_odom_tf:=auto`
 honors `publish_tf` from effective odometry policy; explicit `true`/`false` wins.
-Disabling safety/battery nodes does not bypass supervisor readiness checks.
+The supervisor still evaluates scanner and battery readiness when their nodes are disabled.
 `start_battery_socketcan:=false` leaves the battery monitor running; an external
 receiver must then publish timestamped frames on `/moboterra/battery_can/can_rx`.
 The two transport switches are independent. Disabling battery monitoring also
@@ -202,7 +198,7 @@ are internal. Initialization rejects enabled drives; a diagnostic disable is
 not a persistent override while the supervisor requests enable.
 
 Verify the node IDs, gearing, geometry, limits, joystick layout, battery participant
-mapping, FlexiSoft telegram and hardware stop/brakes before operating the platform.
+mapping, scanner field evaluation and hardware stop/brakes before operating the platform.
 See [hardware monitoring and secured tests](../../docs/hardware_monitoring.md).
 
 ## Virtual profile: protocol testing, not physical simulation
@@ -245,9 +241,8 @@ The Ecobox must already transmit PDOs. If it is Pre-Operational, explicitly star
 node 10 on the isolated joystick bus with `cansend can0 000#010A`.
 The option has no effect in hardware mode or when the manual interface is disabled.
 
-Physical scanners, FlexiSoft and batteries are unnecessary for this virtual
-profile: mock readiness supplies those inputs. The generic scanner adapter
-reports the mock I/O status; it does not connect to scanners. An unverified PAIL
+The virtual profile publishes simulated scanner field and battery readiness
+on the regular supervisor inputs. An unverified PAIL
 mapping still inhibits joystick motion. See the [RViz namespace example](../../docs/commands.md#native-maintenance-and-rviz)
 for the current display setup. This isolated 250-kbit/s test profile is separate
 from the active 500-kbit/s physical platform.
@@ -311,10 +306,10 @@ manual authority reports the scanner and condition in `vehicle/mode.status_messa
 It does not implement the supervised RP2 scanner override: scanners remain
 mandatory regardless of RP2. Hardware `manual_only` rejects `start_scanners:=false`.
 
-This mode omits the supervisor, FlexiSoft and battery ROS gates. Keep the
-independent hardware scanner/stop circuit working; software tests do not verify
-its physical effectiveness. The robot-local wrapper preserves the original
-launcher's collision, CAN and port checks and original romb kinematics:
+This mode uses its dedicated manual authority with scanner, operator and drive
+checks. Verify the independent hardware scanner and stop circuit on the robot.
+The robot-local wrapper uses the original launcher's collision and CAN checks
+and ROMB kinematics:
 
 ```bash
 /home/mobotic/start_ros2_manual_only.sh
@@ -322,7 +317,7 @@ launcher's collision, CAN and port checks and original romb kinematics:
 
 Both local launchers force `start_scanners:=true`, starting both SICK drivers,
 the evaluation projection and scanner status adapter. The manual wrapper omits
-FlexiSoft/battery, odometry and description nodes. It never changes persistent
+battery, odometry and description nodes. It never changes persistent
 scanner configuration. Drives remain disabled until fresh clear protective fields,
 known warning states, neutral controls
 and B2 (or `wheel_modules/enable_drives`). Recovery clears faults and initializes

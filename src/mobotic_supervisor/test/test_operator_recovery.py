@@ -166,7 +166,6 @@ class OperatorRecoveryTest(unittest.TestCase):
             ('front_left scanner field data unavailable', 'scanner power and Ethernet'),
             ('protective stop active', 'Clear the scanner protective fields'),
             ('emergency stop active in safety I/O state', 'Release the emergency stops'),
-            ('safety communication unavailable', 'FlexiSoft power and network'),
             ('driver status stale', 'drive power and CAN'),
             ('battery high voltage is not connected', 'high-voltage supply'),
             ('fresh neutral operator controls required', 'all joystick axes to neutral'),

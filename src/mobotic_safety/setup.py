@@ -16,12 +16,10 @@ setup(
     zip_safe=True,
     maintainer='Mobotic Development Team',
     maintainer_email='noreply@mobotic.invalid',
-    description='FlexiSoft monitoring bridge and fail-safe safety-state adapter.',
+    description='Direct scanner field evaluation and diagnostics.',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'flexisoft_tcp_bridge = mobotic_safety.flexisoft_tcp_bridge:main',
-            'safety_monitor = mobotic_safety.safety_monitor:main',
             'scanner_safety_adapter = mobotic_safety.scanner_safety:main',
         ],
     },

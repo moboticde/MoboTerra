@@ -51,7 +51,7 @@ class ReadOnlyPublisherNode:
         pass
 
     def get_parameter(self, name):
-        return SimpleNamespace(value={'status_timeout': 0.3, 'scanner_source': 'scanner', 'scanner_input_suffix': 'raw_data'}[name])
+        return SimpleNamespace(value={'status_timeout': 0.3, 'scanner_input_suffix': 'raw_data'}[name])
 
     def create_publisher(self, kind, topic, depth):
         publisher = SimpleNamespace(topic=topic, messages=[])
@@ -74,7 +74,7 @@ class ScannerSafetyTest(unittest.TestCase):
     def setUp(self):
         source = Path(__file__).parents[1] / 'mobotic_safety/scanner_safety.py'
         cls = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.ClassDef))
-        namespace = dict(Node=ReadOnlyPublisherNode, SafetyIOState=object,
+        namespace = dict(Node=ReadOnlyPublisherNode,
                          ScannerSafetyState=Message, DiagnosticArray=Message,
                          DiagnosticStatus=Message, KeyValue=Message, RawMicroScanData=object,
                          qos_profile_sensor_data=object(), math=math, copy=copy, time=time, Time=Instant)
@@ -93,11 +93,13 @@ class ScannerSafetyTest(unittest.TestCase):
         self.assertEqual([args[1] for args in node.inputs], [
             'scanner/front_left/raw_data', 'scanner/rear_right/raw_data'])
 
-    def raw(self, *, red=False, yellow=False, sequence=1, valid=None):
+    def raw(self, *, red=False, yellow=False, sequence=1, valid=None, monitoring_case=1):
         return SimpleNamespace(
             header=SimpleNamespace(sequence_number=sequence),
             general_system_state=SimpleNamespace(run_mode_active=True, standby_mode_active=False,
-                application_error=False, device_error=False, contamination_error=False),
+                application_error=False, device_error=False, contamination_error=False,
+                current_monitoring_case_no_table_1=monitoring_case, current_monitoring_case_no_table_2=0,
+                current_monitoring_case_no_table_3=0, current_monitoring_case_no_table_4=0),
             application_data=SimpleNamespace(outputs=SimpleNamespace(
                 evaluation_path_outputs_eval_out=[not red, not yellow, True],
                 evaluation_path_outputs_is_safe=[True, False, False],
@@ -146,11 +148,24 @@ class ScannerSafetyTest(unittest.TestCase):
         self.assertTrue(self.latest().communication_ok)
         self.node._receive_scanner('front_left', self.raw(sequence=100))
         self.node.now += .31
-        self.node._receive_scanner('front_left', self.raw(sequence=1))
+        self.node._receive_scanner('front_left', self.raw(sequence=1, valid=[True, False, True]))
         self.assertFalse(self.latest().communication_ok)
         self.node.now += .02
-        self.node._receive_scanner('front_left', self.raw(sequence=2))
+        self.node._receive_scanner('front_left', self.raw(sequence=2, valid=[True, False, True]))
         self.assertTrue(self.latest().communication_ok)
+
+    def test_monitoring_cases_track_their_own_paths(self):
+        samples = (
+            (1, [True, True, False], True),
+            (2, [True, False, True], True),
+            (1, [True, False, True], False),
+            (1, [True, True, True], True),
+        )
+        for sequence, (monitoring_case, paths, valid) in enumerate(samples, 1):
+            self.node.now += .02
+            self.node._receive_scanner('front_left', self.raw(
+                sequence=sequence, monitoring_case=monitoring_case, valid=paths))
+            self.assertEqual(self.latest().communication_ok, valid)
 
     def test_missing_invalid_paths_and_device_faults_never_report_clear(self):
         self.node._receive_scanner('front_left', self.raw())

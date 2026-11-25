@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Cross-container virtual GUI traffic stays on loopback, using UDP only. -->
+<!-- Keep virtual discovery on loopback and include late healthcheck participants. -->
 <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
   <transport_descriptors>
     <transport_descriptor>

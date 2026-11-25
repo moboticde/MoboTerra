@@ -75,14 +75,14 @@ _NODES = {
 
 
 def _standalone_setup(context, component):
-    cfg = load_from_context(context, {component: 'parameters_file'})
+    cfg = load_from_context(context, {} if component == 'safety' else {component: 'parameters_file'})
     actions = [namespace_action(context, cfg)]
     namespace = LaunchConfiguration('robot_name')
     if component == 'safety':
-        return actions + [Node(package='mobotic_safety', executable=executable, name=executable,
-                               namespace=namespace, parameters=[cfg.parameters('safety')],
-                               output='screen', respawn=True, respawn_delay=1.0)
-                          for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter')]
+        return actions + [Node(package='mobotic_safety', executable='scanner_safety_adapter',
+                               name='scanner_safety_adapter', namespace=namespace,
+                               parameters=[{'status_timeout': cfg.parameters('supervisor')['safety_timeout']}],
+                               output='screen', respawn=True, respawn_delay=1.0)]
     parameters = cfg.parameters(component)
     if component == 'driver':
         legacy = {}
@@ -125,8 +125,10 @@ def _standalone_setup(context, component):
 
 
 def standalone_launch(component):
-    arguments = common_arguments() + [DeclareLaunchArgument('parameters_file', default_value='',
-                                                           description='Optional node-policy override YAML; shared hardware comes from platform_config')]
+    arguments = common_arguments()
+    if component != 'safety':
+        arguments.append(DeclareLaunchArgument('parameters_file', default_value='',
+                         description='Optional node-policy override YAML; shared hardware comes from platform_config'))
     if component == 'driver':
         # Retain the old launch arguments as adapters, not a second set of defaults.
         for key in Configuration().parameters('driver'):

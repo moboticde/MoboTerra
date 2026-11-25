@@ -59,14 +59,9 @@ latches fault `0x7FFF0001`, and requires an explicit supervised reset. Zero
 current removes the commanded motor current; it is not velocity braking or a
 standstill guarantee. Mode transitions continue to require measured standstill.
 
-The default four-module profile selects `safety.telemetry_required: false`.
-FlexiSoft Ethernet feedback is monitoring only; hardware STO is operated by the
-physical safety circuit. FlexiSoft messages and their absence do not govern
-enable, modes, recovery, speed limits or fault latches in this role. Scanner
-fields, operator STOP, battery readiness, drive feedback/faults, known active
-drive STO and watchdogs still apply. `safety.telemetry_required: true` restores
-the additional FlexiSoft software interlocks. Missing fields in older profiles
-default to that required-telemetry behavior.
+The supervisor uses direct scanner fields, operator STOP, battery readiness,
+drive feedback and faults, known active drive STO and watchdogs. The physical
+stop and STO circuit operates independently.
 
 The supervisor publishes `vehicle/mode`, `vehicle/cmd_vel` for kinematics, the final `wheel_modules/command` array, and internal `wheel_modules/operation_command` management transactions. Kinematics returns a correlated candidate; it never publishes directly to the driver's motion input.
 
@@ -113,10 +108,9 @@ startup or latched faults), or a sample acquired before the last readiness/mode
 change. A hardware interlock does not imply that the PAIL input is stale.
 Repeated identical reasons are logged at most once every two seconds; a changed
 reason is reported immediately. Inspect `vehicle/mode` for current interlocks,
-`reason_codes` and reset progress. Clearing a hardware blocker still requires a
-new B2 enable transaction and fresh input; command expiry and recovery gates
-remain enforced. Startup also waits for B2. The supervisor stays running during
-an error or missing telemetry and publishes `WAITING: <cause>. Action: <remedy>`
+`reason_codes` and reset progress. Clearing a latched fault requires a new B2
+enable transaction and fresh input. Startup also waits for B2. The supervisor
+stays running during an error or missing telemetry and publishes `WAITING: <cause>. Action: <remedy>`
 with instructions such as restart the joystick/receiver, disconnect the charger,
 or check battery CAN/scanner Ethernet. The console reports changes immediately
 and repeats the same waiting instruction at most every five seconds.
@@ -138,20 +132,11 @@ wins across the scanners:
 | Both scanners clear | Remove the scanner cap; normal platform limits, source arbitration and other interlocks apply |
 | Either scanner missing, invalid or stale | Inhibit motion; after startup the monitoring loss latches `SCANNER_MONITOR_LOST:<location>` and uses normal explicit fault recovery |
 
-Yellow warning zones and Safety Disabled/override share the same absolute
-**0.3 m/s maximum**, for two and four wheel modules. Warning status may come
-from either scanner and, when FlexiSoft telemetry is required for control,
-FlexiSoft warning fields or FlexiSoft I/O. Reduced-speed safety status may come
-from FlexiSoft `safety_override_active` in that control role, or the existing
-commissioned RP2/D5 policy for either layout. This speed rule does not authorize a new
-scanner bypass or relax any mode-selection, red-zone, STO, E-stop, battery or
-fault interlock.
-
-`vehicle/mode.reason_codes` and `status_message` identify every source of a
-reduced-speed cap: `SCANNER_WARNING:<location>`, `SAFETY_DISABLED_RP2`,
-`FLEXISOFT_WARNING`, `FLEXISOFT_IO_WARNING` or `SAFETY_DISABLED_FLEXISOFT`.
-The supervisor logs changes to this policy. Both scanners clear and Safety
-Enabled remove this cap; enabling scanner monitoring alone never reduces speed.
+Yellow scanner fields and RP2 Safety Disabled share an absolute **0.3 m/s**
+maximum for two and four wheel modules. `vehicle/mode.reason_codes` and
+`status_message` report `SCANNER_WARNING:<location>` or `SAFETY_DISABLED_RP2`.
+The supervisor logs changes to this policy. Clear scanners and RP2 Safety
+Enabled restore the normal platform speed limit.
 
 The body-command limit uses `hypot(vx, vy)`, including reverse and crab, with a
 proportional angular limit. For the manual steering policy, either body limit
@@ -199,17 +184,21 @@ a fresh RP2 Safety Enabled selector when the commissioned override is configured
 A faulted return to MANUAL requires fresh native disabled-drive proof and no
 observed movement; it preserves fault latches until explicit recovery completes.
 
-RP2/D5 scanner bypass is supported on the complete four-module layout with
+The four-module platform supports RP2/D5 scanner bypass with
 verified REMdevice mapping (`scanner_override: {signal: D5, active_high: true}`).
 D5 high permits only reduced-speed MANUAL (0.3 m/s); both AUTO modes require
 D5 low with fresh valid selector/operator samples. D5 low, stale or invalid input
 restores scanner checks, and either selector edge clears buffered motion.
-When `safety.telemetry_required: true`, fresh FlexiSoft safety and I/O messages
-remain required. Only scanner protective-field/OSSD conditions are exempted;
-FlexiSoft E-stop, STO, safety-enable and communication/system readiness still
-apply in that role. With monitoring-only telemetry, those Ethernet values do
-not control ROS. Operator STOP, battery and drive checks apply in either role.
-Bypass changes ROS scanner policy, not physical safety-controller wiring.
+The bypass applies to software scanner checks. Operator STOP, battery, drive
+readiness and the independent hardware STO circuit continue to apply.
+
+After drives are initialized and enabled in RP2 Safety Disabled MANUAL mode,
+missing drive status, invalid drive position, stale drive feedback, and loss of
+kinematics or odometry monitoring pause motion while keeping the supervisor's
+enable request active. The cause remains visible in `vehicle/mode.reason_codes`.
+Return the controls to neutral after feedback recovers, then issue a fresh
+command. This pause requires no B2 press. Battery and charging interlocks,
+operator STOP, STO and reported controller faults retain their existing behavior.
 
 SOC below `minimum_battery_percentage` (default 0.2 / 20%) is warning-only for
 all layouts: it does not inhibit startup, drive enable, motion or B2 recovery.
@@ -219,20 +208,6 @@ setting `error_active` or latching a fault. `/diagnostics` reports WARN, and the
 readiness checker lists a warning instead of a blocker. Missing/stale/invalid
 battery measurements, HV disconnection, charging interlocks and BMS faults
 retain their existing blocking behavior; physical BMS protection is unchanged.
-
-When FlexiSoft telemetry is required for control and a fresh RP2/D5 sample says
-Safety Enabled but fresh FlexiSoft telemetry
-reports safety override active, all motion sources (MANUAL, AUTONOMOUS and
-KINEMATICOFF), drive enable and B2 recovery are inhibited. The supervisor
-immediately publishes stop authority and zero targets from the receiving callback.
-`vehicle/mode` reports SAFETY with `SAFETY_SELECTOR_MISMATCH`; this disagreement
-alone is not a latched ERROR, so normal signal propagation does not require a
-fault reset. It remains blocked while present. Old commands are discarded and
-fresh commands/manual rearming are required after agreement is restored. B2 cannot enable through this interlock and does not disable drives; use
-the approved stop controls. Missing or stale
-RP2 input cannot release the block while PLC override remains active. FlexiSoft
-is read-only: ROS blocks its own commands and does not modify PLC logic or STO.
-
 
 ### PAIL diagnostics during an accepted homing sequence
 

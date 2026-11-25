@@ -96,7 +96,8 @@ class InstallationTest(unittest.TestCase):
         (self.bin / 'python3').symlink_to(sys.executable)
         for name in ('bash', 'cat', 'chmod', 'dirname', 'grep', 'install', 'uname'):
             (self.bin / name).symlink_to(shutil.which(name))
-        for name in ('dpkg','dpkg-query','docker','systemctl','systemd-analyze','ip','candump','udevadm','modprobe','curl','apt-get'):
+        for name in ('dpkg', 'dpkg-query', 'docker', 'systemctl', 'systemd-analyze', 'ip',
+                     'candump', 'udevadm', 'modprobe', 'curl', 'usbreset', 'apt-get'):
             path = self.bin / name
             path.write_text(STUB)
             path.chmod(0o755)
@@ -145,9 +146,11 @@ class InstallationTest(unittest.TestCase):
                 self.assertEqual(call[call.index('--network')+1], 'none')
 
     def test_fresh_host_installs_engine_and_plugins_automatically(self):
+        (self.bin / 'usbreset').unlink()
         result = self.invoke(DOCKER_KIND='missing')
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         installs=[call for call in self.calls() if call[0]=='apt-get' and 'install' in call]
+        self.assertTrue(any('usbutils' in call for call in installs))
         self.assertTrue(any('docker-ce' in call and 'docker-buildx-plugin' in call and 'docker-compose-plugin' in call for call in installs))
         source=(self.root/'etc/apt/sources.list.d/docker.sources').read_text()
         self.assertIn('https://download.docker.com/linux/ubuntu',source)

@@ -27,8 +27,8 @@ not include a completed machine-specific handover record.
 
 The active source marks the PAIL mapping verified, but retains commissioning
 tasks for hardware behavior. It uses one shared transmitting `can0` at 500000
-bit/s. SOC below 20% is advisory, receiver errors are advisory, FlexiSoft
-Ethernet is monitoring-only, and RP2 permits a restricted MANUAL scanner bypass.
+bit/s. SOC below 20% and receiver errors are advisory. RP2 permits a restricted
+MANUAL scanner bypass.
 No held deadman is configured. These settings must be reviewed as actual
 behavior; stronger interlocks must not be inferred from historical documents.
 

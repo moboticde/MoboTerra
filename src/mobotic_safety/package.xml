@@ -3,7 +3,7 @@
 <package format="3">
   <name>mobotic_safety</name>
   <version>0.1.0</version>
-  <description>FlexiSoft monitoring bridge and fail-safe safety-state adapter for MoboTerra.</description>
+  <description>Direct scanner field evaluation and diagnostics for MoboTerra.</description>
 
   <maintainer email="noreply@mobotic.invalid">Mobotic Development Team</maintainer>
   <license>Apache-2.0</license>
@@ -13,7 +13,6 @@
   <exec_depend>mobotic_interfaces</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ros2launch</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>sick_safetyscanners2_interfaces</exec_depend>
 

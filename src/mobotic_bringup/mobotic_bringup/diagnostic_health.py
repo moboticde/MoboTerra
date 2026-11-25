@@ -21,13 +21,3 @@ def battery_health(msg, minimum=0.2):
     if msg.minimum_percentage < minimum:
         return WARN, 'Low SOC; warning only, startup and B2 recovery permitted'
     return OK, 'Battery ready'
-
-
-def safety_health(msg):
-    if not msg.communication_ok:
-        return ERROR, msg.status_message or 'Safety telemetry missing/stale'
-    if msg.emergency_stop_active or msg.sto_active or not msg.system_ready:
-        return WARN, msg.status_message or 'Safety inhibition'
-    if not msg.motion_permitted or msg.warning_field_active or msg.safety_override_active:
-        return WARN, msg.status_message or 'Safety restriction/override'
-    return OK, msg.status_message or 'Safety ready'

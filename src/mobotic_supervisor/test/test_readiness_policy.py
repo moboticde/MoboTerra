@@ -67,12 +67,11 @@ class ReadinessPolicyTest(unittest.TestCase):
 
     def test_fault_codes_are_unique_without_hiding_distinct_losses(self):
         node = self.node
-        node.require_flexisoft_telemetry = True
         node.drive_startup_requested = True
-        node.safety_received = harness.Time(9)
-        node.safety_state.communication_ok = False
-        node.safety_state.header.stamp = harness.Time(9).to_msg()
+        node.battery_received = harness.Time(9)
+        node.battery_state.communication_ok = False
+        node.battery_state.header.stamp = harness.Time(9).to_msg()
         node.wheel_status.modules[0].feedback_fresh = False
         errors, _ = node._system_conditions(self.now)
-        self.assertEqual(errors.count('SAFETY_MONITOR_LOST'), 1)
+        self.assertEqual(errors.count('BMS_MONITOR_LOST'), 1)
         self.assertIn('DRIVE_FEEDBACK_LOST:front_left', errors)

@@ -309,24 +309,6 @@
     ],
     "unobserved_variance": 1000000.0
   },
-  "safety": {
-    "accept_timeout": 0.5,
-    "bind_address": "0.0.0.0",
-    "emergency_stop_mask": 16,
-    "estop_implies_sto": true,
-    "front_protective_ossd_mask": 3,
-    "front_warning_mask": 128,
-    "port": 9100,
-    "publish_period": 0.05,
-    "rear_protective_ossd_mask": 12,
-    "rear_warning_mask": 64,
-    "safety_enable_mask": 0,
-    "safety_override_mask": 32,
-    "status_byte_offset": 14,
-    "status_timeout": 0.25,
-    "sto_mask": 0,
-    "telegram_size": 15
-  },
   "scanners": {
     "angle_end": 0.0,
     "angle_start": 0.0,
@@ -392,13 +374,11 @@
     "operator_scanner_override_enabled": true,
     "output_frame_id": "base_link",
     "override_speed_scale": 0.2,
-    "require_flexisoft_telemetry": false,
     "require_operator_interlock": false,
     "required_health_sources": [
       "kinematics"
     ],
     "reset_timeout": 20.0,
-    "safety_source": "flexisoft",
     "safety_timeout": 0.3,
     "standstill_angular_velocity": 0.02,
     "standstill_joint_velocity": 0.1,

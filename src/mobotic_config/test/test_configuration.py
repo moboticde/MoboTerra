@@ -273,7 +273,7 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_actual_configuration_preserves_pre_migration_effective_parameters(self):
         # Captured from the commissioned profile and its native overrides
-        # before centralization; all nine component configurations must agree.
+        # before centralization; the remaining component configurations must agree.
         baseline = json.loads(Path(__file__).with_name('baseline_parameters.json').read_text())
         actual = {component: self.cfg.parameters(component) for component in self.cfg._parameters}
         self.assertEqual(actual, baseline)
@@ -415,16 +415,19 @@ class ConfigurationTest(unittest.TestCase):
         robot = ET.fromstring(render_description(cfg))
         self.assertEqual({j.get('name') for j in robot.findall('joint') if j.get('type') != 'fixed'}, set(joints))
 
-    def test_hardware_scanner_flag_omits_adapter_but_virtual_keeps_its_adapter(self):
+    def test_hardware_scanner_flag_controls_adapter_and_virtual_uses_mock(self):
         path = self.verified_path
         for stack, enabled, expected in (('hardware', 'false', False), ('hardware', 'true', True),
-                                         ('virtual', 'false', True), ('virtual', 'true', True)):
+                                         ('virtual', 'false', False), ('virtual', 'true', False)):
             with self.subTest(stack=stack, enabled=enabled):
                 actions, context = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
                     {'platform_config': str(path), 'stack_type': stack, 'start_scanners': enabled})
                 adapter = next(a for a in actions if a.kind == 'Node' and
                                a.kwargs['executable'] == 'scanner_safety_adapter')
                 self.assertEqual(adapter.kwargs['condition'].perform(context), expected)
+                mock = next(a for a in actions if a.kind == 'Node' and
+                            a.kwargs['executable'] == 'mock_platform_state')
+                self.assertEqual(mock.kwargs['condition'].perform(context), stack == 'virtual')
                 supervisor = next(a for a in actions if a.kind == 'Node' and
                                   a.kwargs['executable'] == 'mobotic_supervisor')
                 self.assertTrue(supervisor.kwargs['parameters'][0]['operator_scanner_override_enabled'])
@@ -447,13 +450,17 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual(sum(a.kwargs['executable'] == 'sick_safetyscanners2_node'
                              and a.kwargs['condition'].perform(context) for a in nodes), 2)
 
-    def test_retired_safety_source_is_rejected(self):
+    def test_legacy_gateway_section_is_discarded(self):
         profile = copy.deepcopy(self.cfg.platform)
         profile['safety'] = {'source': 'hardwired_sto'}
-        with self.assertRaisesRegex(ConfigurationError, '(?i)flexisoft'):
-            validate_platform(profile)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'legacy.yaml'
+            path.write_text(yaml.safe_dump(profile))
+            cfg = Configuration(path)
+            self.assertNotIn('safety', cfg.platform)
+            self.assertEqual(cfg.parameters('supervisor'), self.cfg.parameters('supervisor'))
 
-    def test_four_module_rp2_without_scanners_keeps_plc_and_verified_mapping(self):
+    def test_four_module_rp2_without_scanners_keeps_verified_mapping(self):
         profile = copy.deepcopy(self.cfg.platform)
         reference = read_yaml(self.verified_path)
         profile['operator'] = copy.deepcopy(reference['operator'])
@@ -468,54 +475,21 @@ class ConfigurationTest(unittest.TestCase):
             actions, context = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
                 {'platform_config': str(path), 'stack_type': 'hardware', 'start_scanners': 'false'})
             nodes = [a for a in actions if a.kind == 'Node']
-            bridge = next(a for a in nodes if a.kwargs['executable'] == 'flexisoft_tcp_bridge')
-            self.assertTrue(bridge.kwargs['condition'].perform(context))
             scanner = next(a for a in nodes if a.kwargs['executable'] == 'scanner_safety_adapter')
             self.assertFalse(scanner.kwargs['condition'].perform(context))
             supervisor = next(a for a in nodes if a.kwargs['executable'] == 'mobotic_supervisor')
-            self.assertEqual(supervisor.kwargs['parameters'][0]['safety_source'], 'flexisoft')
             self.assertTrue(supervisor.kwargs['parameters'][0]['operator_scanner_override_enabled'])
             operator = next(a for a in nodes if a.kwargs['executable'] == 'remdevice_control')
             mapping = json.loads(operator.kwargs['parameters'][0]['remdevice_mapping'])
             self.assertEqual(mapping['buttons']['scanner_override'], {'signal': 'D5', 'active_high': True})
 
-    def test_four_module_launch_retains_flexisoft(self):
-        self.assertEqual(self.cfg.parameters('supervisor')['safety_source'], 'flexisoft')
-        self.assertFalse(self.cfg.parameters('supervisor')['require_flexisoft_telemetry'])
-        self.assertEqual(self.cfg.diagnostic_parameters()['safety_source'], 'flexisoft')
+    def test_integrated_and_standalone_launch_use_direct_scanner_adapter(self):
         for source in ('mobotic_bringup/launch/moboterra.launch.py', 'mobotic_safety/launch/safety.launch.py'):
             actions, _ = resolve(factory(PACKAGES / source)(), {'platform_config': str(self.cfg.path)})
-            executables = [a.kwargs['executable'] for a in actions if a.kind == 'Node']
-            self.assertIn('flexisoft_tcp_bridge', executables)
-
-    def test_flexisoft_telemetry_role_is_validated_and_derived_only_for_supervisor(self):
-        for selected in (True, False, None):
-            profile = copy.deepcopy(self.cfg.platform)
-            if selected is None:
-                profile['safety'].pop('telemetry_required')
-            else:
-                profile['safety']['telemetry_required'] = selected
-            with tempfile.TemporaryDirectory() as directory:
-                path = Path(directory) / 'platform.yaml'
-                path.write_text(yaml.safe_dump(profile))
-                cfg = Configuration(path)
-                self.assertEqual(cfg.parameters('supervisor')['require_flexisoft_telemetry'],
-                                 selected if selected is not None else True)
-                self.assertNotIn('telemetry_required', cfg.parameters('safety'))
-                actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
-                                     {'platform_config': str(path)})
-                supervisor = next(a for a in actions if a.kind == 'Node' and
-                                  a.kwargs['executable'] == 'mobotic_supervisor')
-                self.assertEqual(supervisor.kwargs['parameters'][0]['require_flexisoft_telemetry'],
-                                 cfg.parameters('supervisor')['require_flexisoft_telemetry'])
-                for executable in ('flexisoft_tcp_bridge', 'safety_monitor', 'scanner_safety_adapter'):
-                    self.assertTrue(any(a.kind == 'Node' and a.kwargs['executable'] == executable
-                                        for a in actions))
-        for invalid in ('false', 0, 1, None):
-            profile = copy.deepcopy(self.cfg.platform)
-            profile['safety']['telemetry_required'] = invalid
-            with self.assertRaisesRegex(ConfigurationError, 'telemetry_required must be boolean'):
-                validate_platform(profile)
+            safety_nodes = [a for a in actions if a.kind == 'Node' and a.kwargs['package'] == 'mobotic_safety']
+            self.assertEqual([a.kwargs['executable'] for a in safety_nodes], ['scanner_safety_adapter'])
+            self.assertEqual(safety_nodes[0].kwargs['parameters'][0]['status_timeout'],
+                             self.cfg.parameters('supervisor')['safety_timeout'])
 
     def test_four_module_names_geometry_and_frames_are_validated(self):
         for mutation, error in (
@@ -598,8 +572,6 @@ class ConfigurationTest(unittest.TestCase):
                      lambda p: p['can']['battery'].update(interface=p['can']['drives']['interface'], listen_only=True),
                      lambda p: p['can']['battery'].update(listen_only='false'),
                      lambda p: p['motion_limits'].update(max_traction_velocity=1000),
-                     lambda p: p['safety'].pop('emergency_stop_mask'),
-                     lambda p: p['safety'].update(sto_mask=16),
                      lambda p: p['scanners']['units'][0].update(sensor_ip='bad'),
                      lambda p: p['battery'].update(primary_id='absent')]
         for mutation in mutations:
@@ -839,8 +811,7 @@ class ConfigurationTest(unittest.TestCase):
                                       ('manual', {'button_mode_switch': True}),
                                       ('manual', {'buttons_boost': []}),
                                       ('driver', {'telemetry_pdo_sync_divider': 0}),
-                                      ('supervisor', {'warning_speed_scale': 2}),
-                                      ('safety', {'made_up_mask': 1})]:
+                                      ('supervisor', {'warning_speed_scale': 2})]:
                 with self.subTest(component=component, values=values):
                     path.write_text(yaml.safe_dump({'/**': {'ros__parameters': values}}))
                     with self.assertRaises(ConfigurationError):

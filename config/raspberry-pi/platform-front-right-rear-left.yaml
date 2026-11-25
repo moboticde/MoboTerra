@@ -162,8 +162,6 @@ scanners:
     - -0.860892491
     - 0.249261344
     yaw: -2.356194490192345
-safety:
-  source: hardwired_sto
 battery:
   primary_id: parallel_battery_controller
   participants:

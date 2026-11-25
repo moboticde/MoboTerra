@@ -53,7 +53,7 @@ Enter your sudo password when prompted. The installer loads the archive and runs
 
 2. In Ubuntu's network settings, open the wired connection for the robot port and check its IPv4 address. The service automatically detects a single eligible `192.168.x.x` address on connected physical Ethernet. If you need to assign one, select **Manual** IPv4 and choose a free address on the scanner subnet with netmask `255.255.255.0`. The table shows example addresses. Use a gateway-free connection for a dedicated robot link. Save and reconnect the wired connection, then confirm the address with `ip -br -4 addr`.
 
-3. Use `ip -details link show dev can0` to check that the CAN adapter is present. If it is already up, it must be at `500000` bit/s with listen-only mode off and outside `BUS-OFF`. The service configures the bitrate and link mode when the adapter is down.
+3. Use `ip -details link show dev can0` to check that the CAN adapter is present. On each start, the service takes `can0` down, configures it at `500000` bit/s with transmission enabled, and brings it back up.
 
 4. Start the service and check its status.
 

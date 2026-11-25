@@ -29,7 +29,7 @@ namespace = dict(DiagnosticArray=Message, DiagnosticStatus=Message,
                  ComponentHealth=Message, ComponentHealthArray=Message,
                  read_host_health=host_health.read_host_health,
                  ERROR=health.ERROR, freshness=health.freshness, math=math,
-                 battery_health=health.battery_health, safety_health=health.safety_health)
+                 battery_health=health.battery_health)
 exec(compile(ast.Module(body=[cls], type_ignores=[]), str(source), 'exec'), namespace)
 
 
@@ -40,7 +40,7 @@ class PlatformDiagnosticsTest(unittest.TestCase):
         node.minimum_soc = 0.2
         node.host_state_path = ''
         node.cache = {}
-        node.channels = {'safety/io_state': (None, 0.3), 'scanner/front_left/scan': (None, 0.5)}
+        node.channels = {'vehicle/mode': (None, 0.3), 'scanner/front_left/scan': (None, 0.5)}
         node.get_namespace = lambda: '/moboterra'
         now = SimpleNamespace(nanoseconds=int(10e9), to_msg=lambda: None)
         node.get_clock = lambda: SimpleNamespace(now=lambda: now)
@@ -52,15 +52,15 @@ class PlatformDiagnosticsTest(unittest.TestCase):
         self.assertTrue(all(status.level == bytes([health.STALE]) for status in self.outputs[-1].status))
 
 
-    def test_unknown_hardware_signals_are_warn_not_green(self):
+    def test_stop_mode_is_warn(self):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=0)),
-                              sto_state_known=False, safety_enable_state_known=False, flexisoft_status_raw=15)
-        self.node._receive('safety/io_state', msg)
+                              error_active=False, motion_permitted=False, status_message='Protective stop',
+                              current_mode=3, transition_in_progress=False)
+        self.node._receive('vehicle/mode', msg)
         self.node._publish()
         status = self.outputs[-1].status[0]
         self.assertEqual(status.level, bytes([health.WARN]))
-        self.assertIn('unmapped', status.message)
-        self.assertEqual(status.values[0].value, '0xf')
+        self.assertEqual(status.message, 'Protective stop')
 
     def test_receipt_does_not_make_old_scan_fresh(self):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=9, nanosec=0)), ranges=[1.0])

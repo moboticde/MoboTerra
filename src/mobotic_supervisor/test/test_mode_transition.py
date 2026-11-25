@@ -43,8 +43,6 @@ class ModeTransitionTest(unittest.TestCase):
         node.warning_speed_limit = 0.3
         node.override_speed_scale = 0.2
         node.output_frame_id = 'base_link'
-        node.safety_io_state.front_left_warning_field_clear = True
-        node.safety_io_state.rear_right_warning_field_clear = True
         node.expected_steering_joint_names = ['front_steering', 'rear_steering']
         node.direct_steering_encoder_resolutions = [4096.0, 4096.0]
         node.expected_traction_joint_names = ['front_traction', 'rear_traction']
@@ -63,10 +61,8 @@ class ModeTransitionTest(unittest.TestCase):
         for name, (state, _) in node.scanner_states.items():
             state.header.stamp = self.now.to_msg()
             node.scanner_states[name] = (state, self.now)
-        node.safety_received = node.safety_io_received = self.now
         node.battery_received = node.wheel_status_received = self.now
-        for state in (node.safety_state, node.safety_io_state, node.battery_state):
-            state.header.stamp = self.now.to_msg()
+        node.battery_state.header.stamp = self.now.to_msg()
         node.wheel_status = SimpleNamespace(header=SimpleNamespace(stamp=self.now.to_msg()), modules=[
             SimpleNamespace(name=name, enabled=True, initialized=True, position_valid=True,
                             startup_complete=True, startup_pending=False, startup_failed=False,
@@ -100,8 +96,6 @@ class ModeTransitionTest(unittest.TestCase):
         node = self.node
         node.operator_scanner_override_enabled = True
         node.require_operator_interlock = True
-        node.safety_source = 'flexisoft'
-        node.require_flexisoft_telemetry = False
         node.manual_state = SimpleNamespace(
             header=SimpleNamespace(stamp=self.now.to_msg()), source_id='remdevice',
             connected=True, estop_state_known=True, estop_pressed=False)
@@ -241,7 +235,6 @@ class ModeTransitionTest(unittest.TestCase):
         self.node._control()
         self.assertTrue(self.node.transition_in_progress)
         self.now = harness.Time(10.31)
-        self.node.safety_received = self.node.safety_io_received = self.now
         self.node.battery_received = self.node.wheel_status_received = self.now
         self.node.measured_velocity_received = self.node.joint_state_received = self.now
         self.node._control()
@@ -279,7 +272,7 @@ class ModeTransitionTest(unittest.TestCase):
     def test_safety_loss_disables_and_immediately_stops(self):
         self.node.last_output = [1.0, 0.2, 0.1]
         self.request()
-        self.node.safety_state.motion_permitted = False
+        self.node.scanner_states['front_left'][0].protective_field_clear = False
         self.node._control()
         self.assertEqual(self.node.last_output, [0.0, 0.0, 0.0])
         self.assertFalse(self.node.module_command_publisher.messages[-1].enable)

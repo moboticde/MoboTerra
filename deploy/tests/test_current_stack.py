@@ -1,4 +1,4 @@
-"""Boot preflight must preserve the current topology and never cycle live CAN."""
+"""Boot preflight cycles can0 while respecting the configured CAN topology."""
 from contextlib import nullcontext
 import copy
 import importlib.util
@@ -43,7 +43,7 @@ class CurrentStackTest(unittest.TestCase):
         self.assertEqual(deployment.can_plan(platform),
                          {'can0': (500000, False), 'can1': (500000, True)})
 
-    def prepare(self, responses, *, wait_seconds=0):
+    def prepare(self, responses, *, interface='can0', listen_only=False, wait_seconds=0):
         calls = []
         responses = iter(responses)
 
@@ -58,38 +58,129 @@ class CurrentStackTest(unittest.TestCase):
 
         with patch.object(deployment.subprocess, 'run', side_effect=execute):
             try:
-                deployment.prepare_can({'can0': (500000, False)}, deployment.time.monotonic() + wait_seconds)
+                deployment.prepare_can({interface: (500000, listen_only)},
+                                       deployment.time.monotonic() + wait_seconds)
             finally:
                 self.calls = calls
 
-    def test_up_shared_can_is_only_inspected_once(self):
-        self.prepare([link()])
-        self.assertEqual(self.calls, [['ip', '-json', '-details', 'link', 'show', 'dev', 'can0']])
-
-    def test_down_link_configured_once_then_verified(self):
-        self.prepare([link(up=False), link()])
-        self.assertEqual(self.calls[1:3], [
+    def test_can0_is_always_cycled_and_verified(self):
+        show = ['ip', '-json', '-details', 'link', 'show', 'dev', 'can0']
+        expected = [
+            show,
+            ['ip', 'link', 'set', 'dev', 'can0', 'down'],
             ['ip', 'link', 'set', 'dev', 'can0', 'type', 'can', 'bitrate', '500000',
              'listen-only', 'off', 'restart-ms', '0'],
-            ['ip', 'link', 'set', 'dev', 'can0', 'up']])
-        self.assertEqual(len(self.calls), 4)
+            ['ip', 'link', 'set', 'dev', 'can0', 'up'],
+            show,
+        ]
+        for response in (link(), link(up=False), link(bitrate=250000, listen_only=True),
+                         link(state='BUS-OFF')):
+            with self.subTest(response=response):
+                self.prepare([response, link()])
+                self.assertEqual(self.calls, expected)
 
-    def test_bad_live_links_fail_without_mutating_them(self):
-        for response in (link(bitrate=250000), link(state='BUS-OFF'),
-                         link(listen_only=True), link(kind='vcan')):
+    def test_up_separate_battery_link_is_validated_without_cycling(self):
+        show = ['ip', '-json', '-details', 'link', 'show', 'dev', 'can1']
+        self.prepare([link(listen_only=True)], interface='can1', listen_only=True)
+        self.assertEqual(self.calls, [show])
+        for response in (link(bitrate=250000, listen_only=True),
+                         link(state='BUS-OFF', listen_only=True), link()):
             with self.subTest(response=response):
                 with self.assertRaises(ValueError):
-                    self.prepare([response])
-                self.assertEqual(len(self.calls), 1)
+                    self.prepare([response], interface='can1', listen_only=True)
+                self.assertEqual(self.calls, [show])
+
+    def test_virtual_can0_is_rejected_without_any_link_changes(self):
+        with self.assertRaisesRegex(ValueError, 'not a physical SocketCAN interface'):
+            self.prepare([link(kind='vcan')])
+        self.assertEqual(self.calls, [['ip', '-json', '-details', 'link', 'show', 'dev', 'can0']])
 
     def test_missing_adapter_fails_without_creating_an_interface(self):
-        with self.assertRaisesRegex(RuntimeError, 'Missing CAN interfaces: can0'):
-            self.prepare([None])
+        with self.assertRaisesRegex(TimeoutError, 'Missing CAN interface: can1'):
+            self.prepare([None], interface='can1')
         self.assertEqual(len(self.calls), 1)
 
     def test_newly_configured_link_must_pass_readback(self):
         with self.assertRaisesRegex(ValueError, 'not UP'):
-            self.prepare([link(up=False), link(up=False)])
+            self.prepare([link(up=False), link(up=False)], interface='can1')
+
+    def test_can0_recovery_retries_once_after_one_minute(self):
+        failed_up = subprocess.CalledProcessError(2, ['ip', 'link', 'set', 'dev', 'can0', 'up'])
+        outcomes = [failed_up, deployment.CanLinkError('can0 is BUS-OFF'), None]
+        events = []
+
+        def prepare_link(interface, bitrate, listen_only, deadline):
+            events.append(('configure', interface, bitrate, listen_only))
+            result = outcomes.pop(0)
+            if result:
+                raise result
+
+        with patch.dict(deployment.os.environ, MOBOTERRA_CAN_USB_PORT=''), \
+                patch.object(deployment, 'prepare_can_link', side_effect=prepare_link), \
+                patch.object(deployment, 'restart_can_adapter', side_effect=lambda port: events.append(('reset', port))), \
+                patch.object(deployment.time, 'sleep', side_effect=lambda delay: events.append(('wait', delay))):
+            deployment.prepare_can({'can0': (500000, False)}, 0)
+
+        configure = ('configure', 'can0', 500000, False)
+        self.assertEqual(events, [configure, ('reset', ''), configure, ('wait', 60), ('reset', ''), configure])
+
+    def test_can0_recovery_stops_with_reconnect_message_when_adapter_stays_missing(self):
+        with patch.dict(deployment.os.environ, MOBOTERRA_CAN_USB_PORT=''), \
+                patch.object(deployment, 'prepare_can_link', side_effect=TimeoutError('missing')) as prepare, \
+                patch.object(deployment, 'restart_can_adapter', side_effect=RuntimeError('not visible')) as restart, \
+                patch.object(deployment.time, 'sleep') as sleep, \
+                self.assertRaisesRegex(RuntimeError, '^Reconnect USB-to-CAN Adapter$'):
+            deployment.prepare_can({'can0': (500000, False)}, 0)
+
+        self.assertEqual(prepare.call_count, 3)
+        self.assertEqual(restart.call_count, 2)
+        sleep.assert_called_once_with(60)
+
+    def test_first_successful_recovery_skips_the_delayed_retry(self):
+        with patch.dict(deployment.os.environ, MOBOTERRA_CAN_USB_PORT=''), \
+                patch.object(deployment, 'prepare_can_link', side_effect=[TimeoutError('missing'), None]), \
+                patch.object(deployment, 'restart_can_adapter') as restart, \
+                patch.object(deployment.time, 'sleep') as sleep:
+            deployment.prepare_can({'can0': (500000, False)}, 0)
+
+        restart.assert_called_once_with('')
+        sleep.assert_not_called()
+
+    def test_usb_reset_targets_the_current_device_address(self):
+        with tempfile.TemporaryDirectory() as directory:
+            devices = Path(directory)
+            adapter = devices / '1-2'
+            adapter.mkdir()
+            for attribute, value in {'idVendor': '1d50', 'idProduct': '606f', 'busnum': '1', 'devnum': '9'}.items():
+                (adapter / attribute).write_text(value + '\n')
+            with patch.object(deployment, 'USB_DEVICES', devices), \
+                    patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
+                    patch.object(deployment, 'run') as run:
+                deployment.restart_can_adapter('')
+                run.assert_called_once_with(['usbreset', '001/009'], timeout=15)
+                run.reset_mock()
+                (devices / '1-3').symlink_to(adapter, target_is_directory=True)
+                with self.assertRaisesRegex(RuntimeError, 'Expected one visible candleLight adapter'):
+                    deployment.restart_can_adapter('')
+                run.assert_not_called()
+
+    def test_power_cycle_targets_only_the_configured_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            devices = Path(directory)
+            with patch.object(deployment, 'USB_DEVICES', devices), \
+                    patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
+                    patch.object(deployment, 'run') as run:
+                deployment.restart_can_adapter('1-2.3')
+                run.assert_called_once_with(['uhubctl', '-e', '-l', '1-2', '-p', '3', '-a', 'cycle', '-d', '2'],
+                                            timeout=15)
+                run.reset_mock()
+                occupied_port = devices / '1-2.3'
+                occupied_port.mkdir()
+                (occupied_port / 'idVendor').write_text('1234\n')
+                (occupied_port / 'idProduct').write_text('5678\n')
+                with self.assertRaisesRegex(RuntimeError, 'does not match'):
+                    deployment.restart_can_adapter('1-2.3')
+                run.assert_not_called()
 
     def test_robot_ip_selection_ignores_wifi_disconnected_and_virtual_interfaces(self):
         def interface(name, host_ip, connected=True):
@@ -161,6 +252,7 @@ class CurrentStackTest(unittest.TestCase):
         self.assertIn('up --no-build --abort-on-container-exit --exit-code-from robot', unit)
         self.assertIn('stop --timeout 45', unit)
         self.assertIn('Restart=no', unit)
+        self.assertIn('TimeoutStartSec=300', unit)
         self.assertIn('Conflicts=moboterra-supervisor.service', unit)
         self.assertIn('Wants=network-online.target moboterra-joystick-listener.service', unit)
 
@@ -178,7 +270,8 @@ class CurrentStackTest(unittest.TestCase):
                          ['bash', 'scripts/start_MoboTerra', 'start_rviz:=false'])
         self.assertEqual(service['restart'], 'no')
         self.assertEqual(service['network_mode'], 'host')
-        self.assertEqual(service['ipc'], 'host')
+        self.assertEqual(service['ipc'], 'private')
+        self.assertEqual(service['environment']['FASTDDS_BUILTIN_TRANSPORTS'], 'UDPv4')
         self.assertEqual(service['pid'], 'host')
         mounts = {mount['target']: mount for mount in service['volumes']}
         self.assertTrue(mounts['/opt/moboterra/share/mobotic_config/config']['read_only'])

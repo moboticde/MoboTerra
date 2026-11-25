@@ -176,6 +176,31 @@ class TwoPackTest(unittest.TestCase):
                 self.send(identifier, soc=6400)
                 self.assertAlmostEqual(self.system().minimum_percentage, 0.100032)
 
+    def test_full_charge_readings_allow_readiness_after_unplugging(self):
+        self.parameters['require_operational_status'] = False
+        self.parameters['require_not_charging'] = True
+        self.node = self.construct()
+        self.node.get_clock = lambda: SimpleNamespace(now=lambda: self.now)
+
+        def send_charger_status(mains):
+            self.node._can_callback(SimpleNamespace(
+                id=0x0CFFBC49, header=SimpleNamespace(stamp=self.now.to_msg()),
+                is_extended=True, is_error=False, is_rtr=False, dlc=8,
+                data=[0, 0, 0, 0, 0, mains, 0, 0],
+            ))
+
+        self.send('battery1', soc=0xFC40)
+        self.send('battery2', soc=0xFC40)
+        send_charger_status(mains=1)
+        self.assertFalse(self.system().system_ready)
+
+        self.now = harness.Time(10.01)
+        send_charger_status(mains=0)
+        state = self.system()
+        self.assertTrue(state.system_ready)
+        self.assertEqual(state.faulted_batteries, [])
+        self.assertEqual(state.minimum_percentage, 1.0)
+
     def test_fresh_recovery_requires_the_missing_packs_telemetry(self):
         self.send('battery1')
         self.assertFalse(self.system().system_ready)

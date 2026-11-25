@@ -8,8 +8,6 @@ class DriveStartupTest(unittest.TestCase):
     def setUp(self):
         harness.EnableGateTest.setUp(self)
         node = self.node
-        node.safety_source = 'flexisoft'
-        node.require_flexisoft_telemetry = False
         node.started_at = harness.Time(1)
         node.startup_grace = 0.0
         node.selected_mode = harness.MODES.AUTONOMOUS
@@ -113,9 +111,7 @@ class DriveStartupTest(unittest.TestCase):
         node.wheel_status.modules[0].sto_active = True
         self.assertFalse(node._enable_gate(self.now)[0])
         node.wheel_status.modules[0].sto_active = False
-        node.safety_source = 'flexisoft'
-        node.require_flexisoft_telemetry = True
-        node.safety_state.motion_permitted = False
+        node.scanner_states['front_left'][0].protective_field_clear = False
         self.assertFalse(node._enable_gate(self.now)[0])
 
     def test_failed_startup_latches_and_cannot_request_enable(self):

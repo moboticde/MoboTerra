@@ -113,19 +113,43 @@ systemd service environment to select the robot-facing address. An address
 change during startup stops the launch. Installing with `--no-start` works
 with the robot disconnected.
 
-The CAN preflight configures DOWN links at the active profile's
-bitrate/listen-only setting and brings them UP with bus-off restart disabled.
-The current profile shares transmitting `can0` at 500000 bit/s between drives,
-the PAIL receiver and batteries.
+On each start, the CAN preflight takes `can0` down, applies the active profile's
+bitrate and listen-only settings with bus-off restart disabled, and brings it
+back up. The current profile shares transmitting `can0` at 500000 bit/s between
+drives, the PAIL receiver and batteries. For other configured CAN links, the
+preflight configures links that are down and validates links that are already up.
 
-The preflight does not rename adapters or cycle an UP bus. Wrong live settings,
-BUS-OFF, conflicting shared-bus settings or missing hardware fail startup and
-appear in the host journal. Configure the wired address in Ubuntu and check
-the scanner addresses and independent safety wiring during commissioning.
+Missing hardware, conflicting settings for a shared link or a failed link
+check can stop startup and appear in the host journal. If `can0` is missing or
+fails its setup checks, the host attempts USB recovery while the stack is stopped.
+It waits for `can0` to return, then repeats the down/configure/up sequence. After
+one failed recovery, it waits 60 seconds and tries once more. If both fail, the
+service reports **Reconnect USB-to-CAN Adapter** and stays stopped.
+
+By default the host issues a software USB reset when it can identify the
+candleLight adapter. To enable a full power cycle, install `uhubctl` and set
+`MOBOTERRA_CAN_USB_PORT` in the service environment to the dedicated adapter's
+USB device path, for example `1-2.3`. Verify that `uhubctl` can cut power to that
+exact port independently before enabling it. Keep the port dedicated to the
+adapter so recovery can target it even when the adapter has disappeared.
+
+On an existing installation, use `sudo systemctl edit moboterra-current-stack.service`
+to add the following override. Newly installed services already have this timeout.
+
+```ini
+[Service]
+TimeoutStartSec=300
+```
+
+Configure a system-wide Ethernet connection with automatic activation in
+Ubuntu so the scanner address is available before desktop login. Check the
+scanner addresses and independent safety wiring during commissioning.
 
 The container runs under a non-root numeric UID/GID with a read-only filesystem,
-host networking for CAN/scanners, host IPC for DDS, and host PID visibility for
-duplicate/orphan checks. The native and Docker stacks share one launch lock.
+host networking for CAN/scanners, private IPC, and host PID visibility for
+duplicate/orphan checks. The managed stack and its RViz launcher use Fast DDS
+over UDPv4 so ROS traffic survives Ubuntu cleaning the user's shared memory at
+logout. The native and Docker stacks share one launch lock.
 Only the runtime directory is mounted writable; central YAML and `ros.env` are
 read-only mounts. USB operator input devices are not passed through by this deployment.
 
@@ -182,9 +206,11 @@ path; relocate only through a reviewed reinstallation.
 ## Target acceptance
 
 On the robot, verify cold boot starts exactly one stack before desktop login and
-waits for B2; disconnected CAN fails preflight; all configured sensors and drives
-report correct readiness; duplicate native startup is rejected; recovery requires
-a new explicit request; and orderly stop verifies every drive disabled. Complete
+waits for B2. Check that scanner, joystick and vehicle status stay fresh across
+desktop logout. Check that disconnected CAN fails preflight, all configured
+sensors and drives report correct readiness, and duplicate native startup is
+rejected. Confirm recovery requires a new explicit request and orderly stop
+verifies every drive disabled. Complete
 [customer handover](customer_manual.md#9-validation-and-customer-handover) before
 operation. Image build/tests are not physical acceptance evidence.
 

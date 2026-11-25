@@ -112,7 +112,6 @@ class EnableGateTest(unittest.TestCase):
         self.node = Supervisor()
         node = self.node
         node.get_logger = lambda: SimpleNamespace(info=lambda _: None, warning=lambda _: None)
-        node.safety_source = 'flexisoft'
         node.safety_timeout = 0.3
         node.warning_speed_limit = 0.3
         node.wheel_radius = 0.325
@@ -125,24 +124,7 @@ class EnableGateTest(unittest.TestCase):
         node.wheel_status_timeout = 0.3
         node.velocity_feedback_timeout = 0.3
         node.minimum_battery_percentage = 0.2
-        node.safety_received = self.now
-        node.safety_io_received = self.now
         node.battery_received = self.now
-        node.safety_state = SimpleNamespace(
-            header=SimpleNamespace(stamp=self.now.to_msg()),
-            communication_ok=True, system_ready=True, motion_permitted=True,
-            emergency_stop_active=False, sto_active=False,
-            protective_stop_active=False, safety_override_active=False,
-            warning_field_active=False, status_message='',
-        )
-        node.safety_io_state = SimpleNamespace(
-            header=SimpleNamespace(stamp=self.now.to_msg()),
-            emergency_stop_active=False, safety_enable_active=True, sto_active=False,
-            front_left_protective_field_clear=True,
-            rear_right_protective_field_clear=True,
-            front_left_ossd_active=True, rear_right_ossd_active=True,
-            front_left_warning_field_clear=True, rear_right_warning_field_clear=True,
-        )
         node.battery_state = SimpleNamespace(
             header=SimpleNamespace(stamp=self.now.to_msg()),
             communication_ok=True, system_ready=True, high_voltage_connected=True,
@@ -201,25 +183,20 @@ class EnableGateTest(unittest.TestCase):
                 self.assertEqual(self.node._enable_gate(self.now)[0], expected)
 
     def test_missing_and_stale_readiness_disable(self):
-        for attr in ('safety_received', 'safety_io_received', 'battery_received'):
-            for received in (None, Time(9.0)):
-                with self.subTest(attr=attr, received=received):
-                    setattr(self.node, attr, received)
-                    self.assertFalse(self.node._enable_gate(self.now)[0])
-                    setattr(self.node, attr, self.now)
+        for received in (None, Time(9.0)):
+            with self.subTest(received=received):
+                self.node.battery_received = received
+                self.assertFalse(self.node._enable_gate(self.now)[0])
+        self.node.battery_received = self.now
+        self.node.scanner_states['front_left'] = (None, None)
+        self.assertFalse(self.node._enable_gate(self.now)[0])
 
     def test_safety_and_battery_failures_disable(self):
+        scanner = self.node.scanner_states['front_left'][0]
         cases = [
-            (self.node.safety_state, 'communication_ok', False),
-            (self.node.safety_state, 'system_ready', False),
-            (self.node.safety_state, 'motion_permitted', False),
-            (self.node.safety_state, 'emergency_stop_active', True),
-            (self.node.safety_state, 'sto_active', True),
-            (self.node.safety_state, 'protective_stop_active', True),
-            (self.node.safety_io_state, 'safety_enable_active', False),
-            (self.node.safety_io_state, 'emergency_stop_active', True),
-            (self.node.safety_io_state, 'sto_active', True),
-            (self.node.safety_io_state, 'front_left_ossd_active', False),
+            (scanner, 'communication_ok', False),
+            (scanner, 'protective_state_known', False),
+            (scanner, 'protective_field_clear', False),
             (self.node.battery_state, 'communication_ok', False),
             (self.node.battery_state, 'system_ready', False),
             (self.node.battery_state, 'high_voltage_connected', False),
@@ -245,7 +222,7 @@ class EnableGateTest(unittest.TestCase):
         self.assertFalse(self.node._base_gate(self.now)[0])
 
     def test_warning_field_keeps_enable(self):
-        self.node.safety_state.warning_field_active = True
+        self.node.scanner_states['front_left'][0].warning_field_clear = False
         self.assertTrue(self.node._enable_gate(self.now)[0])
 
     def test_fresh_publication_with_stale_can_feedback_blocks_motion(self):
@@ -291,7 +268,7 @@ class EnableGateTest(unittest.TestCase):
         self.node.transition_duration = 0.25
         self.node.transition_from_direct = False
         self.node.requested_mode = MODES.AUTONOMOUS
-        self.node.safety_state.motion_permitted = False
+        self.node.scanner_states['front_left'][0].protective_field_clear = False
         self.node._control()
         self.assertFalse(self.node.module_command_publisher.messages[-1].enable)
 

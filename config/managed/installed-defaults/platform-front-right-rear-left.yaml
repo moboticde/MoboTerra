@@ -110,9 +110,6 @@ scanners:
       cad_xyz: [-1.207482061, -0.860892491, 0.249261344]
       yaw: -2.356194490192345
 # Scanners -> Siemens safety controller -> physical drive STO.
-# No FlexiSoft gateway is installed on this two-module chassis.
-safety:
-  source: hardwired_sto
 battery:
   # One fixed pack for the two-module chassis; no separate controller.
   # Retained reference SA/PGNs below are UNVERIFIED for the installed UTK pack.

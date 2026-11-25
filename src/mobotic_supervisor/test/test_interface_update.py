@@ -62,8 +62,7 @@ class InterfaceUpdateTest(unittest.TestCase):
         self.assertNotIn('LOW_BATTERY_SOC', self.publish_state().reason_codes)
 
     def test_safety_and_error_are_automatic_and_overlap_is_visible(self):
-        self.node.safety_state.protective_stop_active = True
-        self.node.safety_io_state.scanner_state_known = True
+        self.node.scanner_states['front_left'][0].protective_field_clear = False
         state = self.publish_state()
         self.assertEqual(state.current_mode, State.SAFETY)
         self.assertEqual(state.selected_mode, State.MANUAL)
@@ -77,9 +76,7 @@ class InterfaceUpdateTest(unittest.TestCase):
             self.assertFalse(self.node._request_mode(mode)[0])
 
     def test_unconfirmed_safety_timeout_is_not_a_confirmed_stop(self):
-        self.node.safety_state.communication_ok = False
-        self.node.safety_state.emergency_stop_active = True
-        self.node.safety_io_state.emergency_stop_state_known = False
+        self.node.scanner_states['front_left'] = (None, None)
         self.node.started_at = harness.Time(0)
         state = self.publish_state()
         self.assertEqual(state.current_mode, State.ERROR)
@@ -287,11 +284,6 @@ class InterfaceUpdateTest(unittest.TestCase):
         self.assertIn('speed limited to 0.3 m/s',state.status_message)
         self.assertFalse(state.error_active)
         self.node.scanner_states['front_left'][0].warning_field_clear=True
-        self.node.safety_state.safety_override_active=True
-        state=self.publish_state()
-        self.assertIn('SAFETY_DISABLED_FLEXISOFT',state.reason_codes)
-        self.assertNotIn('SCANNER_WARNING:front_left',state.reason_codes)
-        self.node.safety_state.safety_override_active=False
         state=self.publish_state()
         self.assertFalse(self.node._warning_active())
         self.assertNotIn('speed limited',state.status_message)

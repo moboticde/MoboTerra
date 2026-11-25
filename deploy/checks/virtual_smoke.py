@@ -1,5 +1,6 @@
 """Validate ROS integration without CAN devices or motion commands."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import signal
@@ -14,7 +15,32 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 from mobotic_config.configuration import Configuration
-from mobotic_kinematics.romb.runtime import runtime_command
+
+
+def configure_discovery():
+    # Use the same loopback transport for launch, this node and the health probe.
+    # Default localhost discovery can miss participants in the full virtual graph.
+    profiles = str(Path(__file__).resolve().with_name('virtual-fastdds.xml'))
+    for key in ('ROS_LOCALHOST_ONLY', 'ROS_STATIC_PEERS', 'ROS_DISCOVERY_SERVER'):
+        os.environ.pop(key, None)
+    os.environ.update(RMW_IMPLEMENTATION='rmw_fastrtps_cpp',
+                      ROS_AUTOMATIC_DISCOVERY_RANGE='SYSTEM_DEFAULT',
+                      FASTDDS_DEFAULT_PROFILES_FILE=profiles, FASTRTPS_DEFAULT_PROFILES_FILE=profiles)
+    os.environ.setdefault('ROS_DOMAIN_ID', '42')
+
+
+def check_runtime_health(healthcheck, node):
+    # Keep the executor running so the neutral operator continues to publish.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        probe = executor.submit(subprocess.run, [str(healthcheck)], check=True, timeout=15)
+        while not probe.done():
+            rclpy.spin_once(node, timeout_sec=0.05)
+        probe.result()
+
+
+def mode_ready(mode):
+    return (mode.readiness_known and mode.drives_enabled and mode.ready_to_drive
+            and not (mode.error_active or mode.safety_stop_active or mode.reset_in_progress))
 
 
 def main():
@@ -24,14 +50,7 @@ def main():
     cfg = Configuration(args.platform_config)
     expected_joints = set(cfg.parameters('driver')['drives.names'])
     expected_modules = set(cfg.parameters('supervisor')['expected_module_names'])
-    # Keep the native virtual nodes and the emulated solver on the same UDP profile.
-    _, romb_env = runtime_command([])
-    for name in ('ROS_LOCALHOST_ONLY', 'ROS_STATIC_PEERS', 'ROS_DISCOVERY_SERVER'):
-        os.environ.pop(name, None)
-    for name in ('RMW_IMPLEMENTATION', 'ROS_AUTOMATIC_DISCOVERY_RANGE',
-                 'FASTDDS_DEFAULT_PROFILES_FILE', 'FASTRTPS_DEFAULT_PROFILES_FILE'):
-        os.environ[name] = romb_env[name]
-    os.environ.setdefault('ROS_DOMAIN_ID', '42')
+    configure_discovery()
     expected = {'mobotic_driver', 'mobotic_kinematics', 'mobotic_odometry',
                 'mobotic_supervisor', 'platform_diagnostics'}
     with tempfile.TemporaryFile(mode='w+') as log:
@@ -114,8 +133,7 @@ def main():
                     if not samples['diagnostics'].status:
                         raise RuntimeError('Empty diagnostic publication')
                     mode = samples['mode']
-                    ready = (not mode.error_active and not mode.safety_stop_active and not mode.reset_in_progress
-                             and mode.readiness_known and mode.drives_enabled and mode.ready_to_drive
+                    ready = (mode_ready(mode)
                              and all(m.startup_complete and m.initialized and m.enabled and m.position_valid
                                      and m.feedback_fresh and m.error_code == 0 for m in samples['modules'].modules))
                     if 'commands' in samples and any(m.traction_velocity != 0 or m.steering_profile_velocity != 0
@@ -134,7 +152,10 @@ def main():
                                    f'messages={sorted(samples)}')
             healthcheck = Path('/usr/local/bin/moboterra-healthcheck')
             if healthcheck.exists():
-                subprocess.run([str(healthcheck)], check=True, timeout=15)
+                check_runtime_health(healthcheck, node)
+                if (launch.poll() is not None or time.monotonic() - received['mode'] > 0.5
+                        or not mode_ready(samples['mode'])):
+                    raise RuntimeError('Virtual stack lost readiness during the runtime healthcheck')
             print(f'PASS: virtual nodes, {len(expected_joints)} joints, '
                   f'{len(expected_modules)} enabled wheel modules, supervisor readiness, odometry and diagnostics',
                   flush=True)

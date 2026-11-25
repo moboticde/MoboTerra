@@ -16,8 +16,12 @@ class BatteryDecodeTest(unittest.TestCase):
         self.assertGreaterEqual(telemetry.decode_soc(12800), 0.2)
         self.assertEqual(telemetry.decode_soc(64000), 1.0)
 
-    def test_reserved_soc_is_not_full(self):
-        for raw in (64001, 0xFFFE, 0xFFFF):
+    def test_vanguard_full_charge_readings_are_clamped(self):
+        for raw in (64001, 0xFC3F, 0xFC40):
+            self.assertEqual(telemetry.decode_soc(raw), 1.0)
+
+    def test_invalid_soc_is_rejected(self):
+        for raw in (-1, 0xFC41, 0xFFFE, 0xFFFF):
             self.assertTrue(math.isnan(telemetry.decode_soc(raw)))
 
     def test_electrical_decode_and_reserved(self):

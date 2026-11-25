@@ -21,7 +21,6 @@ seconds. `vehicle/mode.reason_codes` includes `B2_ENABLE_REQUIRED` while waiting
 | Scanner field data unavailable | Check scanner power and Ethernet connections; wait for fresh field data. |
 | Scanner protective stop | Clear obstacles from protective fields and restore the safety enable. |
 | Emergency stop/STO | Release emergency stops and restore the hardware safety-enable/STO circuit. |
-| FlexiSoft telemetry unavailable | Check PLC power and network connections; wait for valid safety telemetry. |
 | Drive status stale/startup interrupted | Check drive power and CAN; wait for fresh native disabled-drive status. |
 | Joystick not neutral | Return every axis to neutral. |
 
@@ -62,10 +61,9 @@ STOP/link checks remain separate conditions; do not infer readiness from the
 absence of a latched receiver fault.
 
 The local native launcher holds a single-instance lock and rejects leftover
-MoboTerra nodes or an occupied FlexiSoft TCP port 9100 before starting nodes.
+MoboTerra nodes before starting another instance.
 It uses `fastdds shm clean` to remove stale DDS shared-memory resources;
-the cleanup preserves resources still in use. The port/lock errors are startup
-conditions to resolve, rather than a bridge respawn loop in a duplicate stack.
+the cleanup preserves resources still in use.
 
 Physical startup uses the miControl disable/reset/mode/enable sequence.
 Position and velocity may be unavailable until the controllers are enabled;
@@ -189,11 +187,8 @@ rearmed by this explicit transaction; ordinary enable publications cannot rearm
 it. Persistent receiver/drive faults still require diagnosis. PAIL/USB input
 topics remain observable in ERROR; forwarding motion requires completed recovery.
 
-Only the complete four-module platform is supported. Its existing FlexiSoft
-monitoring/interlock policy remains configured by `safety.telemetry_required`.
-Battery, operator STOP/link, scanner, controller fault, feedback and authority
-checks retain their current behavior. The safety implementations were not changed
-by the profile cleanup.
+Battery, operator STOP/link, direct scanner, controller fault, feedback and
+authority checks apply to supervised startup.
 
 The driver uses the miControl object dictionary documented in
 [controller object mapping](controller_object_mapping.md). Actual status

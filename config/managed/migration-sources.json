@@ -21,7 +21,6 @@
     "odometry.yaml": "5ef17600cbd0e231071a48ddc63ce0bf2366bb1a058b5897c4a93daeab1da83e",
     "platform-front-right-rear-left.yaml": "10726bef6419f8dee438c01fa3516aade09260efc6fcd94a9091252e327a926b",
     "platform.yaml": "a287faf718d22eb870dc156e9554b1fafdbe2c9e6647c1518d5660ceca4a3a53",
-    "safety.yaml": "54e27b1f09ce8d0541d9a4a2d197443a675eeb7e8212f61184b8e8d7b4561b37",
     "scanners.yaml": "d0e5ef982b42cf7e670cc50f6aa95bf4bb2d288f1bea94a300f7dcb26aca5b38",
     "supervisor.yaml": "a7f674c5d43e989fc592023b843fef6ad6fad326fdebdceb239da263fa7ebb45"
   },

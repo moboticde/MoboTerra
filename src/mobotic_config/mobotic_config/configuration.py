@@ -16,7 +16,7 @@ from .operator_inputs import RemdeviceMapping
 COMPONENT_FILES = {
     'driver': 'driver.yaml', 'kinematics': 'kinematics.yaml',
     'manual': 'manual_control.yaml', 'supervisor': 'supervisor.yaml',
-    'safety': 'safety.yaml', 'battery': 'battery.yaml', 'odometry': 'odometry.yaml',
+    'battery': 'battery.yaml', 'odometry': 'odometry.yaml',
     'scanners': 'scanners.yaml', 'diagnostics': 'diagnostics.yaml',
 }
 MODULE_NAMES = ('front_left', 'front_right', 'rear_left', 'rear_right')
@@ -135,8 +135,9 @@ def validate_platform(platform):
     try:
         top = ('schema_version', 'robot_name', 'frames', 'can', 'geometry', 'actuators',
                'traction_profile', 'motion_limits', 'modules', 'usb_joystick',
-               'scanners', 'safety', 'battery')
-        _record(platform, (*top, 'commissioning_pending', 'reference_corners', 'operator'), 'platform', required=top)
+               'scanners', 'battery')
+        _record(platform, (*top, 'commissioning_pending', 'reference_corners', 'operator', 'safety'),
+                'platform', required=top)
         _record(platform['frames'], ('base', 'odom'), 'frames')
         _record(platform['geometry'], ('wheel_radius', 'wheel_width'), 'geometry')
         _record(platform['can'], ('master_node_id', 'drives', 'battery'), 'can')
@@ -323,34 +324,9 @@ def validate_platform(platform):
             raise ConfigurationError('corner frame names conflict')
         if platform['frames']['odom'] in generated_links or platform['frames']['odom'] in {s['frame_id'] for s in scanners['units']}:
             raise ConfigurationError('odom frame cannot belong to the robot description tree')
-        safety = platform['safety']
-        safety_source = safety.get('source', 'flexisoft')
         override = operator.get('mapping', {}).get('buttons', {}).get('scanner_override')
         if override and (operator['source'] != 'remdevice' or not operator['mapping']['verified']):
             raise ConfigurationError('scanner override requires verified REMdevice controls')
-        if safety_source != 'flexisoft':
-            raise ConfigurationError('safety.source must be flexisoft')
-        mask_names = ('front_protective_ossd_mask', 'rear_protective_ossd_mask',
-                      'emergency_stop_mask', 'safety_override_mask', 'rear_warning_mask',
-                      'front_warning_mask', 'safety_enable_mask', 'sto_mask')
-        flexisoft_keys = ('bind_address', 'port', 'telegram_size', 'status_byte_offset', *mask_names)
-        _record(safety, ('source', 'telemetry_required', *flexisoft_keys), 'safety', required=flexisoft_keys)
-        if type(safety.get('telemetry_required', True)) is not bool:
-            raise ConfigurationError('safety.telemetry_required must be boolean')
-        _ip(safety['bind_address'], 'FlexiSoft bind address')
-        _number(safety['port'], 'TCP port', integer=True)
-        if not 1 <= _id(safety['port'], 65535, 'TCP port'):
-            raise ConfigurationError('TCP port must be nonzero')
-        size = _number(safety['telegram_size'], 'telegram size', integer=True, positive=True)
-        offset = _number(safety['status_byte_offset'], 'status offset', integer=True)
-        if not 0 <= offset < size:
-            raise ConfigurationError('status offset must be inside telegram')
-        masks = [_id(_number(safety[key], key, integer=True), 255, key) for key in mask_names]
-        occupied = 0
-        for mask in masks:
-            if occupied & mask:
-                raise ConfigurationError('safety signal masks overlap')
-            occupied |= mask
         battery = platform['battery']
         if 'readiness' in battery:
             readiness = battery['readiness']
@@ -401,6 +377,8 @@ class Configuration:
         self.path = Path(default_platform_path() if platform_path is None else platform_path).resolve()
         self.platform = read_yaml(self.path)
         validate_platform(self.platform)
+        # Older installed profiles may still carry the retired gateway section.
+        self.platform.pop('safety', None)
         self._derived = self._derive()
         self._parameters = {}
         for component, filename in COMPONENT_FILES.items():
@@ -459,8 +437,6 @@ class Configuration:
                       'direct_traction_control_mode': 'current', 'output_frame_id': frame, **vehicle_limits}
         supervisor['kinematicoff_current_supported'] = all(
             controller_type(d, role) == 'micontrol' for role, d in drives if role == 'traction')
-        supervisor['safety_source'] = p['safety'].get('source', 'flexisoft')
-        supervisor['require_flexisoft_telemetry'] = p['safety'].get('telemetry_required', True)
         supervisor['wheel_radius'] = float(p['geometry']['wheel_radius'])
         operator = p.get('operator', {'source': 'usb'})
         supervisor['require_operator_interlock'] = operator.get(
@@ -503,8 +479,6 @@ class Configuration:
             battery['batteries.' + key] = [str(b[field]) for b in participants]
         return {'driver': driver, 'kinematics': kinematics, 'supervisor': supervisor,
                 'manual': manual, 'battery': battery,
-                'safety': {key: copy.deepcopy(value) for key, value in p['safety'].items()
-                           if key not in ('source', 'telemetry_required')},
                 'odometry': {'base_frame_id': frame, 'odom_frame_id': p['frames']['odom']}}
 
     def battery_can_filters(self):
@@ -696,9 +670,8 @@ class Configuration:
     def diagnostic_parameters(self):
         supervisor, driver = self.parameters('supervisor'), self.parameters('driver')
         return {**self.parameters('diagnostics'), 'minimum_battery_percentage': supervisor['minimum_battery_percentage'],
-                'safety_source': supervisor['safety_source'],
                 'manual_timeout': supervisor['manual_timeout'], 'battery_timeout': supervisor['battery_timeout'],
-                'safety_timeout': supervisor['safety_timeout'], 'mode_timeout': driver['supervisor_timeout']}
+                'mode_timeout': driver['supervisor_timeout']}
 
 
 def main(args=None):

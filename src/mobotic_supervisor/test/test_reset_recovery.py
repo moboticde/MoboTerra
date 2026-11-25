@@ -15,8 +15,6 @@ class ResetRecoveryTest(unittest.TestCase):
         self.node = self.fixture.node
         del self.node._source_gate
         node = self.node
-        node.safety_source = 'flexisoft'
-        node.require_flexisoft_telemetry = False
         node.require_operator_interlock = True
         node.required_health_sources = ['kinematics', 'odometry']
         node.health_timeout = .3

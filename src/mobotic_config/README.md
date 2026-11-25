@@ -12,12 +12,11 @@ directly, without physical component override files.
 
 | File in `config/` | Owns |
 |:--|:--|
-| `platform.yaml` | Versioned physical profile: module records, CAN IDs/scaling/raw limits, wheel geometry, shared motion limits, frames, CAN/network endpoints, FlexiSoft telegram mapping, battery participants and USB receiver settings |
+| `platform.yaml` | Versioned physical profile: module records, CAN IDs/scaling/raw limits, wheel geometry, shared motion limits, frames, CAN/network endpoints, scanner addresses, battery participants and USB receiver settings |
 | `driver.yaml` | SDO feedback timing and management/watchdog leases |
 | `kinematics.yaml` | Command/feedback freshness and minimum-speed policy |
 | `manual_control.yaml` | F310/F710 SDL axis/button mapping, boost scaling and source freshness |
 | `supervisor.yaml` | Mode transition, standstill, readiness, SOC threshold and speed-reduction policies |
-| `safety.yaml` | Bridge/monitor timing and conservative unmapped-STO policy |
 | `battery.yaml` | Telemetry freshness and publication period |
 | `odometry.yaml` | Integration, covariance, initial pose and `publish_tf` policy |
 | `scanners.yaml` | SICK acquisition options; raw data remains enabled |
@@ -102,15 +101,8 @@ standstill/acknowledgement transaction. Its current limit is
 `min_current`/`max_current` [mA]. Only miControl is accepted, and the derived configuration exposes its verified
 current protocol.
 
-For `safety.source: flexisoft`, `safety.telemetry_required: false` makes Ethernet
-feedback monitoring only. This is the default four-module profile: the physical
-FlexiSoft-to-controller STO circuit handles hardware stops independently of ROS.
-The bridge, safety monitor and diagnostic topics remain available. Missing,
-stale or reported FlexiSoft state does not change drive enable, mode, reset,
-speed limits or fault latches. Direct scanner fields, operator STOP, battery,
-drive feedback/faults, known active drive STO and watchdogs retain their checks.
-Set the value to `true` for the additional FlexiSoft software interlocks.
-Profiles omitting the field retain the previous required-telemetry behavior.
+Scanner field evaluation uses the direct Ethernet output of each scanner.
+Scanner freshness for motion is controlled by the supervisor's `safety_timeout`.
 
 Native hardware launch also supports drives and battery on one SocketCAN interface.
 Both bitrate values must match and `can.battery.listen_only` must be `false`, since
@@ -183,14 +175,14 @@ the specified bitrate externally.
 
 `publish_odom_tf:=auto` in bringup (`publish_tf:=auto` standalone) respects the
 effective odometry YAML. Explicit `true` or `false` wins. Description is still a
-separate launch; it does not own odom-to-base TF. Diagnostics derive manual,
-battery and safety deadlines from supervisor policy and mode-state deadline from
-the driver's supervisor lease, including overlays.
+separate launch; it does not own odom-to-base TF. Diagnostics derive manual
+and battery deadlines from the effective supervisor policy and the mode-state
+deadline from the driver's supervisor lease.
 
 ## Validation and limits
 
 The loader rejects duplicate YAML keys, malformed records, repeated drive IDs
-(including the master), inconsistent joints/frames, overlapping FlexiSoft bits,
+(including the master), inconsistent joints/frames,
 invalid CAN/network endpoints, invalid geometry and incompatible controller limits.
 Configuration is resolved before ROS node actions are created. Failures do not
 change safety logic or silently select a different profile.
@@ -213,13 +205,12 @@ Yellow warning fields or Safety Disabled/override impose a project-wide absolute
 for either module layout. Lower configured limits still apply; raising
 `warning_speed_limit` cannot raise this ceiling. `override_speed_scale` remains
 accepted for legacy overlays but no longer sets a percentage-based speed limit.
-This speed policy does not bypass scanner, FlexiSoft or other readiness checks.
+The mode, scanner and drive-readiness policies apply alongside this speed cap.
 
-Verified REMdevice profiles for two or four modules may configure
+Verified REMdevice profiles may configure
 `operator.mapping.buttons.scanner_override: {signal: D5, active_high: true}`.
-This selects the RP2 reduced-speed MANUAL scanner bypass. Four-module profiles
-must retain `safety.source: flexisoft`: the bypass does not remove PLC telemetry,
-E-stop, STO, safety-enable, battery or drive readiness requirements.
+This selects the RP2 reduced-speed MANUAL scanner bypass. Operator STOP,
+hardware STO, battery and drive readiness continue to apply.
 
 Mode naming is canonical throughout the project: MANUAL=0, AUTONOMOUS=1 and
 KINEMATICOFF=2. `initial_mode` accepts `manual`, `autonomous` or `kinematicoff`.

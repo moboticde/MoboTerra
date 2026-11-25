@@ -125,9 +125,10 @@ def rviz(_args):
         if not shutil.which('sudo'):
             raise RuntimeError('Docker access requires sudo on this computer')
         docker = ['sudo', 'docker']
-    command = [*docker, 'run', '--rm', '--network', 'host', '--ipc', 'host', '--pid', 'host', '--read-only',
+    command = [*docker, 'run', '--rm', '--network', 'host', '--ipc', 'private', '--pid', 'host', '--read-only',
         '--user', f'{uid}:{account.pw_gid}', '--cap-drop', 'ALL',
-        '--security-opt', 'no-new-privileges:true', '--env', 'DISPLAY=' + display,
+        '--security-opt', 'no-new-privileges:true', '--env', 'FASTDDS_BUILTIN_TRANSPORTS=UDPv4',
+        '--env', 'DISPLAY=' + display,
         '--env', 'XAUTHORITY=/tmp/moboterra.xauthority', '--env', 'HOME=/tmp',
         '--env', 'LIBGL_ALWAYS_SOFTWARE=1', '--env', 'QT_X11_NO_MITSHM=1', '--tmpfs', '/tmp:rw,mode=1777',
         '--tmpfs', f'/opt/moboterra-project/runtime:rw,uid={uid},gid={account.pw_gid}',

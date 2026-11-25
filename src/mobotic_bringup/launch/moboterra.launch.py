@@ -35,7 +35,7 @@ def _hardware_component_condition(stack_type, enabled, *other_enabled):
 def _launch_setup(context):
     cfg = load_from_context(context, {
         'driver': 'driver_parameters_file', 'kinematics': 'kinematics_parameters_file',
-        'manual': 'manual_parameters_file', 'safety': 'safety_parameters_file',
+        'manual': 'manual_parameters_file',
         'battery': 'battery_parameters_file', 'supervisor': 'supervisor_parameters_file',
         'odometry': 'odometry_parameters_file', 'scanners': 'scanner_parameters_file',
         'diagnostics': 'diagnostics_parameters_file',
@@ -46,7 +46,6 @@ def _launch_setup(context):
     can_interface = LaunchConfiguration('can_interface')
     battery_can_interface = LaunchConfiguration('battery_can_interface')
     start_manual_interface = LaunchConfiguration('start_manual_interface')
-    start_safety = LaunchConfiguration('start_safety')
     start_battery = LaunchConfiguration('start_battery')
     start_socketcan = LaunchConfiguration('start_socketcan')
     start_battery_socketcan = LaunchConfiguration('start_battery_socketcan')
@@ -75,8 +74,6 @@ def _launch_setup(context):
         LaunchConfiguration('stack_type').perform(context) == 'hardware'
         and operator_source == 'remdevice' and bool(operator_can_interface)
         and operator_can_interface != drive_can_interface)
-    safety_config = cfg.parameters('safety')
-    flexisoft_enabled = cfg.platform['safety'].get('source', 'flexisoft') == 'flexisoft'
     battery_config = cfg.parameters('battery')
     supervisor_config = cfg.parameters('supervisor')
     if stack_type.perform(context) == 'hardware' and not manual_only and operator_source == 'remdevice':
@@ -367,27 +364,6 @@ def _launch_setup(context):
         respawn=True,
     )
 
-    flexisoft_bridge = Node(
-        condition=_hardware_component_condition(stack_type, start_safety),
-        package='mobotic_safety',
-        executable='flexisoft_tcp_bridge',
-        name='flexisoft_tcp_bridge',
-        namespace=robot_name,
-        parameters=[safety_config],
-        output='screen',
-        respawn=True,
-        respawn_delay=1.0,
-    )
-    safety_monitor = Node(
-        condition=_hardware_component_condition(stack_type, start_safety),
-        package='mobotic_safety',
-        executable='safety_monitor',
-        name='safety_monitor',
-        namespace=robot_name,
-        parameters=[safety_config],
-        output='screen',
-        respawn=True,
-    )
     battery_monitor = Node(
         condition=_hardware_component_condition(stack_type, start_battery),
         package='mobotic_vanguard_battery',
@@ -448,12 +424,9 @@ def _launch_setup(context):
         output='screen', respawn=True, respawn_delay=1.0)
     scanner_adapter = Node(package='mobotic_safety', executable='scanner_safety_adapter',
         name='scanner_safety_adapter', namespace=robot_name, output='screen',
-        condition=IfCondition(PythonExpression([
-            "'", stack_type, "' == 'virtual' or '", start_scanners, "' == 'true'"
-        ])),
+        condition=_hardware_component_condition(stack_type, start_scanners),
         parameters=[{'status_timeout': supervisor_config['safety_timeout'],
-                     'scanner_source': 'safety_io' if stack_type.perform(context) == 'virtual' else 'scanner',
-                     'scanner_input_suffix': 'evaluation_data' if stack_type.perform(context) == 'hardware' else 'raw_data'}],
+                     'scanner_input_suffix': 'evaluation_data'}],
         respawn=True, respawn_delay=1.0)
 
     return resolved + [
@@ -470,8 +443,6 @@ def _launch_setup(context):
         hardware_operator_socketcan,
         hardware_operator_events_socketcan,
         manual_control,
-        *([flexisoft_bridge] if flexisoft_enabled else []),
-        safety_monitor,
         battery_monitor,
         *scanners,
         diagnostics,
@@ -547,12 +518,6 @@ def generate_launch_description():
             description='Start game_controller_node and mobotic_manual_control',
         ),
         DeclareLaunchArgument(
-            'start_safety',
-            default_value='true',
-            choices=['true', 'false'],
-            description='Start the FlexiSoft monitoring nodes in hardware mode',
-        ),
-        DeclareLaunchArgument(
             'start_battery',
             default_value='true',
             choices=['true', 'false'],
@@ -572,11 +537,6 @@ def generate_launch_description():
             'manual_parameters_file',
             default_value='',
             description='Optional manual-control policy overlay',
-        ),
-        DeclareLaunchArgument(
-            'safety_parameters_file',
-            default_value='',
-            description='Optional safety policy overlay; signal mapping comes from platform_config',
         ),
         DeclareLaunchArgument(
             'battery_parameters_file',

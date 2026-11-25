@@ -7,13 +7,10 @@ find_package(std_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/SafetyIOState.msg"
-  "msg/SafetyState.msg"
   "msg/ManualControlState.msg"
   "msg/OperatorState.msg"
   "msg/DriveStatus.msg"
   "msg/ScannerSafetyState.msg"
-  "msg/SafetyTelegram.msg"
   "msg/ComponentHealth.msg"
   "msg/ComponentHealthArray.msg"
   "msg/WheelModuleCommandArray.msg"

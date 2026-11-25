@@ -37,6 +37,5 @@ can_telemetry_records/
 /config/managed/before-*/
 /config/managed/*.before-*
 
-# Imported diagnostic snapshots are data; retain the actual JSON configuration.
+# Imported diagnostic snapshots are data.
 /config/raspberry-pi/*.json
-!/config/raspberry-pi/safety-ethernet-parameters.json
