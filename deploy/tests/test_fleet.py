@@ -34,7 +34,7 @@ class FleetTests(unittest.TestCase):
             self.fleet = updater.Fleet(
                 dict(checkout=str(self.state), owner='operator',
                      robot='MoboTerra_2', image_repository=REPO), state=self.state)
-        self.fleet.git = Mock()
+        self.fleet.git = Mock(return_value=done())
 
     def image_metadata(self, architecture):
         return {'Id': NEW_ID, 'Os': 'linux', 'Architecture': architecture, 'Config': {'Labels': {
@@ -75,6 +75,20 @@ class FleetTests(unittest.TestCase):
             self.assertIsNone(self.fleet.stage())
         self.assertFalse(self.fleet.staged.exists())
         run.assert_not_called()
+
+    def test_release_can_precede_docs_and_fleet_tooling(self):
+        self.fleet.git.side_effect = [done(code=1), done(), done()]
+        self.fleet.check_release_order(NEW, OLD)
+        self.fleet.git.assert_any_call('merge-base', '--is-ancestor', OLD, NEW)
+        self.fleet.git.assert_called_with('diff', '--quiet', OLD, NEW, '--', '.',
+                                          ':(exclude,glob)docs/**', ':(exclude,glob)**/*.md',
+                                          ':(exclude,glob)deploy/fleet/**',
+                                          ':(exclude)deploy/tests/test_fleet.py', check=False)
+
+    def test_release_cannot_downgrade_installed_software(self):
+        self.fleet.git.side_effect = [done(code=1), done(), done(code=1)]
+        with self.assertRaisesRegex(RuntimeError, 'older than the installed software'):
+            self.fleet.check_release_order(NEW, OLD)
 
     def prepare_apply(self):
         for method in ('clean_checkout', 'stop', 'select', 'wait_for_health', 'restore_boot_setting'):

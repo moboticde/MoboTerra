@@ -168,6 +168,19 @@ class Fleet:
             time.sleep(3)
         raise RuntimeError('The requested image did not become healthy. See the service and container logs.')
 
+    def check_release_order(self, installed_commit, approved_commit):
+        if self.git('merge-base', '--is-ancestor', installed_commit, approved_commit,
+                    check=False).returncode == 0:
+            return
+        # The guide and the separately installed fleet updater can be newer
+        # than the release without changing the files the robot stack uses.
+        self.git('merge-base', '--is-ancestor', approved_commit, installed_commit)
+        if self.git('diff', '--quiet', approved_commit, installed_commit, '--', '.',
+                    ':(exclude,glob)docs/**', ':(exclude,glob)**/*.md',
+                    ':(exclude,glob)deploy/fleet/**', ':(exclude)deploy/tests/test_fleet.py',
+                    check=False).returncode:
+            raise RuntimeError('Approved release is older than the installed software.')
+
     def apply(self, expected_commit):
         if self.pending.exists():
             raise RuntimeError('An update was interrupted. Run rollback before applying another release.')
@@ -180,7 +193,7 @@ class Fleet:
         if (old_commit, old_image) == (staged['commit'], staged['id']):
             print('Release already installed.', flush=True)
             return
-        self.git('merge-base', '--is-ancestor', old_commit, expected_commit)
+        self.check_release_order(old_commit, expected_commit)
         run('docker', 'image', 'inspect', '--format', '{{.Id}}', old_image, capture=True)
         enabled = run('systemctl', 'is-enabled', SERVICE, capture=True, check=False).stdout.strip()
         if enabled not in ('enabled', 'disabled'):
