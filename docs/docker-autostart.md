@@ -151,6 +151,13 @@ sudo moboterra-ctl stop
 sudo moboterra-ctl disable --now
 ```
 
+For field recovery with a linked PAIL joystick, select Manual with neutral
+controls and the drives disabled. Hold B1 and B2 for five seconds and release
+both. The installer provisions a host SocketCAN listener that can restart the
+running stack through systemd when ROS is unresponsive. Its decisions are in
+`journalctl -u moboterra-joystick-listener.service`. The gestures and checks are
+documented in the [joystick guide](../src/mobotic_manual_control/README.md).
+
 For RViz, from the logged-in graphical desktop:
 
 ```bash

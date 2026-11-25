@@ -17,6 +17,10 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 SERVICE = 'moboterra-current-stack.service'
 LEGACY_SERVICE = 'moboterra-supervisor.service'
+RESTART_SOCKET_UNIT = 'moboterra-joystick-restart.socket'
+RESTART_SERVICE_UNIT = 'moboterra-joystick-restart@.service'
+RESTART_LISTENER_UNIT = 'moboterra-joystick-listener.service'
+RESTART_SOCKET_DIR = '/run/moboterra-restart'
 ENV_FILE = ROOT / 'runtime/docker-stack.env'
 ROBOT_NETWORK = IPv4Network('192.168.0.0/16')
 SCANNER_SUFFIXES = {'front_left': 5, 'rear_right': 6}
@@ -187,9 +191,9 @@ def service_text(root, docker):
         '--file', root / 'deploy/compose.current-stack.yaml'))
     return f'''[Unit]
 Description=MoboTerra current four-miControl ROS 2 stack in Docker
-Requires=docker.service
-Wants=network-online.target
-After=docker.service network-online.target
+Requires=docker.service {RESTART_SOCKET_UNIT}
+Wants=network-online.target {RESTART_LISTENER_UNIT}
+After=docker.service network-online.target {RESTART_SOCKET_UNIT}
 PartOf=docker.service
 Conflicts={LEGACY_SERVICE}
 
@@ -205,6 +209,48 @@ TimeoutStopSec=60
 [Install]
 WantedBy=multi-user.target
 '''
+
+
+def restart_units(root, uid, gid):
+    return {
+        RESTART_LISTENER_UNIT: f'''[Unit]
+Description=Listen for the MoboTerra joystick restart gesture on host CAN
+Requires={RESTART_SOCKET_UNIT}
+After={RESTART_SOCKET_UNIT}
+
+[Service]
+Type=simple
+User={uid}
+Group={gid}
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_CAN AF_UNIX
+ExecStart=/usr/bin/python3 -B {systemd_quote(root / 'deploy/host/joystick_restart.py')}
+Restart=on-failure
+RestartSec=2
+''',
+        RESTART_SOCKET_UNIT: f'''[Unit]
+Description=MoboTerra joystick restart socket
+
+[Socket]
+ListenStream={RESTART_SOCKET_DIR}/restart.sock
+SocketUser={uid}
+SocketMode=0600
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes
+''',
+        RESTART_SERVICE_UNIT: f'''[Unit]
+Description=Restart the running MoboTerra stack from the joystick
+CollectMode=inactive-or-failed
+
+[Service]
+Type=exec
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+ExecStart={systemd_quote(root / 'deploy/host/moboterra_ctl.py')} restart --if-running
+''',
+    }
 
 
 def env_text(values):
@@ -377,24 +423,33 @@ def install(args):
                       MOBOTERRA_UID=uid, MOBOTERRA_GID=gid,
                       MOBOTERRA_ROBOT_NAME=cfg.platform['robot_name'])
         pending_env = runtime_dir / 'docker-stack.pending.env'
-        pending_unit = runtime_dir / SERVICE
+        units = {}
+        if not args.software_only:
+            # Keep the legacy container parameter populated so older images
+            # still reserve B1+B2. The real trigger socket stays on the host.
+            values['MOBOTERRA_RESTART_SOCKET_DIR'] = runtime_dir
+            values['MOBOTERRA_HOST_RESTART'] = 'true'
+            units = {SERVICE: service_text(ROOT, shutil.which('docker')), **restart_units(ROOT, uid, gid)}
+        pending_units = {runtime_dir / name: contents for name, contents in units.items()}
         pending_env.write_text(env_text(values))
-        pending_unit.write_text(service_text(ROOT, shutil.which('docker')))
         env = {key: value for key, value in os.environ.items() if key not in values}
         try:
+            for path, contents in pending_units.items():
+                path.write_text(contents)
             run(['docker', 'compose', '--env-file', str(pending_env), '--file',
                  str(ROOT / 'deploy/compose.current-stack.yaml'), 'config', '--quiet'], env=env)
-            if not args.software_only:
-                run(['systemd-analyze', 'verify', str(pending_unit)])
+            if pending_units:
+                run(['systemd-analyze', 'verify', *map(str, pending_units)])
             if ENV_FILE.exists():
                 atomic_text(runtime_dir / 'docker-stack.previous.env', ENV_FILE.read_text())
             atomic_text(ENV_FILE, pending_env.read_text())
             register_ctl()
-            if not args.software_only:
-                atomic_text(Path('/etc/systemd/system') / SERVICE, pending_unit.read_text())
+            for name, contents in units.items():
+                atomic_text(Path('/etc/systemd/system') / name, contents)
         finally:
             pending_env.unlink(missing_ok=True)
-            pending_unit.unlink(missing_ok=True)
+            for path in pending_units:
+                path.unlink(missing_ok=True)
         if not args.software_only:
             load = subprocess.run(['systemctl', 'show', LEGACY_SERVICE, '--property=LoadState', '--value'],
                                   capture_output=True, text=True).stdout.strip()

@@ -784,6 +784,17 @@ class ConfigurationTest(unittest.TestCase):
                             and action.kwargs.get('executable') == 'remdevice_control')
             self.assertTrue(operator.kwargs['parameters'][0]['receiver_errors_advisory'])
 
+    def test_host_restart_reserves_b1_b2_without_giving_ros_the_restart_socket(self):
+        with patch.dict(os.environ, MOBOTERRA_HOST_RESTART='true',
+                        MOBOTERRA_RESTART_SOCKET='/opt/moboterra-restart/restart.sock'):
+            actions, _ = resolve(factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')(),
+                                 {'platform_config': str(self.verified_path)})
+        operator = next(action for action in actions if action.kind == 'Node'
+                        and action.kwargs.get('executable') == 'remdevice_control')
+        parameters = operator.kwargs['parameters'][0]
+        self.assertTrue(parameters['reserve_restart_gesture'])
+        self.assertNotIn('stack_restart_socket', parameters)
+
     def test_namespace_root_and_endpoint_overrides(self):
         desc = factory(PACKAGES / 'mobotic_bringup/launch/moboterra.launch.py')()
         actions, context = resolve(desc, {'robot_name': '', 'can_interface': 'vcan0',

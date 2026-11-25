@@ -38,6 +38,11 @@ class ControlTest(unittest.TestCase):
                 expected=['systemctl',action]+(['--now'] if now else [])+['moboterra-current-stack.service']
                 execute.assert_called_once_with(expected,check=True)
 
+    def test_joystick_restart_leaves_stopped_stack_stopped(self):
+        with patch.object(ctl, 'require_root'), patch.object(ctl, 'run') as execute:
+            self.assertEqual(ctl.main(['restart', '--if-running']), 0)
+            execute.assert_called_once_with(['systemctl', 'try-restart', ctl.SERVICE], check=True)
+
     def test_logs_distinguish_ros_and_host_journal(self):
         with patch.object(ctl,'run',return_value=subprocess.CompletedProcess([],0)) as execute:
             ctl.show_logs(argparse.Namespace(host=False,follow=True,lines=200))

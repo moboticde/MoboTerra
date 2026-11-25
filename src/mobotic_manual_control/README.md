@@ -256,6 +256,16 @@ Held/reconnected B2 does not retry: release and press again. After a response,
 motion requires new neutral input. Blocking receiver faults remain inhibited;
 the stack stays running. See [B2 drive enable](../../docs/remdevice_commissioning.md#b2-drive-enabledisable).
 RP2/STOP retain their independent safety functions.
+
+On the installed Docker hardware stack, select Manual and centre the controls
+with the drives disabled. Hold B1, press B2, hold both for five seconds, then
+release both to restart the software stack. The Ubuntu service
+`moboterra-joystick-listener.service` listens to the receiver on SocketCAN
+outside Docker and ROS. It requires a fresh radio link and native disabled
+status from every drive. It uses read-only status requests if drive CAN traffic
+is quiet. Linux, the CAN link and the joystick receiver must be operational.
+After startup, use a fresh B2 press for normal drive enable.
+
 For a verified PAIL profile, `operator.receiver_errors_advisory: true` makes
 receiver EMCY codes, current error-register values and CAN-error indications
 diagnostic only. The supplied default platform enables this PDO-based policy.

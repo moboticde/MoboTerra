@@ -18,6 +18,8 @@ services:
     security_opt: [no-new-privileges:true]
     environment:
       ROBOT_NAME: ${MOBOTERRA_ROBOT_NAME:?}
+      MOBOTERRA_RESTART_SOCKET: ${MOBOTERRA_RESTART_SOCKET_DIR:+/opt/moboterra-restart/restart.sock}
+      MOBOTERRA_HOST_RESTART: ${MOBOTERRA_HOST_RESTART:-false}
     command: [bash, scripts/start_MoboTerra, "start_rviz:=false"]
     volumes:
       - type: bind
@@ -42,6 +44,12 @@ services:
       - type: bind
         source: ${MOBOTERRA_PROJECT_ROOT:?}/runtime
         target: /opt/moboterra-project/runtime
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MOBOTERRA_RESTART_SOCKET_DIR:-../runtime}
+        target: /opt/moboterra-restart
+        read_only: true
         bind:
           create_host_path: false
     tmpfs:

@@ -55,7 +55,8 @@ def show_can(_args):
 def service_action(args):
     require_root()
     environment()
-    command = ['systemctl', args.action]
+    action = 'try-restart' if getattr(args, 'if_running', False) else args.action
+    command = ['systemctl', action]
     if getattr(args, 'now', False): command.append('--now')
     command.append(SERVICE)
     run(command, check=True)
@@ -181,6 +182,8 @@ def main(argv=None):
         commands.add_parser(name).set_defaults(func=function)
     for action in ('start', 'stop', 'restart', 'enable', 'disable'):
         command = commands.add_parser(action)
+        if action == 'restart':
+            command.add_argument('--if-running', action='store_true', help='Leave a stopped stack stopped')
         if action in ('enable', 'disable'):
             command.add_argument('--now', action='store_true', help='Also start/stop this session')
         command.set_defaults(func=service_action, action=action)

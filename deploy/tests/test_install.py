@@ -58,7 +58,8 @@ class InstallationTest(unittest.TestCase):
             shutil.copy2(DEPLOY / filename, self.deploy / filename)
         shutil.copytree(DEPLOY / 'vendor', self.deploy / 'vendor')
         (self.deploy / 'host').mkdir()
-        shutil.copy2(DEPLOY / 'host/moboterra_ctl.py', self.deploy / 'host/moboterra_ctl.py')
+        for filename in ('moboterra_ctl.py', 'joystick_restart.py'):
+            shutil.copy2(DEPLOY / 'host' / filename, self.deploy / 'host' / filename)
         shutil.copytree(DEPLOY.parent / 'src/mobotic_config', self.repo / 'src/mobotic_config',
                         ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache'))
         # The optional WSL test runner has Python 3.8; the actual target is
@@ -123,7 +124,19 @@ class InstallationTest(unittest.TestCase):
         env = (self.repo / 'runtime/docker-stack.env').read_text()
         self.assertIn("MOBOTERRA_CURRENT_IMAGE='sha256:"+'a'*64+"'", env)
         self.assertTrue((self.root / 'usr/local/bin/moboterra-ctl').is_symlink())
-        self.assertTrue((self.root / 'etc/systemd/system/moboterra-current-stack.service').is_file())
+        units = self.root / 'etc/systemd/system'
+        self.assertIn('Requires=docker.service moboterra-joystick-restart.socket',
+                      (units / 'moboterra-current-stack.service').read_text())
+        self.assertIn(f"MOBOTERRA_RESTART_SOCKET_DIR='{self.repo / 'runtime'}'", env)
+        self.assertIn("MOBOTERRA_HOST_RESTART='true'", env)
+        socket_unit = (units / 'moboterra-joystick-restart.socket').read_text()
+        self.assertIn('ListenStream=/run/moboterra-restart/restart.sock', socket_unit)
+        self.assertIn('SocketMode=0600', socket_unit)
+        self.assertIn(' restart --if-running', (units / 'moboterra-joystick-restart@.service').read_text())
+        listener_unit = (units / 'moboterra-joystick-listener.service').read_text()
+        self.assertIn('Requires=moboterra-joystick-restart.socket', listener_unit)
+        self.assertIn('deploy/host/joystick_restart.py', listener_unit)
+        self.assertNotIn('PartOf=moboterra-current-stack.service', listener_unit)
         self.assertIn(['systemctl','enable','moboterra-current-stack.service'], calls)
         self.assertNotIn(['systemctl','start','moboterra-current-stack.service'], calls)
         self.assertFalse(any(call[0] == 'apt-get' for call in calls))

@@ -1,6 +1,7 @@
 """PAIL/Ecobox operator provider using the documented CANopen TPDO layout."""
 import json
 import math
+import socket
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -12,9 +13,10 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from mobotic_config.operator_inputs import RemdeviceMapping
-from mobotic_interfaces.msg import OperatorState
+from mobotic_interfaces.msg import OperatorState, VehicleModeState, WheelModuleStatusArray
 from .manual_control import ManualControl
 from .remdevice_protocol import RemdeviceReceiver, signed_axis
+from .restart_gesture import RestartGesture, controls_neutral
 
 
 class RemdeviceControl(ManualControl):
@@ -61,6 +63,15 @@ class RemdeviceControl(ManualControl):
         self.last_reset = None
         self.reset_future = None
         self.reset_observed_pair = None
+        self.restart_socket_path = self.declare_parameter('stack_restart_socket', '').value
+        self.reserve_restart_gesture = self.declare_parameter('reserve_restart_gesture', False).value
+        self.restart_bindings = json.loads(self.declare_parameter('stack_restart_bindings', '{}').value)
+        self.restart_status_timeout_ns = int(
+            self.declare_parameter('stack_restart_status_timeout', 0.35).value * 1e9)
+        self.restart_wheel_status = None
+        self.restart_wheel_status_received_ns = 0
+        self.restart_submitted = False
+        self.restart_gesture = RestartGesture(self.decoder.timeout_ns)
         self.drive_toggle_status = ''
         self.input_error = ''
         self.last_start_ns = None
@@ -84,6 +95,9 @@ class RemdeviceControl(ManualControl):
         self.selector_publisher = self.create_publisher(Joy, 'operator/scanner_selector', 1)
         self.can_publisher = self.create_publisher(Frame, 'can_tx', 10)
         self.reset_client = self.create_client(Trigger, 'wheel_modules/enable_drives')
+        if self.restart_socket_path:
+            self.restart_status_subscription = self.create_subscription(
+                WheelModuleStatusArray, 'wheel_modules/status', self._restart_status_callback, 1)
         self.start_service = self.create_service(Trigger, 'operator/start_receiver', self._start_receiver)
         # Hardware PDOs and receiver diagnostics have separate filtered CAN
         # readers/topics. An EMCY burst must not evict either control PDO.
@@ -288,7 +302,7 @@ class RemdeviceControl(ManualControl):
         return self._healthy(now) and super()._joystick_connected(now)
 
     def _manual_enabled(self):
-        return ((self.reset_future is None or self.reset_future.done())
+        return (not self.restart_submitted and (self.reset_future is None or self.reset_future.done())
                 and self._healthy(self.get_clock().now())
                 and super()._manual_enabled())
 
@@ -304,23 +318,81 @@ class RemdeviceControl(ManualControl):
         return sample
 
     def _reset_sample_neutral(self, sample):
-        try:
-            return all(abs(signed_axis(sample.analog[spec['channel'] - 1],
-                sample.digital[f"U{spec['channel']}"], sample.digital[f"D{spec['channel']}"],
-                zero=spec['zero'], full_scale=spec['full_scale'], invert=spec['invert'])) <= 0.08
-                for spec in self.mapping.axes.values())
-        except ValueError:
+        return controls_neutral(self.mapping, sample)
+
+    def _restart_status_callback(self, message):
+        self.restart_wheel_status = message
+        self.restart_wheel_status_received_ns = self.get_clock().now().nanoseconds
+
+    def _stack_restart_allowed(self, now, sample):
+        if (not self._vehicle_mode_fresh(now) or not self._healthy(now)
+                or self.mapping.button('mode', sample.digital) or not self._reset_sample_neutral(sample)
+                or (self.reset_future is not None and not self.reset_future.done())):
             return False
+        state = self.vehicle_mode_state
+        if (state.selected_mode != VehicleModeState.MANUAL or state.drives_enabled
+                or state.motion_permitted or state.reset_in_progress or state.transition_in_progress):
+            return False
+        status = self.restart_wheel_status
+        limit = self.restart_status_timeout_ns
+        if (status is None or not self.restart_bindings
+                or not 0 <= now.nanoseconds - self.restart_wheel_status_received_ns <= limit):
+            return False
+        published_ns = Time.from_msg(status.header.stamp).nanoseconds
+        if published_ns <= 0 or not 0 <= now.nanoseconds - published_ns <= limit:
+            return False
+        if (len(status.modules) != len(self.restart_bindings)
+                or {module.name for module in status.modules} != self.restart_bindings.keys()):
+            return False
+        for module in status.modules:
+            if module.enabled or module.startup_pending:
+                return False
+            for drive, expected in zip((module.steering, module.traction), self.restart_bindings[module.name]):
+                stamp = Time.from_msg(drive.status_stamp).nanoseconds
+                if (drive.name != expected or not drive.status_known or not drive.device_state_known
+                        or drive.enabled or stamp <= 0 or not 0 <= now.nanoseconds - stamp <= limit):
+                    return False
+        return True
+
+    def _request_stack_restart(self):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as request:
+                request.settimeout(0.05)
+                request.connect(self.restart_socket_path)
+            self.restart_submitted = True
+            self.get_logger().info('B1+B2 requested moboterra-ctl restart')
+        except OSError as error:
+            self.get_logger().error(f'B1+B2 stack restart request failed: {error}')
+
+    def _observe_restart_buttons(self, now, sample, reset, previous_reset):
+        boost = self.mapping.button('boost', sample.digital)
+        check_restart = self.restart_gesture.waiting_release or (boost and reset)
+        reserved, restart = self.restart_gesture.observe(
+            sample.stamp_ns, b1=boost, b2=reset,
+            previous_b2=previous_reset,
+            permitted=(check_restart and bool(self.restart_socket_path)
+                       and self._stack_restart_allowed(now, sample)))
+        if restart:
+            self._request_stack_restart()
+        return reserved
 
     def _observe_reset_button(self, now):
         # B2 requests initialization/enable, like X on the example Logitech.
         # Never toggle/disable drives or cancel an active enable request here.
         # Never read/clear receiver error registers or restart receiver
         # communication here. The independent monitor is read-only by default.
+        if self.restart_submitted:
+            return
         sample = self._reset_sample(now)
         if sample is None:
             self.last_reset = None
             self.reset_observed_pair = None
+            if self.restart_socket_path or self.reserve_restart_gesture:
+                digital = self.decoder.digital(now.nanoseconds)
+                if (digital is None or not digital['LINK'] or not digital['EMGY'] or digital['STOP']
+                        or self.restart_gesture.stamp_ns is None
+                        or not 0 <= now.nanoseconds - self.restart_gesture.stamp_ns <= self.decoder.timeout_ns):
+                    self.restart_gesture.clear()
             return
         pair = tuple(self.decoder.samples[cob][0] for cob in
                      (self.decoder.digital_id, self.decoder.analog_id))
@@ -330,6 +402,9 @@ class RemdeviceControl(ManualControl):
         self.reset_observed_pair = pair
         pressed = self.mapping.button('reset', sample.digital)
         previous, self.last_reset = self.last_reset, pressed
+        if ((self.restart_socket_path or self.reserve_restart_gesture)
+                and self._observe_restart_buttons(now, sample, pressed, previous)):
+            return
         if (not pressed or previous is not False
                 or (self.reset_future is not None and not self.reset_future.done())):
             return
@@ -413,8 +488,13 @@ class RemdeviceControl(ManualControl):
         if self.decoder.epoch_ns != before_epoch:
             self._drop_input(now)
             self.last_reset = self.reset_observed_pair = None
+            self.restart_gesture.clear()
         if (accepted and frame.id == self.decoder.digital_id):
             self.input_error = ''
+            if self.restart_socket_path or self.reserve_restart_gesture:
+                digital = self.decoder.digital(now.nanoseconds)
+                if not (digital and digital['LINK'] and digital['EMGY'] and not digital['STOP']):
+                    self.restart_gesture.clear()
         if not self._healthy(now):
             self._drop_input(now)
         if not accepted or not self.mapping.verified:

@@ -1,4 +1,5 @@
 import json
+import os
 
 from mobotic_config.launching import common_arguments, load_from_context, deployment_actions
 from mobotic_config.description import render_description
@@ -78,6 +79,18 @@ def _launch_setup(context):
     flexisoft_enabled = cfg.platform['safety'].get('source', 'flexisoft') == 'flexisoft'
     battery_config = cfg.parameters('battery')
     supervisor_config = cfg.parameters('supervisor')
+    if stack_type.perform(context) == 'hardware' and not manual_only and operator_source == 'remdevice':
+        restart_socket = os.environ.get('MOBOTERRA_RESTART_SOCKET', '')
+        if os.environ.get('MOBOTERRA_HOST_RESTART') == 'true':
+            manual_config['reserve_restart_gesture'] = True
+        elif restart_socket:
+            bindings = dict(zip(kinematics_config['module_names'], zip(
+                kinematics_config['steering_joint_names'], kinematics_config['traction_joint_names'])))
+            manual_config.update(
+                stack_restart_socket=restart_socket,
+                stack_restart_bindings=ParameterValue(json.dumps(bindings), value_type=str),
+                stack_restart_status_timeout=supervisor_config['wheel_status_timeout'],
+            )
     # The romb's turn axis requests body yaw at zero forward speed too.
     # Use the same kinematics path in virtual and hardware operation.
     if LaunchConfiguration('start_odometry').perform(context) == 'true':

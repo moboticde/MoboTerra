@@ -162,6 +162,7 @@ class CurrentStackTest(unittest.TestCase):
         self.assertIn('stop --timeout 45', unit)
         self.assertIn('Restart=no', unit)
         self.assertIn('Conflicts=moboterra-supervisor.service', unit)
+        self.assertIn('Wants=network-online.target moboterra-joystick-listener.service', unit)
 
     def test_systemd_escapes_paths_without_a_shell(self):
         self.assertEqual(deployment.systemd_quote('/home/100%/$robot'),

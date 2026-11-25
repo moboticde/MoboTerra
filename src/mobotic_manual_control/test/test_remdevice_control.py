@@ -4,12 +4,15 @@ import json
 import inspect
 import math
 from pathlib import Path
+import socket
+import tempfile
 from types import SimpleNamespace
 import unittest
 
 import test_manual_control as base
 from mobotic_config.operator_inputs import RemdeviceMapping
 from mobotic_manual_control.remdevice_protocol import RemdeviceReceiver, signed_axis
+from mobotic_manual_control.restart_gesture import RestartGesture, controls_neutral
 
 
 class Time(base.Time):
@@ -32,7 +35,9 @@ cls = next(item for item in tree.body if isinstance(item, ast.ClassDef))
 cls.body = [item for item in cls.body if isinstance(item, ast.FunctionDef) and item.name != '__init__']
 namespace = {'ManualControl': base.Controller, 'Time': Time, 'Joy': Message, 'Frame': Message,
              'String': SimpleNamespace, 'Trigger': SimpleNamespace(Request=lambda: None),
-             'signed_axis': signed_axis, 'json': json, 'math': math, 'JointState': Message}
+             'signed_axis': signed_axis, 'json': json, 'math': math, 'JointState': Message,
+             'VehicleModeState': SimpleNamespace(MANUAL=0), 'socket': socket,
+             'controls_neutral': controls_neutral}
 exec(compile(ast.Module(body=[cls], type_ignores=[]), str(SOURCE), 'exec'), namespace)
 Control = namespace['RemdeviceControl']
 
@@ -62,6 +67,10 @@ class RemdeviceControlTest(unittest.TestCase):
         node.last_reset = None
         node.reset_future = None
         node.reset_observed_pair = None
+        node.restart_socket_path = ''
+        node.reserve_restart_gesture = False
+        node.restart_gesture = RestartGesture(node.decoder.timeout_ns)
+        node.restart_submitted = False
         node.drive_toggle_status = ''
         node.last_start_ns = None
         node.receiver_transmit_enabled = True
@@ -97,6 +106,7 @@ class RemdeviceControlTest(unittest.TestCase):
         previous = self.node.vehicle_mode_state
         self.node._vehicle_mode_callback(SimpleNamespace(
             header=SimpleNamespace(stamp=self.now.to_msg()), current_mode=0,
+            selected_mode=0, motion_permitted=False, transition_in_progress=False,
             drives_enabled=(getattr(previous, 'drives_enabled', False) if enabled is None else enabled),
             reset_in_progress=(getattr(previous, 'reset_in_progress', False) if resetting is None else resetting)))
 
@@ -342,6 +352,126 @@ class RemdeviceControlTest(unittest.TestCase):
         self.pair(); self.pair(buttons=4)
         self.assertEqual(len(self.resets), 1)
         self.pair(buttons=4)
+        self.assertEqual(len(self.resets), 1)
+
+    def restart_fixture(self):
+        node = self.node
+        node.restart_socket_path = '/unused'
+        node.restart_bindings = {'rear_left': ('rear_left_steering', 'rear_left_traction')}
+        node.restart_status_timeout_ns = 350_000_000
+        node.restart_gesture.clear()
+
+    def restart_pair(self, buttons=0, *, speed=0, status=0x28, enabled=False, stale=False):
+        stamp = self.now.nanoseconds - (400_000_000 if stale else 0)
+        def drive(name):
+            return SimpleNamespace(name=name, status_known=True, device_state_known=True,
+                                   enabled=enabled, status_stamp=stamp)
+        self.node._restart_status_callback(SimpleNamespace(header=SimpleNamespace(stamp=self.now.nanoseconds),
+            modules=[SimpleNamespace(name='rear_left', enabled=False, startup_pending=False,
+                position_valid=False, steering=drive('rear_left_steering'), traction=drive('rear_left_traction'))]))
+        self.pair(buttons=buttons, speed=speed, status=status)
+
+    def test_restart_chord_requests_host_once_after_release_without_enabling_drives(self):
+        self.restart_fixture()
+        with tempfile.TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX) as server:
+            self.node.restart_socket_path = str(Path(directory) / 'restart.sock')
+            server.bind(self.node.restart_socket_path)
+            server.listen()
+            server.setblocking(False)
+            self.restart_pair()
+            self.restart_pair(2)
+            for _ in range(105):
+                self.restart_pair(6)
+            self.restart_pair(4)  # Release B1 first and keep B2 suppressed.
+            with self.assertRaises(BlockingIOError):
+                server.accept()
+            self.restart_pair()
+            connection, _ = server.accept()
+            connection.close()
+            self.restart_pair()
+            with self.assertRaises(BlockingIOError):
+                server.accept()
+            self.assertFalse(self.resets)
+            self.restart_pair(4)
+            self.assertFalse(self.resets)
+
+    def test_host_owned_chord_cannot_request_ros_restart_or_enable_drives(self):
+        self.node.reserve_restart_gesture = True
+        requests = []
+        self.node._request_stack_restart = lambda: requests.append(True)
+        self.restart_pair()
+        self.restart_pair(2)
+        for _ in range(105):
+            self.restart_pair(6)
+        self.restart_pair(4)
+        self.restart_pair()
+        self.assertFalse(requests)
+        self.assertFalse(self.resets)
+        self.restart_pair(4)
+        self.assertEqual(len(self.resets), 1)
+
+    def test_restart_chord_is_cancelled_by_unsafe_or_stale_input(self):
+        for interruption in ({'speed': 255}, {'status': 0}, {'enabled': True}, {'stale': True}):
+            with self.subTest(interruption=interruption):
+                self.setUp()
+                self.restart_fixture()
+                requests = []
+                self.node._request_stack_restart = lambda: requests.append(True)
+                self.restart_pair()
+                for _ in range(55):
+                    self.restart_pair(6)
+                self.restart_pair(6, **interruption)
+                for _ in range(105):
+                    self.restart_pair(6)
+                self.restart_pair()
+                self.assertFalse(requests)
+                self.assertFalse(self.resets)
+
+    def test_presses_held_at_start_and_short_holds_never_restart_or_enable(self):
+        self.restart_fixture()
+        requests = []
+        self.node._request_stack_restart = lambda: requests.append(True)
+        for _ in range(105):
+            self.restart_pair(6)
+        self.restart_pair()
+        self.restart_pair(6)
+        self.restart_pair(4)
+        self.restart_pair()
+        self.assertFalse(requests)
+        self.assertFalse(self.resets)
+        self.restart_pair(4)
+        self.assertEqual(len(self.resets), 1)
+
+    def test_early_b2_release_restarts_full_hold_while_b1_stays_down(self):
+        self.restart_fixture()
+        requests = []
+        self.node._request_stack_restart = lambda: requests.append(True)
+        self.restart_pair()
+        self.restart_pair(2)
+        for _ in range(65):
+            self.restart_pair(6)
+        self.restart_pair(2)
+        for _ in range(65):
+            self.restart_pair(6)
+        self.restart_pair(2)
+        self.assertFalse(self.node.restart_gesture.waiting_release)
+        self.assertFalse(requests)
+        for _ in range(105):
+            self.restart_pair(6)
+        self.restart_pair(4)
+        self.restart_pair()
+        self.assertEqual(requests, [True])
+        self.assertFalse(self.resets)
+
+    def test_abandoned_restart_retry_does_not_enable_drives(self):
+        self.restart_fixture()
+        self.restart_pair()
+        self.restart_pair(6)
+        self.restart_pair(2)
+        self.restart_pair(4)
+        self.assertFalse(self.resets)
+        self.restart_pair()
+        self.restart_pair(4)
         self.assertEqual(len(self.resets), 1)
 
     def test_pending_b2_preserves_physical_neutral_proof_without_motion(self):
