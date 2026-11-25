@@ -20,105 +20,45 @@ Only the person publishing and approving releases needs GitHub write access.
 
 ### If the PC already runs MoboTerra in Docker
 
-Log in as the user who owns its permanent checkout. Run **one** of these
-commands on the corresponding PC:
+Log in as the user who owns the installed checkout. For MoboTerra_1, paste this
+single command into its terminal:
 
 ```bash
-# PC for MoboTerra_1
-robot=MoboTerra_1
+(setup=$(mktemp) && trap 'rm -f -- "$setup"' EXIT && curl -fsSL https://raw.githubusercontent.com/moboticde/MoboTerra/main/deploy/fleet/enroll.sh -o "$setup" && bash "$setup" MoboTerra_1)
 ```
 
-```bash
-# PC for MoboTerra_2
-robot=MoboTerra_2
-```
+Use `MoboTerra_2` or `MoboTerra_3` as the argument when enrolling those PCs.
+MoboTerra_2 is already enrolled. The command prompts for sudo, finds the
+installed Docker checkout, fetches the fleet tools, enables the timer, and
+checks for an approved release. The running stack continues while the timer
+stages downloads. Use steps 3 and 4 to approve and apply the update.
 
 ```bash
-# PC for MoboTerra_3
-robot=MoboTerra_3
-```
-
-MoboTerra_2 is already enrolled. To verify it, use the status commands below.
-For a new enrollment, run this common block in the same terminal after setting
-`robot`. It finds the checkout used by `moboterra-ctl` and copies the updater
-from the verified source commit. The live checkout and running stack stay in
-place. The timer checks GitHub about every five minutes.
-
-```bash
-(
-    set -euo pipefail
-    case "${robot:-}" in
-        MoboTerra_1|MoboTerra_2|MoboTerra_3) ;;
-        *) echo 'Set robot to the identity for this PC.' >&2; exit 1 ;;
-    esac
-    ctl=$(readlink -f "$(command -v moboterra-ctl)")
-    cd "$(dirname "$ctl")/../.."
-    test "$(pwd -P)/deploy/host/moboterra_ctl.py" = "$ctl"
-    test "$(stat -c %U .)" = "$(id -un)"
-
-    updater_commit=8a68bb6fd416114c75ef5d2e7e89646e4870e28b
-    GIT_TERMINAL_PROMPT=0 git fetch --no-tags origin \
-        refs/heads/main:refs/remotes/origin/main
-    git merge-base --is-ancestor "$updater_commit" origin/main
-    files=$(mktemp -d)
-    trap 'rm -rf -- "$files"' EXIT
-    git archive "$updater_commit" deploy/fleet | tar -x -C "$files"
-
-    sudo -v
-    sudo install -m 0755 "$files/deploy/fleet/moboterra_fleet.py" \
-        /usr/local/sbin/moboterra-fleet
-    sudo install -m 0644 "$files"/deploy/fleet/moboterra-fleet-stage.{service,timer} \
-        /etc/systemd/system/
-    python3 -c 'import json, sys; print(json.dumps(dict(zip(
-        ("checkout", "owner", "robot", "image_repository"), sys.argv[1:])), indent=2))' \
-        "$(pwd -P)" "$(id -un)" "$robot" ghcr.io/moboticde/moboterra \
-        | sudo install -m 0600 /dev/stdin /etc/moboterra-fleet.json
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now moboterra-fleet-stage.timer
-)
-```
-
-Verify the timer and check that the updater reports the correct fleet name:
-
-```bash
-systemctl is-enabled moboterra-fleet-stage.timer
 systemctl is-active moboterra-fleet-stage.timer
 sudo moboterra-fleet status
 ```
 
 ### If the PC still launches native ROS 2
 
-Arrange maintenance, stop the native launch, and preserve its commissioned
-configuration and calibration. For a new Docker installation on the standard
-hardware profile, use a permanent separate clone. The following example installs
-the verified release from MoboTerra_2's source and leaves the Docker stack
-stopped. Review any site-specific configuration before the first hardware launch.
+During maintenance, stop the native launch and preserve the robot's commissioned
+configuration and calibration. On a standard 64-bit Ubuntu 24.04 robot PC,
+the same setup command with `--install-docker` installs a verified prebuilt
+image, enrolls the fleet updater, and leaves the Docker stack stopped.
 
 ```bash
-(
-    set -euo pipefail
-    release_commit=8a68bb6fd416114c75ef5d2e7e89646e4870e28b
-    image=$(curl -fsSL --max-time 25 \
-        "https://github.com/moboticde/MoboTerra/releases/download/docker-$release_commit/release.json" \
-        | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["commit"] == sys.argv[1]; print(d["image"])' "$release_commit")
-
-    git clone --branch main https://github.com/moboticde/MoboTerra.git "$HOME/MoboTerra-docker"
-    cd "$HOME/MoboTerra-docker"
-    git switch --detach "$release_commit"
-    bash ./install.sh --no-start --image "$image"
-)
+(setup=$(mktemp) && trap 'rm -f -- "$setup"' EXIT && curl -fsSL https://raw.githubusercontent.com/moboticde/MoboTerra/main/deploy/fleet/enroll.sh -o "$setup" && bash "$setup" MoboTerra_1 --install-docker)
 ```
 
-Use the enrollment commands above on this PC. Start the new deployment once it
-is cleared for commissioning. Enable boot startup if that robot should start
-automatically on reboot.
+It uses a separate checkout at `$HOME/MoboTerra-docker`. Review the robot's
+configuration before the first hardware launch. Start it when it is cleared
+for commissioning:
 
 ```bash
-sudo moboterra-ctl start
+sudo moboterra-ctl start &&
 sudo moboterra-ctl status
-# Optional boot startup
-sudo moboterra-ctl enable
 ```
+
+To enable startup on reboot, run `sudo moboterra-ctl enable`.
 
 ## 2. Upload source changes and build a release
 
