@@ -1,4 +1,4 @@
 {
-  "commit": "ce4814b7e7ce457d26ac60ae25663029bd7eb99c",
-  "image": "ghcr.io/moboticde/moboterra@sha256:4874232fc7f7455be2441105ff490cffb2749a365632944f8d6b6b64490768a2"
+  "commit": "8a68bb6fd416114c75ef5d2e7e89646e4870e28b",
+  "image": "ghcr.io/moboticde/moboterra@sha256:cfe9938236412d0a5e22d1e5909a12b494b2c92ce5026f15041b8caef6ec612d"
 }
