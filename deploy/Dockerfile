@@ -13,9 +13,11 @@ RUN sha256sum --check agv_kinematics.deb.sha256 \
     && test "$(dpkg-deb --field agv_kinematics.deb Architecture)" = amd64 \
     && dpkg-deb --extract agv_kinematics.deb /vendor-root
 
-FROM ${ROS_IMAGE} AS romb-emulator
+# Fast DDS sets IP_MULTICAST_IF when opening its UDP send sockets.
+# QEMU 10 handles that socket option under user-mode x86 emulation.
+FROM ubuntu:26.04 AS romb-emulator
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends qemu-user-static \
+    && apt-get install -y --no-install-recommends qemu-user \
     && rm -rf /var/lib/apt/lists/*
 
 FROM ${ROS_IMAGE} AS dependencies
@@ -36,7 +38,7 @@ FROM dependencies AS romb-support
 ENV MOBOTERRA_ROMB_RUNTIME=/opt/moboterra-romb
 COPY --from=romb-guest / /opt/moboterra-romb/rootfs/
 COPY --from=romb-vendor /vendor-root/ /opt/moboterra-romb/rootfs/
-COPY --from=romb-emulator /usr/bin/qemu-x86_64-static /opt/moboterra-romb/qemu-x86_64-static
+COPY --from=romb-emulator /usr/bin/qemu-x86_64 /opt/moboterra-romb/qemu-x86_64-static
 COPY deploy/container/romb-udp.xml /opt/moboterra-romb/udp-only.xml
 COPY deploy/container/prepare_romb.py /tmp/prepare_romb.py
 RUN python3 /tmp/prepare_romb.py && chmod -R a+rX /opt/moboterra-romb
