@@ -15,7 +15,15 @@ from mobotic_kinematics.launching import kinematics_nodes
 from mobotic_kinematics.romb.runtime import runtime_command
 
 
-def test_original_solver_and_adapter_roundtrip():
+def test_original_solver_and_adapter_roundtrip(monkeypatch):
+    # Match the emulated solver's UDP transport in the native participants.
+    # ROS_LOCALHOST_ONLY would override the explicit DDS discovery settings.
+    _, romb_env = runtime_command([])
+    for name in ('ROS_LOCALHOST_ONLY', 'ROS_STATIC_PEERS', 'ROS_DISCOVERY_SERVER'):
+        monkeypatch.delenv(name, raising=False)
+    for name in ('RMW_IMPLEMENTATION', 'ROS_AUTOMATIC_DISCOVERY_RANGE',
+                 'FASTDDS_DEFAULT_PROFILES_FILE', 'FASTRTPS_DEFAULT_PROFILES_FILE'):
+        monkeypatch.setenv(name, romb_env[name])
     config = Configuration().parameters('kinematics')
     namespace = '/romb_solver_test'
     definitions = kinematics_nodes(lambda **kw: kw, namespace, config)
@@ -64,7 +72,12 @@ def test_original_solver_and_adapter_roundtrip():
                 environment = dict(os.environ)
             log = tempfile.TemporaryFile(mode='w+'); logs.append(log)
             processes.append(subprocess.Popen(executable, env=environment, stdout=log, stderr=log))
-        assert pump(lambda: command.get_subscription_count() > 0 and len(measured) > 2, 15.)
+        assert pump(lambda: command.get_subscription_count() > 0 and len(measured) > 2, 15.), (
+            f'ROMB round-trip did not start: nodes={node.get_node_names_and_namespaces()}, '
+            f'command subscribers={command.get_subscription_count()}, '
+            f'raw velocity publishers={node.count_publishers(namespace + "/romb/kinematics/raw_velocity")}, '
+            f'measurements={len(measured)}'
+        )
         assert all(abs(value) < 1e-8 for value in
                    (measured[-1].twist.linear.x, measured[-1].twist.linear.y, measured[-1].twist.angular.z))
         for direction in (1., -1.):

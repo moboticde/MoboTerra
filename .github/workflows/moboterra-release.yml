@@ -25,6 +25,7 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.operation == 'build')
     strategy:
+      fail-fast: false
       matrix:
         include:
           - architecture: amd64

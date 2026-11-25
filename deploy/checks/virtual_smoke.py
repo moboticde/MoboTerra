@@ -14,6 +14,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 from mobotic_config.configuration import Configuration
+from mobotic_kinematics.romb.runtime import runtime_command
 
 
 def main():
@@ -23,8 +24,13 @@ def main():
     cfg = Configuration(args.platform_config)
     expected_joints = set(cfg.parameters('driver')['drives.names'])
     expected_modules = set(cfg.parameters('supervisor')['expected_module_names'])
-    # Keep build-time discovery local even when the Docker build has networking.
-    os.environ['ROS_LOCALHOST_ONLY'] = '1'
+    # Keep the native virtual nodes and the emulated solver on the same UDP profile.
+    _, romb_env = runtime_command([])
+    for name in ('ROS_LOCALHOST_ONLY', 'ROS_STATIC_PEERS', 'ROS_DISCOVERY_SERVER'):
+        os.environ.pop(name, None)
+    for name in ('RMW_IMPLEMENTATION', 'ROS_AUTOMATIC_DISCOVERY_RANGE',
+                 'FASTDDS_DEFAULT_PROFILES_FILE', 'FASTRTPS_DEFAULT_PROFILES_FILE'):
+        os.environ[name] = romb_env[name]
     os.environ.setdefault('ROS_DOMAIN_ID', '42')
     expected = {'mobotic_driver', 'mobotic_kinematics', 'mobotic_odometry',
                 'mobotic_supervisor', 'platform_diagnostics'}
