@@ -1,138 +1,282 @@
 # MoboTerra Docker fleet updates
 
-The release workflow builds and tests Linux AMD64 and ARM64 images after a
-software push to `main`. It publishes one multi-platform tag to GHCR and attaches
-`release.json` to the GitHub prerelease. The record pairs the Git commit with the
-immutable image index digest. Each host pulls its own architecture from that
-index. You can also run the workflow manually to build the current `main`.
+Push the source changes from your development PC. GitHub Actions builds and tests
+AMD64 and ARM64, then publishes one release with the exact source commit and
+image digest. Approve the release for a robot, let it stage the image, and apply
+it during maintenance.
 
-This updater is for the existing `moboterra-current-stack.service` Docker deployment
-on 64-bit Ubuntu 24.04. Use AMD64 for x86-64 PCs and ARM64 for 64-bit Raspberry
-Pis. Install that deployment before enrolling a robot. It requires outbound
-access to GitHub and GHCR.
+| Robot | GitHub approval branch | Known PC settings |
+| --- | --- | --- |
+| `MoboTerra_1` | `fleet/MoboTerra_1` | Use its existing robot-facing address and checkout owner |
+| `MoboTerra_2` | `fleet/MoboTerra_2` | AMD64, `192.168.2.199/24` on `enp5s0`, user `mobot`, checkout `/home/mobot/MoboTerra-main` |
+| `MoboTerra_3` | `fleet/MoboTerra_3` | Use its existing robot-facing address and checkout owner |
 
-## Set up once on each robot
+Use 64-bit Ubuntu 24.04 with the MoboTerra Docker deployment. The same image
+reference works on AMD64 PCs and ARM64 Pis. Each robot connects outbound to
+GitHub and GHCR. The current repository and images support anonymous reads.
+Only the person publishing and approving releases needs GitHub write access.
 
-Use the permanent project checkout used by the Docker service. Give its owner
-read access to the repository via the checkout's `origin`. For a private repository,
-use a read-only deploy key or a noninteractive Git credential. Give root's Docker
-client read access to the GHCR package if it is private. The stage timer runs
-Docker as root and Git as the configured checkout owner.
+## 1. Prepare each robot PC once
 
-### Pilot robot MoboTerra_2
+### If the PC already runs MoboTerra in Docker
 
-| Setting | Value on the pilot PC |
-| --- | --- |
-| Fleet name | `MoboTerra_2` |
-| Wired scanner address | `192.168.2.199/24` on `enp5s0` |
-| Docker platform | `linux/amd64` |
-| Installed checkout | `/home/mobot/MoboTerra-main` |
-| Checkout owner | `mobot` |
-| GitHub repository | `moboticde/MoboTerra` |
-| Docker registry path | `ghcr.io/moboticde/moboterra` |
-| Release approval branch | `fleet/MoboTerra_2` |
-
-From the pilot checkout, verify Git access and list the available release tags.
-The release workflow creates a `docker-<full Git commit>` tag only after the
-AMD64 and ARM64 images pass their builds and validation.
+Log in as the user who owns its permanent checkout. Run **one** of these
+commands on the corresponding PC:
 
 ```bash
-cd /home/mobot/MoboTerra-main
-GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code origin refs/heads/main
-GIT_TERMINAL_PROMPT=0 git ls-remote --tags --refs origin 'refs/tags/docker-*'
+# PC for MoboTerra_1
+robot=MoboTerra_1
 ```
 
-To verify the pilot can download its image, pull the immutable digest from the
-[first published release](https://github.com/moboticde/MoboTerra/releases/tag/docker-ce4814b7e7ce457d26ac60ae25663029bd7eb99c).
-Its commit is `ce4814b7e7ce457d26ac60ae25663029bd7eb99c` and its image index
-contains both AMD64 and ARM64.
-
 ```bash
-release_commit=ce4814b7e7ce457d26ac60ae25663029bd7eb99c
-image=ghcr.io/moboticde/moboterra@sha256:4874232fc7f7455be2441105ff490cffb2749a365632944f8d6b6b64490768a2
-sudo docker pull --platform linux/amd64 "$image"
-```
-
-For a later candidate, use the commit and image reference from its
-`release.json` asset in [GitHub Releases](https://github.com/moboticde/MoboTerra/releases).
-
-Once the fleet pipeline files are present in the installed checkout, enroll the
-pilot as `mobot`. On the other hosts, use their installed checkout, its owning
-account, and their assigned `MoboTerra_1` or `MoboTerra_3` identity. The timer
-uses the configured fleet name to select the approval branch.
-
-```bash
-cd /home/mobot/MoboTerra-main
+# PC for MoboTerra_2
 robot=MoboTerra_2
-image_repository=ghcr.io/moboticde/moboterra
-
-sudo install -m 0755 deploy/fleet/moboterra_fleet.py /usr/local/sbin/moboterra-fleet
-sudo install -m 0644 deploy/fleet/moboterra-fleet-stage.{service,timer} /etc/systemd/system/
-python3 -c 'import json, sys; print(json.dumps(dict(zip(
-    ("checkout", "owner", "robot", "image_repository"), sys.argv[1:])), indent=2))' \
-    "$(pwd -P)" "$(id -un)" "$robot" "$image_repository" \
-    | sudo install -m 0600 /dev/stdin /etc/moboterra-fleet.json
-sudo systemctl daemon-reload
-sudo systemctl enable --now moboterra-fleet-stage.timer
 ```
 
-Use the MoboTerra release as the baseline for the installed checkout and image.
-The updater requires a clean worktree for cutover and rollback. Review local Git
-changes before enrollment. Keep site network settings and systemd overrides in
-their host locations and preserve any customized tracked profile separately.
-The updater keeps the existing runtime directory and the service's boot setting.
+```bash
+# PC for MoboTerra_3
+robot=MoboTerra_3
+```
 
-## Roll out a release
-
-1. Push to `main`. Wait for **MoboTerra Docker release** to publish the candidate.
-2. In **Actions → MoboTerra Docker release → Run workflow**, choose `main`,
-   operation `approve`, the full candidate commit and `MoboTerra_2` for the
-   first rollout. This updates `fleet/MoboTerra_2` with the approved release
-   record.
-3. The timer fetches that record and stages the image. Check progress locally or
-   through an existing remote shell.
-
-   ```bash
-   sudo moboterra-fleet status
-   journalctl -u moboterra-fleet-stage.service -n 30 --no-pager
-   ```
-
-4. Once the robot is parked, its drives are disabled and it is cleared for
-   maintenance, use the full commit from the staging status. Enter it at the
-   prompt. A local operator can run this at a site without remote login.
-
-   ```bash
-   read -r -p 'Commit approved and staged for this robot: ' release_commit
-   [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] &&
-     sudo moboterra-fleet apply "$release_commit" --maintenance
-   ```
-
-   The updater confirms the approval again before stopping the stack. It installs
-   the image and host files from that release, starts ROS, and waits for Docker
-   to report healthy. Ordinary drive enable still requires B2. The health check
-   covers software startup. Have the operator verify the robot before approving
-   the same commit for the next robot.
-5. Repeat approval and maintenance for `MoboTerra_1`, then `MoboTerra_3`.
-
-The timer only stages releases. It leaves the running stack and the checkout
-contents alone. To stage ahead of the next timer tick, run
-`sudo systemctl start moboterra-fleet-stage.service`.
-
-## Recover the previous release
-
-The updater records the previous checkout commit and local Docker image ID
-before stopping. Keep that image in Docker's local store while it is needed for
-rollback. If installation or startup fails after the stop, the updater attempts
-to restore the previous pair and leaves ROS stopped. If the process was
-interrupted or recovery needs another attempt, park and clear the robot for
-maintenance and run:
+MoboTerra_2 is already enrolled. To verify it, use the status commands below.
+For a new enrollment, run this common block in the same terminal after setting
+`robot`. It finds the checkout used by `moboterra-ctl` and copies the updater
+from the verified source commit. The live checkout and running stack stay in
+place. The timer checks GitHub about every five minutes.
 
 ```bash
-sudo moboterra-fleet rollback --maintenance
+(
+    set -euo pipefail
+    case "${robot:-}" in
+        MoboTerra_1|MoboTerra_2|MoboTerra_3) ;;
+        *) echo 'Set robot to the identity for this PC.' >&2; exit 1 ;;
+    esac
+    ctl=$(readlink -f "$(command -v moboterra-ctl)")
+    cd "$(dirname "$ctl")/../.."
+    test "$(pwd -P)/deploy/host/moboterra_ctl.py" = "$ctl"
+    test "$(stat -c %U .)" = "$(id -un)"
+
+    updater_commit=8a68bb6fd416114c75ef5d2e7e89646e4870e28b
+    GIT_TERMINAL_PROMPT=0 git fetch --no-tags origin \
+        refs/heads/main:refs/remotes/origin/main
+    git merge-base --is-ancestor "$updater_commit" origin/main
+    files=$(mktemp -d)
+    trap 'rm -rf -- "$files"' EXIT
+    git archive "$updater_commit" deploy/fleet | tar -x -C "$files"
+
+    sudo -v
+    sudo install -m 0755 "$files/deploy/fleet/moboterra_fleet.py" \
+        /usr/local/sbin/moboterra-fleet
+    sudo install -m 0644 "$files"/deploy/fleet/moboterra-fleet-stage.{service,timer} \
+        /etc/systemd/system/
+    python3 -c 'import json, sys; print(json.dumps(dict(zip(
+        ("checkout", "owner", "robot", "image_repository"), sys.argv[1:])), indent=2))' \
+        "$(pwd -P)" "$(id -un)" "$robot" ghcr.io/moboticde/moboterra \
+        | sudo install -m 0600 /dev/stdin /etc/moboterra-fleet.json
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now moboterra-fleet-stage.timer
+)
+```
+
+Verify the timer and check that the updater reports the correct fleet name:
+
+```bash
+systemctl is-enabled moboterra-fleet-stage.timer
+systemctl is-active moboterra-fleet-stage.timer
+sudo moboterra-fleet status
+```
+
+### If the PC still launches native ROS 2
+
+Arrange maintenance, stop the native launch, and preserve its commissioned
+configuration and calibration. For a new Docker installation on the standard
+hardware profile, use a permanent separate clone. The following example installs
+the verified release from MoboTerra_2's source and leaves the Docker stack
+stopped. Review any site-specific configuration before the first hardware launch.
+
+```bash
+(
+    set -euo pipefail
+    release_commit=8a68bb6fd416114c75ef5d2e7e89646e4870e28b
+    image=$(curl -fsSL --max-time 25 \
+        "https://github.com/moboticde/MoboTerra/releases/download/docker-$release_commit/release.json" \
+        | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["commit"] == sys.argv[1]; print(d["image"])' "$release_commit")
+
+    git clone --branch main https://github.com/moboticde/MoboTerra.git "$HOME/MoboTerra-docker"
+    cd "$HOME/MoboTerra-docker"
+    git switch --detach "$release_commit"
+    bash ./install.sh --no-start --image "$image"
+)
+```
+
+Use the enrollment commands above on this PC. Start the new deployment once it
+is cleared for commissioning. Enable boot startup if that robot should start
+automatically on reboot.
+
+```bash
+sudo moboterra-ctl start
+sudo moboterra-ctl status
+# Optional boot startup
+sudo moboterra-ctl enable
+```
+
+## 2. Upload source changes and build a release
+
+On your **development PC**, install and authenticate GitHub CLI once. Use a
+GitHub account with write access to `moboticde/MoboTerra`. The commands below
+assume Ubuntu.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y gh
+gh auth login --hostname github.com --git-protocol https --web
+gh auth setup-git
+git clone --branch main https://github.com/moboticde/MoboTerra.git "$HOME/MoboTerra-release"
+```
+
+Keep software changes in that development checkout. Before the next edit,
+synchronize `main`:
+
+```bash
+cd "$HOME/MoboTerra-release" &&
+git switch main &&
+git pull --ff-only origin main
+```
+
+After editing and reviewing the code, commit and push the changes:
+
+```bash
+cd "$HOME/MoboTerra-release" &&
+git status --short &&
+git add -A -- . &&
+git diff --cached --check &&
+git commit -m 'Update MoboTerra software' &&
+git push origin main &&
+release_commit=$(git rev-parse HEAD) &&
+printf 'Release commit: %s\n' "$release_commit"
+```
+
+A software push to `main` starts the Docker release workflow. Find the run for
+this commit and wait for it to pass. If the run has yet to appear, repeat the
+block after GitHub queues it.
+
+```bash
+run_id=$(gh run list --repo moboticde/MoboTerra --workflow moboterra-release.yml \
+    --branch main --event push --commit "$release_commit" --limit 1 \
+    --json databaseId --jq '.[0].databaseId // empty') &&
+test -n "$run_id" &&
+gh run watch "$run_id" --repo moboticde/MoboTerra --exit-status
+```
+
+Documentation-only pushes are skipped. To explicitly build the current remote
+`main`, run the following and watch the dispatch run shown by `gh run list`:
+
+```bash
+gh workflow run moboterra-release.yml --repo moboticde/MoboTerra --ref main \
+    -f operation=build -f robot=MoboTerra_2
+gh run list --repo moboticde/MoboTerra --workflow moboterra-release.yml \
+    --event workflow_dispatch --limit 5
+```
+
+Check the published record for your chosen commit. It contains the GHCR image
+digest that all three robots will receive:
+
+```bash
+curl -fsSL --max-time 25 \
+    "https://github.com/moboticde/MoboTerra/releases/download/docker-$release_commit/release.json"
+```
+
+The verified release from the pilot rollout is
+[`8a68bb6fd416114c75ef5d2e7e89646e4870e28b`](https://github.com/moboticde/MoboTerra/releases/tag/docker-8a68bb6fd416114c75ef5d2e7e89646e4870e28b).
+For future updates, use the full commit from the new release record.
+
+## 3. Send the release to one robot
+
+From the development PC, enter the full commit from the release record in step 2.
+Approve it for the pilot robot:
+
+```bash
+read -r -p 'Full commit from the published release record: ' release_commit
+robot=MoboTerra_2
+[[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] &&
+gh workflow run moboterra-release.yml --repo moboticde/MoboTerra --ref main \
+    -f operation=approve -f "commit=$release_commit" -f "robot=$robot" &&
+gh run list --repo moboticde/MoboTerra --workflow moboterra-release.yml \
+    --event workflow_dispatch --limit 5
+```
+
+In the browser, the same operation is under [Actions → MoboTerra Docker release](https://github.com/moboticde/MoboTerra/actions/workflows/moboterra-release.yml).
+Use **Run workflow**, branch `main`, operation `approve`, the full commit, and
+the selected fleet name. Once the workflow succeeds, verify the approval record:
+
+```bash
+gh api "repos/moboticde/MoboTerra/contents/release.json?ref=fleet/$robot" \
+    --jq .content | base64 -d
+```
+
+The robot pulls this record and stages the matching image. To stage immediately,
+run on the selected robot PC:
+
+```bash
+sudo systemctl start moboterra-fleet-stage.service &&
+sudo moboterra-fleet status
+```
+
+Check that `staged.commit` matches the approved release. The `Image:` line shows
+the currently installed image. If staging fails, inspect the service log:
+
+```bash
+journalctl -u moboterra-fleet-stage.service -n 40 --no-pager
+```
+
+## 4. Apply on the robot during maintenance
+
+Park the robot, disable the drives, and clear it for maintenance. The updater
+checks for local Git edits before stopping ROS. Preserve and review any edits
+it reports. The apply command handles stopping, installing, restarting, and
+checking container health.
+
+On the selected robot PC, enter the full commit shown under `staged`:
+
+```bash
+sudo moboterra-fleet status
+read -r -p 'Full staged commit approved for maintenance: ' release_commit
+[[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] &&
+sudo moboterra-fleet apply "$release_commit" --maintenance &&
 sudo moboterra-ctl status
 ```
 
-Review the logs and start with `sudo moboterra-ctl start` when cleared to do so.
-Use fleet rollback for a fleet release. It restores the matching checkout and
-host files as well as the prior image. To cancel staging for one robot, delete
-its `fleet/MoboTerra_N` branch in GitHub. The next check clears its staged record.
+After the operator verifies MoboTerra_2, approve the same release for MoboTerra_1
+from the development PC. Use the same terminal where you set `release_commit`:
+
+```bash
+robot=MoboTerra_1
+gh workflow run moboterra-release.yml --repo moboticde/MoboTerra --ref main \
+    -f operation=approve -f "commit=$release_commit" -f "robot=$robot"
+```
+
+Stage, apply, and verify on MoboTerra_1. Then approve it for MoboTerra_3:
+
+```bash
+robot=MoboTerra_3
+gh workflow run moboterra-release.yml --repo moboticde/MoboTerra --ref main \
+    -f operation=approve -f "commit=$release_commit" -f "robot=$robot"
+```
+
+Stage, apply, and verify on MoboTerra_3.
+
+## Recover the previous release
+
+Keep the previous image in the local Docker store for rollback. If installation
+or startup fails, the updater attempts to restore the previous source and
+image pair. If a rollout was interrupted or you need to go back manually, clear
+the robot for maintenance and run:
+
+```bash
+sudo moboterra-fleet rollback --maintenance &&
+sudo moboterra-ctl status
+```
+
+Rollback leaves ROS stopped. Review the logs, then run `sudo moboterra-ctl start`
+when cleared. To cancel staging, remove that robot's approval branch in GitHub.
+The timer clears the staged record on its next successful check.
