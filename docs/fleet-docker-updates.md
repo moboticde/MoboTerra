@@ -42,15 +42,19 @@ GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code origin refs/heads/main
 GIT_TERMINAL_PROMPT=0 git ls-remote --tags --refs origin 'refs/tags/docker-*'
 ```
 
-To verify the pilot can download its image, copy the chosen commit from the
-published candidate in [GitHub Releases](https://github.com/moboticde/MoboTerra/releases).
-Paste the full commit at the prompt:
+To verify the pilot can download its image, pull the immutable digest from the
+[first published release](https://github.com/moboticde/MoboTerra/releases/tag/docker-ce4814b7e7ce457d26ac60ae25663029bd7eb99c).
+Its commit is `ce4814b7e7ce457d26ac60ae25663029bd7eb99c` and its image index
+contains both AMD64 and ARM64.
 
 ```bash
-read -r -p 'Git commit from the published Docker release: ' release_commit
-[[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] &&
-  sudo docker pull --platform linux/amd64 "ghcr.io/moboticde/moboterra:docker-$release_commit"
+release_commit=ce4814b7e7ce457d26ac60ae25663029bd7eb99c
+image=ghcr.io/moboticde/moboterra@sha256:4874232fc7f7455be2441105ff490cffb2749a365632944f8d6b6b64490768a2
+sudo docker pull --platform linux/amd64 "$image"
 ```
+
+For a later candidate, use the commit and image reference from its
+`release.json` asset in [GitHub Releases](https://github.com/moboticde/MoboTerra/releases).
 
 Once the fleet pipeline files are present in the installed checkout, enroll the
 pilot as `mobot`. On the other hosts, use their installed checkout, its owning
