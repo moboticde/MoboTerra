@@ -168,7 +168,7 @@ traction and the previous steering move; a newer complete feedback sample must
 show every traction joint within 0.02 m/s before steering moves home. Nearest
 full-turn targets are frozen once per neutral period, with half-turn ties toward
 the original zero. Each steering profile stops within its encoder tolerance.
-Fresh stick input cancels the home targets and resumes the normal 0.3 rad/s policy.
+Fresh stick input cancels the home targets and resumes the normal 0.45 rad/s policy.
 
 Both kinematics backends publish complete wheel-target batches as fresh velocity
 commands arrive, using the latest fresh, complete joint feedback. Publication is
@@ -198,7 +198,7 @@ STOP/E-stop remain active.
 
 The supervisor still applies planar speed and safety limits. L1 or R1 boosts while
 held; pressing both does not stack the boost. B1 also selects the active profile's
-steering boost: 0.6 rad/s while held, returning to 0.3 rad/s on release.
+steering boost at 0.9 rad/s while held, returning to 0.45 rad/s on release.
 Configured steering angle limits apply during boost. Neutral homing uses a
 separate 1.2 rad/s profile.
 

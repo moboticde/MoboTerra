@@ -71,11 +71,11 @@ motion_limits:
   max_velocity_angular: 1.51
   max_acceleration_linear: 0.5
   max_acceleration_angular: 0.52
-  max_steering_velocity: 0.3 # steering output rad/s
-  steering_boost_velocity: 0.6 # B1 held; steering output rad/s
+  max_steering_velocity: 0.45 # steering output rad/s
+  steering_boost_velocity: 0.9 # B1 held; steering output rad/s
   steering_angle_limits_enabled: false # Continuous targets, as in Terra Spiro
   steering_return_home_on_neutral: true
-  steering_neutral_home_velocity: 1.2 # steering output rad/s; normal joystick stays 0.3
+  steering_neutral_home_velocity: 1.2 # steering output rad/s
   max_traction_velocity: 2.0 # wheel-contact m/s
   max_traction_current: 4.0
 modules:

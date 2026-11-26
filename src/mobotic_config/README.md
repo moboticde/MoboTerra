@@ -53,8 +53,8 @@ Each module's `controller` may be `miControl` (case insensitive). Omitting
 it defaults to miControl for both roles. Other controller families are rejected.
 Both hardware and virtual stacks use SDO transport.
 
-The active native profile sets `motion_limits.steering_boost_velocity: 0.6`
-rad/s for B1-held steering, compared with the normal 0.3 rad/s. The setting is
+The active native profile sets `motion_limits.steering_boost_velocity: 0.9`
+rad/s for B1-held steering, with normal steering at 0.45 rad/s. The setting is
 optional and defaults to normal steering speed. It must be at least the normal
 speed and fit every steering motor's native RPM limits. It raises the driver's
 steering ceiling when needed; neutral homing retains its independent speed.
@@ -240,7 +240,7 @@ endpoint stopping remain independent.
 the nearest full-turn home after fresh neutral input and traction standstill.
 It defaults to false for existing profiles. `steering_neutral_home_velocity`
 defaults to normal steering speed; the active robot enables neutral return at
-1.2 rad/s while normal joystick steering stays at 0.3 rad/s. The driver command
-ceiling includes the homing speed, validated against every steering controller's
-native RPM bounds. `driver.steering_align_on_enable` optionally requests B2
-startup alignment. The active physical profile enables at measured angles.
+1.2 rad/s. The driver command ceiling includes the homing speed, validated
+against every steering controller's native RPM bounds.
+`driver.steering_align_on_enable` optionally requests B2 startup alignment.
+The active physical profile enables at measured angles.

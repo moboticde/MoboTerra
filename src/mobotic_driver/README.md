@@ -79,7 +79,7 @@ whose physical scan cannot fit its skew budget is rejected before transmission.
 
 ## Scheduling and guards
 
-`paced_socket_can_sender` owns the shared 2 ms minimum gap between nonblocking
+`paced_socket_can_sender` owns the shared 1 ms minimum gap between nonblocking
 socket attempts, covering driver SDOs, operator traffic and heartbeat. Per-node
 queues allow one outstanding SDO and require a matching reply. A delayed
 executor gains no catch-up credit. The final queue holds at most 64 frames.
@@ -132,7 +132,7 @@ The active physical profile sets `steering_align_on_enable: false`. B2
 clears, initializes and enables the controllers at their measured steering
 angles. The configured manual policy returns steering home on fresh neutral
 input after new complete feedback confirms traction standstill. Normal joystick
-steering runs at 0.3 rad/s. Fresh stick motion cancels the neutral return.
+steering runs at 0.45 rad/s. Fresh stick motion cancels the neutral return.
 
 `steering_align_on_enable` opts a physical profile into bounded nearest-home
 alignment during each supervisor-authorized B2 recovery. Each steering target is
@@ -180,14 +180,14 @@ new command samples replace the unsent target in place. An unchanged proven
 profile is reused, while a changed profile requires the position to be latched
 again even when the target angle is unchanged. A started pair finishes before
 ordinary read scheduling can repeatedly postpone its target. Required fault
-service, stop/disable priority, command expiry and the shared 2 ms send spacing
+service, stop/disable priority, command expiry and the shared 1 ms send spacing
 remain in force. Stops and lost native-state evidence revoke unsent moves;
 a late acknowledgement cannot restore a revoked target.
 
 Homing speed is independent of normal manual steering speed. The default
 steering alignment profile is 0.6 rad/s; the physical SDO overlay retains
 1.2 rad/s for optional alignment, which is currently disabled. Each steering motor's configured native RPM
-limit bounds homing. The physical profile retains 0.3 rad/s for joystick
+limit bounds homing. The physical profile uses 0.45 rad/s for joystick
 steering. Homing timeout, fresh-feedback proof and traction inhibition remain
 in force.
 

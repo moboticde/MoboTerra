@@ -18,7 +18,7 @@
 // Define the minimum spacing once; both admission points use this value.
 namespace can_scheduling
 {
-inline constexpr auto minimum_gap = std::chrono::milliseconds(2);
+inline constexpr auto minimum_gap = std::chrono::milliseconds(1);
 inline constexpr auto response_timeout = std::chrono::milliseconds(100);
 }
 

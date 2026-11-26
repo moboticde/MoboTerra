@@ -252,7 +252,7 @@ from the active 500-kbit/s physical platform.
 When both hardware driver PDO flags are false, bringup selects
 `sdo_socket_can_bridge.launch.py`: the existing SocketCAN receiver plus one
 `mobotic_driver/paced_socket_can_sender`. Shared-bus PAIL traffic uses that same
-sender. Every producer shares the 2 ms minimum software send gap defined once
+sender. Every producer shares the 1 ms minimum software send gap defined once
 in `mobotic_driver/can_scheduling.hpp`; PEAK adapters use the same SocketCAN path.
 Its write queue age is bounded by 50 ms or half the configured command
 watchdog, whichever is tighter. Passive reads use the same 100 ms window as

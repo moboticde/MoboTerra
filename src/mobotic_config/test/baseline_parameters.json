@@ -197,7 +197,7 @@
   "kinematics": {
     "cmd_vel_timeout": 0.5,
     "joint_feedback_timeout": 0.35,
-    "max_steering_velocity": 0.3,
+    "max_steering_velocity": 0.45,
     "max_traction_current": 4.0,
     "max_traction_velocity": 2.0,
     "minimum_linear_speed": 0.001,
@@ -272,7 +272,7 @@
     "require_neutral_rearm": false,
     "scale_angular": 0.4,
     "scale_linear": 0.5,
-    "steering_geometry": "{\"wheels_x\": [0.845, 0.845, -0.845, -0.845], \"wheels_y\": [0.495, -0.495, 0.495, -0.495], \"steering_joint_names\": [\"front_left_steering\", \"front_right_steering\", \"rear_left_steering\", \"rear_right_steering\"], \"traction_joint_names\": [\"front_left_traction\", \"front_right_traction\", \"rear_left_traction\", \"rear_right_traction\"], \"wheel_mount_angles\": [0.0, 3.14152, 0.0, 3.14152], \"max_steering_velocity\": 0.3, \"steering_position_tolerances\": [0.017453292519943295, 0.017453292519943295, 0.017453292519943295, 0.017453292519943295], \"steering_position_resolutions\": [121.0, 121.0, 121.0, 121.0], \"max_acceleration_linear\": 0.5, \"steering_angle_limits_enabled\": false, \"steering_return_home_on_neutral\": true, \"steering_neutral_home_velocity\": 1.2, \"steering_boost_velocity\": 0.6}"
+    "steering_geometry": "{\"wheels_x\": [0.845, 0.845, -0.845, -0.845], \"wheels_y\": [0.495, -0.495, 0.495, -0.495], \"steering_joint_names\": [\"front_left_steering\", \"front_right_steering\", \"rear_left_steering\", \"rear_right_steering\"], \"traction_joint_names\": [\"front_left_traction\", \"front_right_traction\", \"rear_left_traction\", \"rear_right_traction\"], \"wheel_mount_angles\": [0.0, 3.14152, 0.0, 3.14152], \"max_steering_velocity\": 0.45, \"steering_position_tolerances\": [0.017453292519943295, 0.017453292519943295, 0.017453292519943295, 0.017453292519943295], \"steering_position_resolutions\": [121.0, 121.0, 121.0, 121.0], \"max_acceleration_linear\": 0.5, \"steering_angle_limits_enabled\": false, \"steering_return_home_on_neutral\": true, \"steering_neutral_home_velocity\": 1.2, \"steering_boost_velocity\": 0.9}"
   },
   "odometry": {
     "base_frame_id": "base_link",
@@ -359,11 +359,11 @@
     "health_timeout": 0.3,
     "initial_mode": "manual",
     "kinematicoff_current_supported": true,
-    "manual_steering_geometry": "{\"wheels_x\": [0.845, 0.845, -0.845, -0.845], \"wheels_y\": [0.495, -0.495, 0.495, -0.495], \"steering_joint_names\": [\"front_left_steering\", \"front_right_steering\", \"rear_left_steering\", \"rear_right_steering\"], \"traction_joint_names\": [\"front_left_traction\", \"front_right_traction\", \"rear_left_traction\", \"rear_right_traction\"], \"wheel_mount_angles\": [0.0, 3.14152, 0.0, 3.14152], \"max_steering_velocity\": 0.3, \"steering_position_tolerances\": [0.017453292519943295, 0.017453292519943295, 0.017453292519943295, 0.017453292519943295], \"steering_position_resolutions\": [121.0, 121.0, 121.0, 121.0], \"max_acceleration_linear\": 0.5, \"steering_angle_limits_enabled\": false, \"steering_return_home_on_neutral\": true, \"steering_neutral_home_velocity\": 1.2, \"steering_boost_velocity\": 0.6}",
+    "manual_steering_geometry": "{\"wheels_x\": [0.845, 0.845, -0.845, -0.845], \"wheels_y\": [0.495, -0.495, 0.495, -0.495], \"steering_joint_names\": [\"front_left_steering\", \"front_right_steering\", \"rear_left_steering\", \"rear_right_steering\"], \"traction_joint_names\": [\"front_left_traction\", \"front_right_traction\", \"rear_left_traction\", \"rear_right_traction\"], \"wheel_mount_angles\": [0.0, 3.14152, 0.0, 3.14152], \"max_steering_velocity\": 0.45, \"steering_position_tolerances\": [0.017453292519943295, 0.017453292519943295, 0.017453292519943295, 0.017453292519943295], \"steering_position_resolutions\": [121.0, 121.0, 121.0, 121.0], \"max_acceleration_linear\": 0.5, \"steering_angle_limits_enabled\": false, \"steering_return_home_on_neutral\": true, \"steering_neutral_home_velocity\": 1.2, \"steering_boost_velocity\": 0.9}",
     "manual_timeout": 0.25,
     "max_acceleration_angular": 0.52,
     "max_acceleration_linear": 0.5,
-    "max_direct_steering_velocity": 0.3,
+    "max_direct_steering_velocity": 0.45,
     "max_direct_traction_current": 4.0,
     "max_direct_traction_velocity": 2.0,
     "max_velocity_angular": 1.51,

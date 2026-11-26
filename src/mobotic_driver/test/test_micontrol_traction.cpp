@@ -1102,7 +1102,7 @@ int main(int argc, char** argv)
         const auto& frame = transmitted[i];
         if (frame.id < 0x601 || frame.id > 0x608) { continue; }
         const auto stamp = sourceStampNanoseconds(frame);
-        require(previous == 0 || stamp - previous >= std::chrono::duration_cast<std::chrono::nanoseconds>(can_scheduling::minimum_gap).count(), "shutdown cannot bypass the shared 5 ms SDO gap");
+        require(previous == 0 || stamp - previous >= std::chrono::duration_cast<std::chrono::nanoseconds>(can_scheduling::minimum_gap).count(), "shutdown cannot bypass the shared SDO gap");
         previous = stamp;
       }
     }

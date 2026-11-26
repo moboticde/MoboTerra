@@ -418,13 +418,14 @@ int run()
 
 namespace freshness_checks
 {
-// Eight acknowledged channels, configured bus slots and 3 ms reply latency. Exercise
-// sustained feedback/target/stop pressure without wall-clock/executor jitter.
+// Eight acknowledged channels, one dispatch opportunity every 2 ms, and 3 ms
+// reply latency model sustained pressure when some transmit slots are unavailable.
 static double load(bool native_barrier)
 {
   using namespace std::chrono_literals;
   using Clock = SdoBusScheduler::Clock;
   const auto start = Clock::time_point{} + 1s;
+  constexpr auto dispatch_period = 2ms;
   const std::vector<unsigned> nodes{1,2,3,4,5,6,7,8};
   std::map<unsigned, SdoChannel> channels;
   SdoBusScheduler scheduler;
@@ -476,7 +477,7 @@ static double load(bool native_barrier)
         channels[node].push(target, now);
       }
     }
-    if (tick % can_scheduling::minimum_gap.count() == 0)
+    if (tick % dispatch_period.count() == 0)
     {
       const bool motion = std::any_of(channels.begin(), channels.end(),
           [](const auto& item) { return item.second.motionReadQueued(); });

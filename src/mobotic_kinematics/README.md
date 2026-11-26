@@ -63,8 +63,8 @@ disabling steering. Coarse 121-unit feedback cannot verify physical one-degree
 accuracy: the nearest requested angle can differ by up to about 1.49 degrees,
 and sub-count drift is not visible. Finer feedback/target units need calibration.
 
-The active profile uses 0.3 rad/s for manual steering and
-`motion_limits.steering_boost_velocity: 0.6` while B1 is held. Both final
+The active profile uses 0.45 rad/s for manual steering and
+`motion_limits.steering_boost_velocity: 0.9` while B1 is held. Both final
 authorities select boost from fresh, connected, active operator state and restore
 normal speed on release. Profiles without this setting retain normal steering
 speed during boost. Native motor RPM limits also bound the boost setting.
