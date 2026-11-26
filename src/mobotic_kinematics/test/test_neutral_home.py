@@ -59,6 +59,29 @@ def test_zero_traction_precedes_home_and_requires_new_standstill_feedback():
     assert homing.velocity[4:] == [0.]*4
 
 
+def test_neutral_homing_scales_speed_from_the_first_standstill_sample():
+    g, _ = configured()
+    g['steering_position_resolutions'] = [121.] * 4
+    policy = ManualSteering(g)
+    body = (0., 0., 0.)
+    candidate = model(g, body)
+    count_angle = 2 * math.pi / 121
+    measured = feedback(g, [5 * count_angle] * 4, traction=[.3] * 4)
+    assert policy.align(candidate, measured, body, neutral=True).velocity == [0.] * 8
+
+    measured.header.stamp += 1
+    measured.velocity[4:] = [0.] * 4
+    measured.position[:4] = [count_angle, -11 * count_angle, 30 * count_angle, 0.]
+    homing = policy.align(candidate, measured, body, neutral=True)
+    assert homing.position[:4] == [0.] * 4
+    assert homing.velocity == pytest.approx([.04, .44, 1.2, 0.] + [0.] * 4)
+
+    measured.header.stamp += 1
+    measured.position[:4] = [0., -6 * count_angle, 29 * count_angle, 0.]
+    homing = policy.align(candidate, measured, body, neutral=True)
+    assert homing.velocity == pytest.approx([0., .44, 1.2, 0.] + [0.] * 4)
+
+
 @pytest.mark.parametrize('degrees,expected', [(179,0),(181,360),(-179,0),(-181,-360),
                                                (180,0),(-180,0),(540,360),(-540,-360),
                                                (1079,1080),(-1079,-1080)])

@@ -167,7 +167,9 @@ and a fresh zero manual command authorize this return. First a zero batch stops
 traction and the previous steering move; a newer complete feedback sample must
 show every traction joint within 0.02 m/s before steering moves home. Nearest
 full-turn targets are frozen once per neutral period, with half-turn ties toward
-the original zero. Each steering profile stops within its encoder tolerance.
+the original zero. At traction standstill, the wheel farthest from home gets
+the configured homing speed. Shorter moves use proportionally lower speeds to
+target the same arrival time. Each wheel stops within its encoder tolerance.
 Fresh stick input cancels the home targets and resumes the normal 0.45 rad/s policy.
 
 Both kinematics backends publish complete wheel-target batches as fresh velocity
@@ -175,8 +177,8 @@ commands arrive, using the latest fresh, complete joint feedback. Publication is
 not throttled to the slower physical SDO feedback cycle: the driver retains its
 100 ms command watchdog. Source timestamps, command expiry and authority checks
 remain enforced.
-Every moving steering motor receives the same configured profile-speed limit,
-as in the example. Each motor's profile becomes zero when its target is reached
+For manual driving, every moving steering motor receives the same configured
+profile-speed limit. Each motor's profile becomes zero when its target is reached
 within one degree of the native reachable target, or a finer configured
 one-count tolerance. Drift or overshoot beyond this tolerance resumes correction
 toward the retained target, including at an envelope endpoint. Reaching a target

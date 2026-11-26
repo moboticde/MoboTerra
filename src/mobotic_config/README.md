@@ -239,8 +239,9 @@ endpoint stopping remain independent.
 `motion_limits.steering_return_home_on_neutral` optionally returns steering to
 the nearest full-turn home after fresh neutral input and traction standstill.
 It defaults to false for existing profiles. `steering_neutral_home_velocity`
-defaults to normal steering speed; the active robot enables neutral return at
-1.2 rad/s. The driver command ceiling includes the homing speed, validated
-against every steering controller's native RPM bounds.
+sets the speed for the longest move and defaults to normal steering speed.
+The active robot uses 1.2 rad/s. Shorter moves use proportionally lower speeds
+based on their travel at traction standstill. The driver command ceiling includes
+the homing speed, validated against every steering controller's native RPM bounds.
 `driver.steering_align_on_enable` optionally requests B2 startup alignment.
 The active physical profile enables at measured angles.

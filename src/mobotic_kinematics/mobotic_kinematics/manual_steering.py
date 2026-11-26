@@ -63,10 +63,14 @@ class ManualSteering:
         self.crab_heading = None
         self.crab_offsets = None
         self.crab_blocked = False
-        self.neutral_home_targets = None
-        self.neutral_home_feedback_ns = None
+        self._reset_neutral_home()
         self.traction_peak = 0.
         self.traction_stamp_ns = None
+
+    def _reset_neutral_home(self):
+        self.neutral_home_targets = None
+        self.neutral_home_feedback_ns = None
+        self.neutral_home_speeds = None
 
     def release_crab_boundary(self):
         # Call only for a confirmed operator stop, not a zero command
@@ -189,8 +193,7 @@ class ManualSteering:
             self.traction_stamp_ns = None
             if neutral and self.return_home_on_neutral:
                 return self._neutral_home(out, feedback, ids, actual)
-            self.neutral_home_targets = None
-            self.neutral_home_feedback_ns = None
+            self._reset_neutral_home()
             self.steering_targets = {name: actual[name] for name in steering}
             for name in steering:
                 out.position[ids[name]] = actual[name]
@@ -202,8 +205,7 @@ class ManualSteering:
             # unachieved targets. Continue from the measured controller branch.
             self.steering_targets = {name: actual[name] for name in steering}
             self.release_crab_boundary()
-            self.neutral_home_targets = None
-            self.neutral_home_feedback_ns = None
+            self._reset_neutral_home()
         crab = abs(body[2]) < 1e-9 and (abs(body[1]) > 1e-9 or self.crab_heading is not None)
         limit = self.crab_limit if crab else math.pi/4
         profile = self.boost_velocity if boost else g['max_steering_velocity']
@@ -347,11 +349,27 @@ class ManualSteering:
                    and all(abs(velocities[name]) <= .02 for name in traction))
         for name in steering + traction:
             out.velocity[ids[name]] = 0.
-        for index, (name, tolerance) in enumerate(zip(steering, self.position_tolerances)):
-            target = self.neutral_home_targets[name]
-            out.position[ids[name]] = target if stopped else actual[name]
-            if stopped and self._position_error(index, target, actual[name]) > tolerance + 1e-12:
-                out.velocity[ids[name]] = self.neutral_home_velocity
+        positions = self.neutral_home_targets if stopped else actual
+        for name in steering:
+            out.position[ids[name]] = positions[name]
+        if stopped:
+            travel = {}
+            for index, (name, tolerance) in enumerate(zip(steering, self.position_tolerances)):
+                distance = self._position_error(index, positions[name], actual[name])
+                if distance > tolerance + 1e-12:
+                    travel[name] = distance
+            if self.neutral_home_speeds is None:
+                # Keep the initial speed ratios as the wheels move and settle.
+                longest_move = max(travel.values(), default=0.)
+                self.neutral_home_speeds = {
+                    name: self.neutral_home_velocity * (distance / longest_move)
+                    for name, distance in travel.items()
+                }
+            for name in travel:
+                # A wheel that was already home can still need a drift correction.
+                out.velocity[ids[name]] = self.neutral_home_speeds.get(name, self.neutral_home_velocity)
+        else:
+            self.neutral_home_speeds = None
         self.steering_targets = {name: out.position[ids[name]] for name in steering}
         self.release_crab_boundary()
         return out

@@ -251,7 +251,7 @@ class InterfaceUpdateTest(unittest.TestCase):
         homing = self.neutral_candidate()
         self.assertEqual(homing.purpose, harness.WheelModuleCommandArray.MOTION)
         self.assertEqual([m.steering_position for m in homing.modules], [0., 0.])
-        self.assertEqual([m.steering_profile_velocity for m in homing.modules], [1.2, 1.2])
+        self.assertEqual([m.steering_profile_velocity for m in homing.modules], [1.2, .6])
         self.assertEqual([m.traction_velocity for m in homing.modules], [0., 0.])
 
     def test_neutral_never_homes_for_inhibited_stale_or_non_neutral_sources(self):

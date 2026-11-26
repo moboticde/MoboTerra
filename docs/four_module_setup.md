@@ -32,7 +32,7 @@ Drive enable waits for a new B2 request after startup or a blocking readiness
 loss. B2 enables at the measured steering angles with zero traction during
 recovery. In both RP2 safety positions, normal manual steering is 0.45 rad/s
 and B1 steering boost is 0.9 rad/s.
-Returning controls to neutral can command steering home at 1.2 rad/s after
+Returning controls to neutral can command steering home at up to 1.2 rad/s after
 traction standstill. These are configured software values,
 not measured accuracy or physical stopping-time guarantees.
 
