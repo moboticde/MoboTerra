@@ -27,6 +27,8 @@ SCANNER_SUFFIXES = {'front_left': 5, 'rear_right': 6}
 USB_DEVICES = Path('/sys/bus/usb/devices')
 CAN0_DEVICE = Path('/sys/class/net/can0/device')
 CANDLELIGHT_USB_ID = ('1d50', '606f')
+PEAK_PCAN_USB_ID = ('0c72', '000c')
+SUPPORTED_CAN_USB_IDS = {CANDLELIGHT_USB_ID, PEAK_PCAN_USB_ID}
 CAN_COMMAND_TIMEOUT = 5
 CAN_USB_TIMEOUT = 15
 CAN_RETRY_DELAY = 60
@@ -168,8 +170,8 @@ def restart_can_adapter(usb_port):
         port_device = USB_DEVICES / usb_port
         identity = usb_identity(port_device)
         if ((device is not None and device.name != usb_port)
-                or (identity is not None and identity != CANDLELIGHT_USB_ID)):
-            raise RuntimeError(f'USB port {usb_port} does not match the candleLight adapter for can0')
+                or (identity is not None and identity not in SUPPORTED_CAN_USB_IDS)):
+            raise RuntimeError(f'USB port {usb_port} does not match a supported CAN adapter for can0')
         separator = '.' if '.' in usb_port else '-'
         hub, port = usb_port.rsplit(separator, 1)
         command = ['uhubctl', '-e', '-l', hub, '-p', port, '-a']
@@ -182,12 +184,13 @@ def restart_can_adapter(usb_port):
         return
 
     if device is None:
-        adapters = [entry for entry in USB_DEVICES.iterdir() if usb_identity(entry) == CANDLELIGHT_USB_ID]
+        adapters = [entry for entry in USB_DEVICES.iterdir()
+                    if usb_identity(entry) in SUPPORTED_CAN_USB_IDS]
         if len(adapters) != 1:
-            raise RuntimeError('Expected one visible candleLight adapter for USB reset')
+            raise RuntimeError('Expected one visible supported CAN adapter (candleLight or PEAK PCAN-USB) for USB reset')
         device = adapters[0]
-    if usb_identity(device) != CANDLELIGHT_USB_ID:
-        raise RuntimeError(f'The USB device for can0 at {device.name} is not a candleLight adapter')
+    if usb_identity(device) not in SUPPORTED_CAN_USB_IDS:
+        raise RuntimeError(f'The USB device for can0 at {device.name} is not a supported CAN adapter')
     bus = int((device / 'busnum').read_text())
     number = int((device / 'devnum').read_text())
     print(f'Resetting USB-to-CAN adapter at {device.name}', flush=True)

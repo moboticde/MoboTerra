@@ -146,23 +146,88 @@ class CurrentStackTest(unittest.TestCase):
         restart.assert_called_once_with('')
         sleep.assert_not_called()
 
+    def usb_adapter(self, devices, port, identity, *, bus='1', number='9'):
+        adapter = devices / port
+        adapter.mkdir()
+        for attribute, value in dict(idVendor=identity[0], idProduct=identity[1],
+                                     busnum=bus, devnum=number).items():
+            (adapter / attribute).write_text(value + '\n')
+        (adapter / (port + ':1.0')).mkdir()
+        return adapter
+
     def test_usb_reset_targets_the_current_device_address(self):
+        for identity in (('1d50', '606f'), ('0c72', '000c')):
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
+                devices = Path(directory)
+                self.usb_adapter(devices, '1-2', identity)
+                with patch.object(deployment, 'USB_DEVICES', devices), \
+                        patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
+                        patch.object(deployment, 'run') as run:
+                    deployment.restart_can_adapter('')
+                    run.assert_called_once_with(['usbreset', '001/009'], timeout=15)
+
+    def test_missing_can0_rejects_missing_ambiguous_and_unknown_adapters(self):
+        for identities in ([], [('1234', '5678')],
+                           [('1d50', '606f'), ('0c72', '000c')],
+                           [('0c72', '000c'), ('0c72', '000c')]):
+            with self.subTest(identities=identities), tempfile.TemporaryDirectory() as directory:
+                devices = Path(directory)
+                for index, identity in enumerate(identities, 2):
+                    self.usb_adapter(devices, f'1-{index}', identity)
+                with patch.object(deployment, 'USB_DEVICES', devices), \
+                        patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
+                        patch.object(deployment, 'run') as run:
+                    with self.assertRaisesRegex(RuntimeError, 'Expected one visible supported CAN adapter'):
+                        deployment.restart_can_adapter('')
+                    run.assert_not_called()
+
+    def test_can0_selects_its_adapter_even_when_another_supported_adapter_is_visible(self):
+        for identity in (('1d50', '606f'), ('0c72', '000c')):
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
+                devices = Path(directory)
+                adapter = self.usb_adapter(devices, '4-1', identity, bus='4', number='3')
+                self.usb_adapter(devices, '1-2', ('0c72', '000c'))
+                can0 = devices / 'can0-device'
+                can0.symlink_to(adapter / '4-1:1.0', target_is_directory=True)
+                with patch.object(deployment, 'USB_DEVICES', devices), \
+                        patch.object(deployment, 'CAN0_DEVICE', can0), \
+                        patch.object(deployment, 'run') as run:
+                    deployment.restart_can_adapter('')
+                    run.assert_called_once_with(['usbreset', '004/003'], timeout=15)
+                    run.reset_mock()
+                    with self.assertRaisesRegex(RuntimeError, 'does not match'):
+                        deployment.restart_can_adapter('1-2')
+                    run.assert_not_called()
+
+    def test_unsupported_can0_adapter_is_not_reset_or_replaced_by_another(self):
         with tempfile.TemporaryDirectory() as directory:
             devices = Path(directory)
-            adapter = devices / '1-2'
-            adapter.mkdir()
-            for attribute, value in {'idVendor': '1d50', 'idProduct': '606f', 'busnum': '1', 'devnum': '9'}.items():
-                (adapter / attribute).write_text(value + '\n')
+            adapter = self.usb_adapter(devices, '1-2', ('1234', '5678'))
+            self.usb_adapter(devices, '4-1', ('0c72', '000c'))
+            can0 = devices / 'can0-device'
+            can0.symlink_to(adapter / '1-2:1.0', target_is_directory=True)
             with patch.object(deployment, 'USB_DEVICES', devices), \
-                    patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
+                    patch.object(deployment, 'CAN0_DEVICE', can0), \
                     patch.object(deployment, 'run') as run:
-                deployment.restart_can_adapter('')
-                run.assert_called_once_with(['usbreset', '001/009'], timeout=15)
-                run.reset_mock()
-                (devices / '1-3').symlink_to(adapter, target_is_directory=True)
-                with self.assertRaisesRegex(RuntimeError, 'Expected one visible candleLight adapter'):
+                with self.assertRaisesRegex(RuntimeError, 'not a supported CAN adapter'):
                     deployment.restart_can_adapter('')
                 run.assert_not_called()
+
+    def test_power_cycle_supports_peak_and_candlelight_on_can0(self):
+        for identity in (('1d50', '606f'), ('0c72', '000c')):
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
+                devices = Path(directory)
+                adapter = self.usb_adapter(devices, '1-2.3', identity)
+                can0 = devices / 'can0-device'
+                can0.symlink_to(adapter / '1-2.3:1.0', target_is_directory=True)
+                for current_device in (can0, devices / 'missing-can0'):
+                    with self.subTest(current_device=current_device), \
+                            patch.object(deployment, 'USB_DEVICES', devices), \
+                            patch.object(deployment, 'CAN0_DEVICE', current_device), \
+                            patch.object(deployment, 'run') as run:
+                        deployment.restart_can_adapter('1-2.3')
+                        run.assert_called_once_with(
+                            ['uhubctl', '-e', '-l', '1-2', '-p', '3', '-a', 'cycle', '-d', '2'], timeout=15)
 
     def test_power_cycle_targets_only_the_configured_port(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -98,6 +98,7 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
   this->declare_parameter("software_enable_diagnostics", false);
   this->declare_parameter("supervisor_timeout", 0.3);
   this->declare_parameter("motion_feedback_timeout", 0.3);
+  this->declare_parameter("position_feedback_timeout", this->get_parameter("motion_feedback_timeout").as_double());
   this->declare_parameter("status_feedback_timeout", 0.3);
   this->declare_parameter("fault_feedback_timeout", 2.5);
   const bool traction_pdo_requested = this->declare_parameter("traction_pdo_enabled", false);
@@ -161,6 +162,7 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
   params &= this->get_parameter("software_enable_diagnostics", software_enable_diagnostics_);
   params &= this->get_parameter("supervisor_timeout", supervisor_timeout_);
   params &= this->get_parameter("motion_feedback_timeout", motion_feedback_timeout_);
+  params &= this->get_parameter("position_feedback_timeout", position_feedback_timeout_);
   params &= this->get_parameter("status_feedback_timeout", status_feedback_timeout_);
   params &= this->get_parameter("fault_feedback_timeout", fault_feedback_timeout_);
   this->get_parameter("virtual_position_source", virtual_position_source_);
@@ -233,6 +235,7 @@ MoboticDriver::MoboticDriver(const rclcpp::NodeOptions& options) : Node("mobotic
   }
 
   if (!std::isfinite(motion_feedback_timeout_) || motion_feedback_timeout_ <= 0.0 ||
+      !std::isfinite(position_feedback_timeout_) || position_feedback_timeout_ <= 0.0 ||
       !std::isfinite(status_feedback_timeout_) || status_feedback_timeout_ <= 0.0 ||
       !std::isfinite(fault_feedback_timeout_) || fault_feedback_timeout_ <= diagnostic_sdo_period_ ||
       !std::isfinite(feedback_request_period) || feedback_request_period <= 0.0 ||
@@ -582,8 +585,8 @@ void MoboticDriver::publishWheelModuleStatus(const rclcpp::Time& stamp)
     status.initialized = steering.initialized() && traction.initialized() &&
         configuration_[binding.steering_drive].ready() && configuration_[binding.traction_drive].ready();
     status.position_valid = position_valid_[binding.traction_drive] && steering.hasFeedback(POSITION_FEEDBACK) &&
-        steering.feedbackFreshness().fresh(FeedbackFreshness::POSITION, motion_feedback_timeout_, steady_now) &&
-        traction.feedbackFreshness().fresh(FeedbackFreshness::POSITION, motion_feedback_timeout_, steady_now);
+        steering.feedbackFreshness().fresh(FeedbackFreshness::POSITION, position_feedback_timeout_, steady_now) &&
+        traction.feedbackFreshness().fresh(FeedbackFreshness::POSITION, position_feedback_timeout_, steady_now);
     status.position_reason = status.position_valid ? "current controller position feedback" :
         "controller position feedback missing, stale or discontinuous";
     status.reset_id = reset_id_;
@@ -695,7 +698,7 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
   // Zero stamps from other CAN transports fall back to local reception time.
   const rclcpp::Time acquisition_stamp(frame.header.stamp);
   const double acquisition_age = acquisition_stamp.nanoseconds() == 0 ? 0.0 : (ros_now - acquisition_stamp).seconds();
-  if (acquisition_age < -0.1 || acquisition_age > std::max({motion_feedback_timeout_, status_feedback_timeout_, fault_feedback_timeout_})) { return; }
+  if (acquisition_age < -0.1 || acquisition_age > std::max({motion_feedback_timeout_, position_feedback_timeout_, status_feedback_timeout_, fault_feedback_timeout_})) { return; }
   const auto sample_time = steady_now - std::chrono::duration_cast<FeedbackFreshness::Clock::duration>(
       std::chrono::duration<double>(std::max(0.0, acquisition_age)));
   int64_t oldest_motion_stamp_ns = ros_now.nanoseconds();
@@ -768,7 +771,7 @@ void MoboticDriver::canFrameCallback(const can_msgs::msg::Frame& frame)
       {
         const double ticks_per_second = (max_traction_velocity_ / wheel_radius_) * drive.positionCountsPerOutputRevolution() / (2.0 * M_PI);
         position_valid_[name] = traction_positions_[name].update(static_cast<int32_t>(drive.feedback(POSITION_FEEDBACK)),
-            ticks_per_second * motion_feedback_timeout_ + 2.0);
+            ticks_per_second * position_feedback_timeout_ + 2.0);
       }
       else { position_valid_[name] = true; }
     }
@@ -1233,7 +1236,7 @@ void MoboticDriver::finalCommandCallback(const mobotic_interfaces::msg::WheelMod
       // cannot introduce a different steering target through trusted metadata.
       const auto& steering = drives_.at(found->second.steering_drive);
       if (!steering.hasFeedback(POSITION_FEEDBACK) || !steering.feedbackFreshness().fresh(
-            FeedbackFreshness::POSITION, motion_feedback_timeout_))
+            FeedbackFreshness::POSITION, position_feedback_timeout_))
       {
         sendStopToAllDrives();
         // Disabled controllers may not provide position feedback until the
@@ -1330,7 +1333,7 @@ void MoboticDriver::wheelModuleCommandCallback(const mobotic_interfaces::msg::Wh
     for (const auto& [name, drive] : drives_)
     {
       (void)name;
-      observations.push_back({drive.feedbackFreshness().motionFresh(motion_feedback_timeout_, steady_now),
+      observations.push_back({drive.feedbackFreshness().motionFresh(motion_feedback_timeout_, position_feedback_timeout_, steady_now),
           drive.feedbackFreshness().fresh(FeedbackFreshness::VELOCITY, motion_feedback_timeout_, steady_now),
           drive.velocityFeedbackRadPerSec(),
           drive.hasNativeStatus() && drive.feedbackFreshness().fresh(FeedbackFreshness::STATUS, status_feedback_timeout_, steady_now), drive.enabled()});
@@ -2167,7 +2170,7 @@ bool MoboticDriver::driveFeedbackFresh(const MoboticDriveCanCommunication& drive
 {
   return drive.hasNativeStatus() && drive.currentMode() != UNKNOWN &&
          drive.hasFeedback(POSITION_FEEDBACK) && drive.hasFeedback(VELOCITY_FEEDBACK) &&
-         drive.feedbackFreshness().ready(motion_feedback_timeout_,
+         drive.feedbackFreshness().ready(motion_feedback_timeout_, position_feedback_timeout_,
                                         status_feedback_timeout_, fault_feedback_timeout_, now) &&
          drive.feedbackFreshness().fresh(FeedbackFreshness::CONTROL_MODE, status_feedback_timeout_, now);
 }
@@ -2179,7 +2182,7 @@ std::string MoboticDriver::feedbackProblem(const MoboticDriveCanCommunication& d
   if (!feedback.fresh(FeedbackFreshness::STATUS, status_feedback_timeout_, now)) { return "status stale/missing"; }
   if (!feedback.fresh(FeedbackFreshness::CONTROL_MODE, status_feedback_timeout_, now)) { return "control mode stale/missing"; }
   if (!feedback.fresh(FeedbackFreshness::VELOCITY, motion_feedback_timeout_, now)) { return "velocity stale/missing"; }
-  if (!feedback.fresh(FeedbackFreshness::POSITION, motion_feedback_timeout_, now)) { return "position stale/missing"; }
+  if (!feedback.fresh(FeedbackFreshness::POSITION, position_feedback_timeout_, now)) { return "position stale/missing"; }
   if (!feedback.fresh(FeedbackFreshness::ERROR_REGISTER, fault_feedback_timeout_, now)) { return "error register stale/missing"; }
 
   return "";

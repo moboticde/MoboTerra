@@ -81,6 +81,31 @@ TEST(FeedbackFreshness, VelocityAloneDoesNotRenewSteeringPosition)
   EXPECT_TRUE(ready(drive, later));
 }
 
+TEST(FeedbackFreshness, PositionHasSixHundredMillisecondsWithoutExtendingOtherFields)
+{
+  for (const bool steering : {false, true})
+  {
+    auto drive = makeDrive(steering);
+    refresh(drive, start);
+    const auto later = start + std::chrono::milliseconds(500);
+    drive.update(reply(drive, MICONTROL_STATUS_REGISTER, 0, 1), later);
+    drive.update(reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 0), later);
+    EXPECT_TRUE(drive.feedbackFreshness().ready(0.35, 0.6, 0.35, 2.5, later));
+    EXPECT_TRUE(drive.feedbackFreshness().ready(0.35, 0.6, 0.35, 2.5,
+        start + std::chrono::milliseconds(600)));
+    EXPECT_FALSE(drive.feedbackFreshness().ready(0.35, 0.6, 0.35, 2.5,
+        start + std::chrono::milliseconds(601)));
+
+    drive.update(reply(drive, POSITION_FEEDBACK, 0, 0), later + std::chrono::milliseconds(1));
+    const auto stale = start + std::chrono::milliseconds(851);
+    EXPECT_FALSE(drive.feedbackFreshness().ready(0.35, 0.6, 0.35, 2.5, stale));
+    drive.update(reply(drive, MICONTROL_STATUS_REGISTER, 0, 1), stale);
+    EXPECT_FALSE(drive.feedbackFreshness().ready(0.35, 0.6, 0.35, 2.5, stale));
+    drive.update(reply(drive, MICONTROL_VELOCITY_FEEDBACK, 1, 0), stale);
+    EXPECT_TRUE(drive.feedbackFreshness().ready(0.35, 0.6, 0.35, 2.5, stale));
+  }
+}
+
 TEST(FeedbackFreshness, PdoTrafficCannotRenewSdoFeedback)
 {
   for (const bool steering : {false, true})

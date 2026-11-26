@@ -15,6 +15,7 @@ POLICY_TYPES = {
         "steering_alignment_timeout": "number",
         "supervisor_timeout": "number",
         "motion_feedback_timeout": "number",
+        "position_feedback_timeout": "number",
         "status_feedback_timeout": "number",
         "fault_feedback_timeout": "number",
         "diagnostic_sdo_period": "number",

@@ -91,9 +91,14 @@ writes. Profile-zero stopping requires an acknowledged zero followed by command
 
 Required fault reads drain before another motion generation. Status/mode polls
 remain active in every state. Optional current/software-enable reads share a
-bounded background slot and cannot replace required evidence. Existing motion
-and status deadlines remain 300 ms, fault freshness 2.5 s, management lease
-300 ms and command watchdog 100 ms unless configured otherwise. All mode,
+bounded background slot and cannot replace required evidence. The commissioned
+profile uses `position_feedback_timeout: 0.6` s for steering and traction
+positions, including HOLD-command checks and reset admission. Velocity and
+complete joint-feedback age retain `motion_feedback_timeout: 0.35` s; native
+status/mode retain `status_feedback_timeout: 0.35` s. Without an explicit
+position timeout, the driver uses the motion timeout for compatibility.
+Fault freshness remains 2.5 s, management lease 300 ms and command watchdog
+100 ms unless configured otherwise. All mode,
 lease, reset and current-mode overspeed guards remain active.
 
 ## Topics and services

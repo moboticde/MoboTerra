@@ -64,12 +64,22 @@ public:
   }
   bool motionFresh(double timeout, Clock::time_point now = Clock::now()) const
   {
-    return fresh(VELOCITY, timeout, now) && fresh(POSITION, timeout, now);
+    return motionFresh(timeout, timeout, now);
+  }
+  bool motionFresh(double velocity_timeout, double position_timeout,
+                   Clock::time_point now = Clock::now()) const
+  {
+    return fresh(VELOCITY, velocity_timeout, now) && fresh(POSITION, position_timeout, now);
   }
   bool ready(double motion_timeout, double status_timeout, double fault_timeout,
              Clock::time_point now = Clock::now()) const
   {
-    return motionFresh(motion_timeout, now) && fresh(STATUS, status_timeout, now) &&
+    return ready(motion_timeout, motion_timeout, status_timeout, fault_timeout, now);
+  }
+  bool ready(double velocity_timeout, double position_timeout, double status_timeout,
+             double fault_timeout, Clock::time_point now = Clock::now()) const
+  {
+    return motionFresh(velocity_timeout, position_timeout, now) && fresh(STATUS, status_timeout, now) &&
            fresh(ERROR_REGISTER, fault_timeout, now);
   }
 private:

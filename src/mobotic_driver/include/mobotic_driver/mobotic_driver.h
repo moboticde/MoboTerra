@@ -158,7 +158,8 @@ private:
   double watchdog_timeout_{0};
   double diagnostic_sdo_period_{1.0};
   bool software_enable_diagnostics_{false};
-  double motion_feedback_timeout_{0.3}, status_feedback_timeout_{0.3}, fault_feedback_timeout_{2.5};
+  double motion_feedback_timeout_{0.3}, position_feedback_timeout_{0.3};
+  double status_feedback_timeout_{0.3}, fault_feedback_timeout_{2.5};
   bool feedback_motion_blocked_{true};
   bool feedback_stop_sent_{false};
   FeedbackFreshness::Clock::time_point last_feedback_stop_{};

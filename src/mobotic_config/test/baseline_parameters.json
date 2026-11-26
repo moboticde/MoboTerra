@@ -180,6 +180,7 @@
     ],
     "motion_feedback_timeout": 0.35,
     "physical_sample_skew_budget": 0.1,
+    "position_feedback_timeout": 0.6,
     "sample_skew_budget": 0.005,
     "startup_timeout": 15.0,
     "status_feedback_timeout": 0.35,

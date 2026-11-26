@@ -16,9 +16,20 @@ RUN sha256sum --check agv_kinematics.deb.sha256 \
 # Fast DDS sets IP_MULTICAST_IF when opening its UDP send sockets.
 # QEMU 10 handles that socket option under user-mode x86 emulation.
 FROM ubuntu:26.04 AS romb-emulator
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends qemu-user \
-    && rm -rf /var/lib/apt/lists/*
+# Mirror publication can briefly leave indexes inconsistent with InRelease.
+# Retry with fresh signed metadata and require every index download to succeed.
+RUN printf 'Acquire::Retries "3";\nAcquire::By-Hash "force";\n' > /etc/apt/apt.conf.d/80moboterra-retries \
+    && for attempt in 1 2 3; do \
+        if apt-get update --error-on=any \
+            && apt-get install -y --no-install-recommends qemu-user; then \
+            rm -rf /var/lib/apt/lists/*; \
+            exit 0; \
+        fi; \
+        if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+        echo "APT failed; refreshing package indexes before retry $((attempt + 1))/3" >&2; \
+        rm -rf /var/lib/apt/lists/*; \
+        sleep 10; \
+    done
 
 FROM ${ROS_IMAGE} AS dependencies
 ARG TARGETARCH

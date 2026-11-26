@@ -10,6 +10,7 @@
     steering_alignment_timeout: 12.5
     supervisor_timeout: 0.3
     motion_feedback_timeout: 0.35
+    position_feedback_timeout: 0.6
     status_feedback_timeout: 0.35
     fault_feedback_timeout: 2.5
     diagnostic_sdo_period: 1

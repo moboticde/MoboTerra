@@ -127,7 +127,11 @@ one failed recovery, it waits 60 seconds and tries once more. If both fail, the
 service reports **Reconnect USB-to-CAN Adapter** and stays stopped.
 
 By default the host issues a software USB reset when it can identify the
-candleLight adapter. To enable a full power cycle, install `uhubctl` and set
+candleLight (`1d50:606f`) or PEAK PCAN-USB (`0c72:000c`) adapter attached to
+`can0`. If `can0` is missing, automatic selection requires exactly one visible
+supported adapter; unknown or ambiguous devices are not reset. The PEAK
+`peak_usb` driver runs on the Linux host; the container uses its SocketCAN link
+through host networking. To enable a full power cycle, install `uhubctl` and set
 `MOBOTERRA_CAN_USB_PORT` in the service environment to the dedicated adapter's
 USB device path, for example `1-2.3`. Verify that `uhubctl` can cut power to that
 exact port independently before enabling it. Keep the port dedicated to the
