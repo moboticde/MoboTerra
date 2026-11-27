@@ -26,6 +26,7 @@ RUN --mount=type=bind,from=prepared,source=/workspace/src,target=/tmp/moboterra-
     && rosdep install --from-paths /tmp/moboterra-src --ignore-src --rosdistro jazzy \
         --dependency-types=exec -y \
     && apt-get install -y --no-install-recommends iproute2 util-linux procps fastdds-tools python3-yaml \
+    && apt-get purge -y ros-jazzy-robot-state-publisher \
     && rm -rf /root/.ros/rosdep /var/lib/apt/lists/* /tmp/scanner-deb /tmp/scanner-light.deb
 RUN groupadd --gid 10001 moboterra \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin moboterra \
