@@ -13,11 +13,10 @@ apt_install() {
 }
 
 host_packages=()
-for executable in python3 ip candump udevadm modprobe curl usbreset; do
+for executable in python3 ip candump udevadm modprobe curl; do
     case "$executable" in
         python3) package=python3 ;; ip) package=iproute2 ;; candump) package=can-utils ;;
         udevadm) package=udev ;; modprobe) package=kmod ;; curl) package=curl ;;
-        usbreset) package=usbutils ;;
     esac
     command -v "$executable" >/dev/null 2>&1 || host_packages+=("$package")
 done

@@ -68,9 +68,9 @@ class CurrentStackTest(unittest.TestCase):
         expected = [
             show,
             ['ip', 'link', 'set', 'dev', 'can0', 'down'],
-            ['ip', 'link', 'set', 'dev', 'can0', 'type', 'can', 'bitrate', '500000',
-             'listen-only', 'off', 'restart-ms', '0'],
+            ['ip', 'link', 'set', 'dev', 'can0', 'type', 'can', 'bitrate', '500000'],
             ['ip', 'link', 'set', 'dev', 'can0', 'up'],
+            ['ip', '-details', '-statistics', 'link', 'show', 'can0'],
             show,
         ]
         for response in (link(), link(up=False), link(bitrate=250000, listen_only=True),
@@ -104,148 +104,23 @@ class CurrentStackTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not UP'):
             self.prepare([link(up=False), link(up=False)], interface='can1')
 
-    def test_can0_recovery_retries_once_after_one_minute(self):
-        failed_up = subprocess.CalledProcessError(2, ['ip', 'link', 'set', 'dev', 'can0', 'up'])
-        outcomes = [failed_up, deployment.CanLinkError('can0 is BUS-OFF'), None]
-        events = []
+    def test_can0_setup_failure_propagates_without_retry(self):
+        for error in (TimeoutError('missing'), deployment.CanLinkError('can0 is BUS-OFF'),
+                      subprocess.CalledProcessError(2, ['ip', 'link', 'set', 'dev', 'can0', 'up'])):
+            with self.subTest(error=error), \
+                    patch.object(deployment, 'prepare_can_link', side_effect=error) as prepare, \
+                    patch.object(deployment.time, 'sleep') as sleep, \
+                    self.assertRaises(type(error)):
+                try:
+                    deployment.prepare_can({'can0': (500000, False)}, 0)
+                finally:
+                    prepare.assert_called_once_with('can0', 500000, False, 0)
+                    sleep.assert_not_called()
 
-        def prepare_link(interface, bitrate, listen_only, deadline):
-            events.append(('configure', interface, bitrate, listen_only))
-            result = outcomes.pop(0)
-            if result:
-                raise result
-
-        with patch.dict(deployment.os.environ, MOBOTERRA_CAN_USB_PORT=''), \
-                patch.object(deployment, 'prepare_can_link', side_effect=prepare_link), \
-                patch.object(deployment, 'restart_can_adapter', side_effect=lambda port: events.append(('reset', port))), \
-                patch.object(deployment.time, 'sleep', side_effect=lambda delay: events.append(('wait', delay))):
-            deployment.prepare_can({'can0': (500000, False)}, 0)
-
-        configure = ('configure', 'can0', 500000, False)
-        self.assertEqual(events, [configure, ('reset', ''), configure, ('wait', 60), ('reset', ''), configure])
-
-    def test_can0_recovery_stops_with_reconnect_message_when_adapter_stays_missing(self):
-        with patch.dict(deployment.os.environ, MOBOTERRA_CAN_USB_PORT=''), \
-                patch.object(deployment, 'prepare_can_link', side_effect=TimeoutError('missing')) as prepare, \
-                patch.object(deployment, 'restart_can_adapter', side_effect=RuntimeError('not visible')) as restart, \
-                patch.object(deployment.time, 'sleep') as sleep, \
-                self.assertRaisesRegex(RuntimeError, '^Reconnect USB-to-CAN Adapter$'):
-            deployment.prepare_can({'can0': (500000, False)}, 0)
-
-        self.assertEqual(prepare.call_count, 3)
-        self.assertEqual(restart.call_count, 2)
-        sleep.assert_called_once_with(60)
-
-    def test_first_successful_recovery_skips_the_delayed_retry(self):
-        with patch.dict(deployment.os.environ, MOBOTERRA_CAN_USB_PORT=''), \
-                patch.object(deployment, 'prepare_can_link', side_effect=[TimeoutError('missing'), None]), \
-                patch.object(deployment, 'restart_can_adapter') as restart, \
-                patch.object(deployment.time, 'sleep') as sleep:
-            deployment.prepare_can({'can0': (500000, False)}, 0)
-
-        restart.assert_called_once_with('')
-        sleep.assert_not_called()
-
-    def usb_adapter(self, devices, port, identity, *, bus='1', number='9'):
-        adapter = devices / port
-        adapter.mkdir()
-        for attribute, value in dict(idVendor=identity[0], idProduct=identity[1],
-                                     busnum=bus, devnum=number).items():
-            (adapter / attribute).write_text(value + '\n')
-        (adapter / (port + ':1.0')).mkdir()
-        return adapter
-
-    def test_usb_reset_targets_the_current_device_address(self):
-        for identity in (('1d50', '606f'), ('0c72', '000c')):
-            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
-                devices = Path(directory)
-                self.usb_adapter(devices, '1-2', identity)
-                with patch.object(deployment, 'USB_DEVICES', devices), \
-                        patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
-                        patch.object(deployment, 'run') as run:
-                    deployment.restart_can_adapter('')
-                    run.assert_called_once_with(['usbreset', '001/009'], timeout=15)
-
-    def test_missing_can0_rejects_missing_ambiguous_and_unknown_adapters(self):
-        for identities in ([], [('1234', '5678')],
-                           [('1d50', '606f'), ('0c72', '000c')],
-                           [('0c72', '000c'), ('0c72', '000c')]):
-            with self.subTest(identities=identities), tempfile.TemporaryDirectory() as directory:
-                devices = Path(directory)
-                for index, identity in enumerate(identities, 2):
-                    self.usb_adapter(devices, f'1-{index}', identity)
-                with patch.object(deployment, 'USB_DEVICES', devices), \
-                        patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
-                        patch.object(deployment, 'run') as run:
-                    with self.assertRaisesRegex(RuntimeError, 'Expected one visible supported CAN adapter'):
-                        deployment.restart_can_adapter('')
-                    run.assert_not_called()
-
-    def test_can0_selects_its_adapter_even_when_another_supported_adapter_is_visible(self):
-        for identity in (('1d50', '606f'), ('0c72', '000c')):
-            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
-                devices = Path(directory)
-                adapter = self.usb_adapter(devices, '4-1', identity, bus='4', number='3')
-                self.usb_adapter(devices, '1-2', ('0c72', '000c'))
-                can0 = devices / 'can0-device'
-                can0.symlink_to(adapter / '4-1:1.0', target_is_directory=True)
-                with patch.object(deployment, 'USB_DEVICES', devices), \
-                        patch.object(deployment, 'CAN0_DEVICE', can0), \
-                        patch.object(deployment, 'run') as run:
-                    deployment.restart_can_adapter('')
-                    run.assert_called_once_with(['usbreset', '004/003'], timeout=15)
-                    run.reset_mock()
-                    with self.assertRaisesRegex(RuntimeError, 'does not match'):
-                        deployment.restart_can_adapter('1-2')
-                    run.assert_not_called()
-
-    def test_unsupported_can0_adapter_is_not_reset_or_replaced_by_another(self):
-        with tempfile.TemporaryDirectory() as directory:
-            devices = Path(directory)
-            adapter = self.usb_adapter(devices, '1-2', ('1234', '5678'))
-            self.usb_adapter(devices, '4-1', ('0c72', '000c'))
-            can0 = devices / 'can0-device'
-            can0.symlink_to(adapter / '1-2:1.0', target_is_directory=True)
-            with patch.object(deployment, 'USB_DEVICES', devices), \
-                    patch.object(deployment, 'CAN0_DEVICE', can0), \
-                    patch.object(deployment, 'run') as run:
-                with self.assertRaisesRegex(RuntimeError, 'not a supported CAN adapter'):
-                    deployment.restart_can_adapter('')
-                run.assert_not_called()
-
-    def test_power_cycle_supports_peak_and_candlelight_on_can0(self):
-        for identity in (('1d50', '606f'), ('0c72', '000c')):
-            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
-                devices = Path(directory)
-                adapter = self.usb_adapter(devices, '1-2.3', identity)
-                can0 = devices / 'can0-device'
-                can0.symlink_to(adapter / '1-2.3:1.0', target_is_directory=True)
-                for current_device in (can0, devices / 'missing-can0'):
-                    with self.subTest(current_device=current_device), \
-                            patch.object(deployment, 'USB_DEVICES', devices), \
-                            patch.object(deployment, 'CAN0_DEVICE', current_device), \
-                            patch.object(deployment, 'run') as run:
-                        deployment.restart_can_adapter('1-2.3')
-                        run.assert_called_once_with(
-                            ['uhubctl', '-e', '-l', '1-2', '-p', '3', '-a', 'cycle', '-d', '2'], timeout=15)
-
-    def test_power_cycle_targets_only_the_configured_port(self):
-        with tempfile.TemporaryDirectory() as directory:
-            devices = Path(directory)
-            with patch.object(deployment, 'USB_DEVICES', devices), \
-                    patch.object(deployment, 'CAN0_DEVICE', devices / 'missing-can0'), \
-                    patch.object(deployment, 'run') as run:
-                deployment.restart_can_adapter('1-2.3')
-                run.assert_called_once_with(['uhubctl', '-e', '-l', '1-2', '-p', '3', '-a', 'cycle', '-d', '2'],
-                                            timeout=15)
-                run.reset_mock()
-                occupied_port = devices / '1-2.3'
-                occupied_port.mkdir()
-                (occupied_port / 'idVendor').write_text('1234\n')
-                (occupied_port / 'idProduct').write_text('5678\n')
-                with self.assertRaisesRegex(RuntimeError, 'does not match'):
-                    deployment.restart_can_adapter('1-2.3')
-                run.assert_not_called()
+    def test_can0_must_pass_readback_after_simple_reset(self):
+        with self.assertRaisesRegex(deployment.CanLinkError, 'BUS-OFF'):
+            self.prepare([link(state='BUS-OFF'), link(state='BUS-OFF')])
+        self.assertEqual(len(self.calls), 6)
 
     def test_robot_ip_selection_ignores_wifi_disconnected_and_virtual_interfaces(self):
         def interface(name, host_ip, connected=True):

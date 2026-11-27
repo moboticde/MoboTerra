@@ -108,6 +108,16 @@ class RombContractTest(unittest.TestCase):
 
 
 class RombRuntimeTest(unittest.TestCase):
+    def prepare_native(self, directory, architecture):
+        root = self.prepare(directory)
+        record = json.loads((root / 'manifest.json').read_text())
+        record.update(runtime_kind='native', architecture=architecture)
+        record.pop('qemu_binary_sha256')
+        (root / 'manifest.json').write_text(json.dumps(record))
+        (root / 'qemu-x86_64-static').unlink()
+        (root / 'rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2').unlink()
+        return root
+
     def prepare(self, directory):
         root = Path(directory)
         files = ['qemu-x86_64-static', 'rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2',
@@ -156,6 +166,33 @@ class RombRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RuntimeError, 'incomplete'):
                 runtime_command([], directory)
+
+    def test_native_packages_run_directly_without_emulator_or_guest_loader(self):
+        for machine, architecture in (('aarch64', 'arm64'), ('x86_64', 'amd64')):
+            with self.subTest(machine=machine), tempfile.TemporaryDirectory() as directory:
+                root = self.prepare_native(directory, architecture)
+                inherited = {'LD_LIBRARY_PATH': '/native/ros/lib', 'AMENT_PREFIX_PATH': '/native/ros'}
+                with patch.dict(os.environ, inherited), \
+                        patch('mobotic_kinematics.romb.runtime.os.uname', return_value=SimpleNamespace(machine=machine)):
+                    command, env = runtime_command(['--ros-args'], root)
+                prefix = str(root / 'rootfs/opt/ros/jazzy')
+                self.assertEqual(command, [prefix + '/lib/agv_kinematics/agv_kinematics', '--ros-args'])
+                self.assertEqual(env['LD_LIBRARY_PATH'], prefix + '/lib:/native/ros/lib')
+                self.assertEqual(env['AMENT_PREFIX_PATH'], prefix + ':/native/ros')
+
+    def test_foreign_native_package_is_rejected_without_emulation_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.prepare_native(directory, 'amd64')
+            with patch('mobotic_kinematics.romb.runtime.os.uname', return_value=SimpleNamespace(machine='aarch64')):
+                with self.assertRaisesRegex(RuntimeError, 'architecture mismatch'):
+                    runtime_command([], root)
+
+    def test_native_binary_integrity_is_checked_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.prepare_native(directory, 'arm64')
+            (root / 'rootfs/opt/ros/jazzy/lib/agv_kinematics/agv_kinematics').write_bytes(b'changed')
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                runtime_command([], root)
 
 
 if __name__ == '__main__':

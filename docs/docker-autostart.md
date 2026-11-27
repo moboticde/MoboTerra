@@ -22,15 +22,15 @@ unsupported Docker packaging arrangement requires service personnel to review
 the migration rather than automatically replacing another container platform.
 
 Docker Engine and the Linux kernel run on the host. All application dependencies
-are inside the image: ROS 2 Jazzy, the original ROMB solver, its amd64 guest ROS
-libraries, the CPU-appropriate emulator and RViz. Customers do not install ROS
+are inside the image: ROS 2 Jazzy, the original native ROMB solver, its ROS
+libraries and RViz. Customers do not install ROS
 or prepare a `~/.local/share/moboterra/romb-amd64` directory.
 
-The supplied `deploy/vendor/agv_kinematics.deb` is checked against its pinned
-SHA-256 before extraction. The build copies an amd64 ROS base filesystem and the
-unchanged vendor package into the guest runtime, then supplies a native emulator.
-The amd64 filesystem is copied without foreign-architecture build commands, so
-ARM64 installation needs no host binfmt registration. The complete image runs
+The build selects `deploy/vendor/agv_kinematics_arm64.deb` on Raspberry Pi and
+`deploy/vendor/agv_kinematics.deb` on AMD64 PCs. It checks the selected package's
+pinned SHA-256, Debian architecture and executable ELF architecture. Both
+architectures run ROMB directly with native ROS libraries; no QEMU, foreign
+ROS filesystem or emulator-download stage is included. The complete image runs
 the ROS tests, the original solver test and the isolated virtual-stack check.
 
 The installer then checks image architecture/identity, bundled runtime integrity,
@@ -113,29 +113,23 @@ systemd service environment to select the robot-facing address. An address
 change during startup stops the launch. Installing with `--no-start` works
 with the robot disconnected.
 
-On each start, the CAN preflight takes `can0` down, applies the active profile's
-bitrate and listen-only settings with bus-off restart disabled, and brings it
-back up. The current profile shares transmitting `can0` at 500000 bit/s between
-drives, the PAIL receiver and batteries. For other configured CAN links, the
-preflight configures links that are down and validates links that are already up.
+On each start, the CAN preflight uses the following sequence for the current
+shared 500000-bit/s `can0` profile (systemd runs it as root):
 
-Missing hardware, conflicting settings for a shared link or a failed link
-check can stop startup and appear in the host journal. If `can0` is missing or
-fails its setup checks, the host attempts USB recovery while the stack is stopped.
-It waits for `can0` to return, then repeats the down/configure/up sequence. After
-one failed recovery, it waits 60 seconds and tries once more. If both fail, the
-service reports **Reconnect USB-to-CAN Adapter** and stays stopped.
+```bash
+sudo ip link set dev can0 down
+sudo ip link set dev can0 type can bitrate 500000
+sudo ip link set dev can0 up
+ip -details -statistics link show can0
+```
 
-By default the host issues a software USB reset when it can identify the
-candleLight (`1d50:606f`) or PEAK PCAN-USB (`0c72:000c`) adapter attached to
-`can0`. If `can0` is missing, automatic selection requires exactly one visible
-supported adapter; unknown or ambiguous devices are not reset. The PEAK
-`peak_usb` driver runs on the Linux host; the container uses its SocketCAN link
-through host networking. To enable a full power cycle, install `uhubctl` and set
-`MOBOTERRA_CAN_USB_PORT` in the service environment to the dedicated adapter's
-USB device path, for example `1-2.3`. Verify that `uhubctl` can cut power to that
-exact port independently before enabling it. Keep the port dedicated to the
-adapter so recovery can target it even when the adapter has disappeared.
+The preflight then validates the link settings and state. It does not change
+`can0` listen-only or automatic bus-off restart settings. There are no USB resets,
+USB power cycles or recovery retries. Missing hardware, conflicting shared-link
+settings or a failed link check stop startup and appear in the host journal.
+The current profile shares transmitting `can0` between drives, the PAIL receiver
+and batteries. For other configured CAN links, the preflight configures links
+that are down and validates links that are already up.
 
 On an existing installation, use `sudo systemctl edit moboterra-current-stack.service`
 to add the following override. Newly installed services already have this timeout.

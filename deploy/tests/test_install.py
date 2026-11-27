@@ -97,7 +97,7 @@ class InstallationTest(unittest.TestCase):
         for name in ('bash', 'cat', 'chmod', 'dirname', 'grep', 'install', 'uname'):
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ('dpkg', 'dpkg-query', 'docker', 'systemctl', 'systemd-analyze', 'ip',
-                     'candump', 'udevadm', 'modprobe', 'curl', 'usbreset', 'apt-get'):
+                     'candump', 'udevadm', 'modprobe', 'curl', 'apt-get'):
             path = self.bin / name
             path.write_text(STUB)
             path.chmod(0o755)
@@ -146,11 +146,10 @@ class InstallationTest(unittest.TestCase):
                 self.assertEqual(call[call.index('--network')+1], 'none')
 
     def test_fresh_host_installs_engine_and_plugins_automatically(self):
-        (self.bin / 'usbreset').unlink()
         result = self.invoke(DOCKER_KIND='missing')
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         installs=[call for call in self.calls() if call[0]=='apt-get' and 'install' in call]
-        self.assertTrue(any('usbutils' in call for call in installs))
+        self.assertFalse(any('usbutils' in call for call in installs))
         self.assertTrue(any('docker-ce' in call and 'docker-buildx-plugin' in call and 'docker-compose-plugin' in call for call in installs))
         source=(self.root/'etc/apt/sources.list.d/docker.sources').read_text()
         self.assertIn('https://download.docker.com/linux/ubuntu',source)
@@ -183,11 +182,19 @@ class InstallationTest(unittest.TestCase):
         self.assertFalse(any(call[:3] == ['docker', 'buildx', 'build'] for call in self.calls()))
 
     def test_corrupt_vendor_package_fails_before_build(self):
-        (self.deploy/'vendor/agv_kinematics.deb').write_bytes(b'corrupted')
-        result=self.invoke()
-        self.assertNotEqual(result.returncode,0)
-        self.assertIn('checksum',result.stderr)
-        self.assertFalse(any(call[:3]==['docker','buildx','build'] for call in self.calls()))
+        for name in ('agv_kinematics.deb', 'agv_kinematics_arm64.deb'):
+            with self.subTest(package=name):
+                package = self.deploy / 'vendor' / name
+                original = package.read_bytes()
+                try:
+                    package.write_bytes(b'corrupted')
+                    result = self.invoke()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('checksum', result.stderr)
+                    self.assertIn(name, result.stderr)
+                    self.assertFalse(any(call[:3] == ['docker','buildx','build'] for call in self.calls()))
+                finally:
+                    package.write_bytes(original)
 
     def test_software_only_registers_cli_but_no_robot_service(self):
         result=self.invoke('--software-only')

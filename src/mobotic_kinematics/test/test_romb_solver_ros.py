@@ -16,7 +16,7 @@ from mobotic_kinematics.romb.runtime import runtime_command
 
 
 def test_original_solver_and_adapter_roundtrip(monkeypatch):
-    # Match the emulated solver's UDP transport in the native participants.
+    # Match the solver's UDP transport in every participant.
     # ROS_LOCALHOST_ONLY would override the explicit DDS discovery settings.
     _, romb_env = runtime_command([])
     for name in ('ROS_LOCALHOST_ONLY', 'ROS_STATIC_PEERS', 'ROS_DISCOVERY_SERVER'):

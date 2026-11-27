@@ -27,8 +27,8 @@ The active service is `moboterra-current-stack.service`; its container is
 ## Image contents
 
 `deploy/Dockerfile` builds the original solver runtime from
-[the pinned supplied package](vendor/README.md), an amd64 ROS base filesystem
-and the emulator for the target CPU. No separately installed host runtime or
+[the pinned supplied ARM64 or AMD64 package](vendor/README.md) and the matching
+native ROS libraries. No CPU emulator, separately installed host runtime or
 extra Docker build context is required. All application dependencies remain in
 the image. The `current-stack` target includes the guarded physical launcher;
 `runtime` is an alias for that complete target. Optional `gui` and `tools`

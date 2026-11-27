@@ -1,35 +1,19 @@
 # syntax=docker/dockerfile:1.7
 ARG ROS_IMAGE=ros:jazzy-ros-base-noble
-ARG ROMB_IMAGE=ros:jazzy-ros-base-noble
-
-# Only copy the amd64 ROS filesystem. Do not execute foreign-architecture RUN
-# steps: this also builds on ARM64 without registering host binfmt handlers.
-FROM --platform=linux/amd64 ${ROMB_IMAGE} AS romb-guest
 
 FROM ${ROS_IMAGE} AS romb-vendor
+ARG TARGETARCH
 WORKDIR /tmp/romb-vendor
-COPY deploy/vendor/agv_kinematics.deb deploy/vendor/agv_kinematics.deb.sha256 ./
-RUN sha256sum --check agv_kinematics.deb.sha256 \
-    && test "$(dpkg-deb --field agv_kinematics.deb Architecture)" = amd64 \
-    && dpkg-deb --extract agv_kinematics.deb /vendor-root
-
-# Fast DDS sets IP_MULTICAST_IF when opening its UDP send sockets.
-# QEMU 10 handles that socket option under user-mode x86 emulation.
-FROM ubuntu:26.04 AS romb-emulator
-# Mirror publication can briefly leave indexes inconsistent with InRelease.
-# Retry with fresh signed metadata and require every index download to succeed.
-RUN printf 'Acquire::Retries "3";\nAcquire::By-Hash "force";\n' > /etc/apt/apt.conf.d/80moboterra-retries \
-    && for attempt in 1 2 3; do \
-        if apt-get update --error-on=any \
-            && apt-get install -y --no-install-recommends qemu-user; then \
-            rm -rf /var/lib/apt/lists/*; \
-            exit 0; \
-        fi; \
-        if [ "$attempt" -eq 3 ]; then exit 1; fi; \
-        echo "APT failed; refreshing package indexes before retry $((attempt + 1))/3" >&2; \
-        rm -rf /var/lib/apt/lists/*; \
-        sleep 10; \
-    done
+COPY deploy/vendor/agv_kinematics*.deb* ./
+RUN case "${TARGETARCH}" in \
+        arm64) package=agv_kinematics_arm64.deb ;; \
+        amd64) package=agv_kinematics.deb ;; \
+        *) echo "Unsupported ROMB architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && sha256sum --check "${package}.sha256" \
+    && test "$(dpkg-deb --field "$package" Architecture)" = "${TARGETARCH}" \
+    && dpkg-deb --extract "$package" /vendor-root \
+    && sha256sum "$package" | cut -d ' ' -f1 > /source-package.sha256
 
 FROM ${ROS_IMAGE} AS dependencies
 ARG TARGETARCH
@@ -46,13 +30,15 @@ RUN --mount=type=bind,source=src,target=/tmp/moboterra-src,readonly \
     && rm -rf /root/.ros/rosdep /var/lib/apt/lists/*
 
 FROM dependencies AS romb-support
+ARG TARGETARCH
 ENV MOBOTERRA_ROMB_RUNTIME=/opt/moboterra-romb
-COPY --from=romb-guest / /opt/moboterra-romb/rootfs/
 COPY --from=romb-vendor /vendor-root/ /opt/moboterra-romb/rootfs/
-COPY --from=romb-emulator /usr/bin/qemu-x86_64 /opt/moboterra-romb/qemu-x86_64-static
+COPY --from=romb-vendor /source-package.sha256 /opt/moboterra-romb/source-package.sha256
 COPY deploy/container/romb-udp.xml /opt/moboterra-romb/udp-only.xml
 COPY deploy/container/prepare_romb.py /tmp/prepare_romb.py
-RUN python3 /tmp/prepare_romb.py && chmod -R a+rX /opt/moboterra-romb
+RUN python3 /tmp/prepare_romb.py --architecture "${TARGETARCH}" \
+        --package-sha256 "$(cat /opt/moboterra-romb/source-package.sha256)" \
+    && chmod -R a+rX /opt/moboterra-romb
 
 FROM romb-support AS builder
 WORKDIR /workspace

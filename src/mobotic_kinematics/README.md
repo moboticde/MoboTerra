@@ -18,19 +18,20 @@ test/                                Policy, adapter, integrity and real solver 
 ```
 
 For the standard Docker installation, the unchanged original solver package is
-included at `deploy/vendor/agv_kinematics.deb`. The Docker build verifies its
-checksum and constructs the guest runtime and target emulator inside the image.
+included as `deploy/vendor/agv_kinematics_arm64.deb` for Raspberry Pi and
+`deploy/vendor/agv_kinematics.deb` for AMD64 PCs. The Docker build verifies the
+selected package's checksum and architecture and constructs a native runtime.
+The solver runs directly with the image's native ROS libraries, without QEMU.
 Customers need no host ROMB runtime or native ROS installation; use
 `bash ./install.sh` and `moboterra-ctl`. The native-only paths below describe
 the optional engineering installation, not a customer prerequisite.
 
-The original `agv_kinematics` executable is delivered in
-`~/Desktop/mobotic_customer_delivery/agv_kinematics.deb`. It runs unchanged under
-QEMU because the supplied executable is amd64 and the host is ARM64. The runtime
-is `~/.local/share/moboterra/romb-amd64` (a compatibility symlink to
-`delivery-amd64`); `MOBOTERRA_ROMB_RUNTIME` may select another verified runtime.
-Original executable and emulator SHA-256 values are checked before launch.
-The external binary, emulator and guest libraries are not copied into this package.
+`MOBOTERRA_ROMB_RUNTIME` selects the verified runtime, normally
+`/opt/moboterra-romb` inside Docker. Native manifests identify `arm64` or `amd64`;
+the launcher rejects an architecture mismatch and verifies the executable hash.
+Older engineering installations at `~/.local/share/moboterra/romb-amd64` retain
+legacy guest-runtime support, including emulator verification when required.
+New images use native packages on both architectures.
 
 The solver computes wheel targets from body velocity and measured body velocity
 from joint feedback. Geometry, wheel names and speed epsilon come from the shared

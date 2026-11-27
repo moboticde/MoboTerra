@@ -15,7 +15,7 @@ edition is [MoboTerra_user_manual.docx](MoboTerra_user_manual.docx).
 | Target computer | Ubuntu 24.04 with Linux Docker Engine; ROS 2 Jazzy in the image |
 | Wheel modules | `front_left`, `front_right`, `rear_left`, `rear_right`; eight drives |
 | Hardware launch | `scripts/start_MoboTerra` |
-| Kinematics | Original ROMB solver, guest libraries, emulator and adapter included in Docker |
+| Kinematics | Original native ARM64/AMD64 ROMB solver and adapter included in Docker |
 | Robot CAN | Drives, PAIL receiver and batteries share `can0` at 500000 bit/s |
 | CAN node assignments | Drives 1–8; PAIL receiver 10; master 11 |
 | ROS namespace and domain | `/moboterra`; domain 42 in `config/raspberry-pi/ros.env` |

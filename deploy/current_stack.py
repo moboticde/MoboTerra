@@ -24,14 +24,7 @@ RESTART_SOCKET_DIR = '/run/moboterra-restart'
 ENV_FILE = ROOT / 'runtime/docker-stack.env'
 ROBOT_NETWORK = IPv4Network('192.168.0.0/16')
 SCANNER_SUFFIXES = {'front_left': 5, 'rear_right': 6}
-USB_DEVICES = Path('/sys/bus/usb/devices')
-CAN0_DEVICE = Path('/sys/class/net/can0/device')
-CANDLELIGHT_USB_ID = ('1d50', '606f')
-PEAK_PCAN_USB_ID = ('0c72', '000c')
-SUPPORTED_CAN_USB_IDS = {CANDLELIGHT_USB_ID, PEAK_PCAN_USB_ID}
 CAN_COMMAND_TIMEOUT = 5
-CAN_USB_TIMEOUT = 15
-CAN_RETRY_DELAY = 60
 sys.path[:0] = [str(ROOT / 'src/mobotic_config'), str(ROOT / 'src/mobotic_kinematics')]
 
 
@@ -146,93 +139,21 @@ def prepare_can_link(interface, bitrate, listen_only, deadline):
     if cycle_at_start:
         run([*set_link, 'down'], timeout=CAN_COMMAND_TIMEOUT)
     if cycle_at_start or 'UP' not in info['flags']:
-        run([*set_link, 'type', 'can', 'bitrate', str(bitrate), 'listen-only',
-             'on' if listen_only else 'off', 'restart-ms', '0'], timeout=CAN_COMMAND_TIMEOUT)
+        configure = [*set_link, 'type', 'can', 'bitrate', str(bitrate)]
+        if not cycle_at_start:
+            configure.extend(['listen-only', 'on' if listen_only else 'off', 'restart-ms', '0'])
+        run(configure, timeout=CAN_COMMAND_TIMEOUT)
         run([*set_link, 'up'], timeout=CAN_COMMAND_TIMEOUT)
+        if cycle_at_start:
+            run(['ip', '-details', '-statistics', 'link', 'show', interface], timeout=CAN_COMMAND_TIMEOUT)
         info = json.loads(run(show, capture_output=True, text=True, timeout=CAN_COMMAND_TIMEOUT).stdout)[0]
     validate_link(info, interface, bitrate, listen_only)
 
 
-def usb_identity(device):
-    try:
-        return tuple((device / name).read_text().strip() for name in ('idVendor', 'idProduct'))
-    except FileNotFoundError:
-        return None
-
-
-def restart_can_adapter(usb_port):
-    try:
-        device = CAN0_DEVICE.resolve(strict=True).parent
-    except FileNotFoundError:
-        device = None
-
-    if usb_port:
-        port_device = USB_DEVICES / usb_port
-        identity = usb_identity(port_device)
-        if ((device is not None and device.name != usb_port)
-                or (identity is not None and identity not in SUPPORTED_CAN_USB_IDS)):
-            raise RuntimeError(f'USB port {usb_port} does not match a supported CAN adapter for can0')
-        separator = '.' if '.' in usb_port else '-'
-        hub, port = usb_port.rsplit(separator, 1)
-        command = ['uhubctl', '-e', '-l', hub, '-p', port, '-a']
-        print(f'Power-cycling USB-to-CAN adapter port {usb_port}', flush=True)
-        try:
-            run([*command, 'cycle', '-d', '2'], timeout=CAN_USB_TIMEOUT)
-        except subprocess.SubprocessError:
-            run([*command, 'on'], timeout=CAN_USB_TIMEOUT)
-            raise
-        return
-
-    if device is None:
-        adapters = [entry for entry in USB_DEVICES.iterdir()
-                    if usb_identity(entry) in SUPPORTED_CAN_USB_IDS]
-        if len(adapters) != 1:
-            raise RuntimeError('Expected one visible supported CAN adapter (candleLight or PEAK PCAN-USB) for USB reset')
-        device = adapters[0]
-    if usb_identity(device) not in SUPPORTED_CAN_USB_IDS:
-        raise RuntimeError(f'The USB device for can0 at {device.name} is not a supported CAN adapter')
-    bus = int((device / 'busnum').read_text())
-    number = int((device / 'devnum').read_text())
-    print(f'Resetting USB-to-CAN adapter at {device.name}', flush=True)
-    run(['usbreset', f'{bus:03d}/{number:03d}'], timeout=CAN_USB_TIMEOUT)
-
-
-CAN_SETUP_ERRORS = (CanLinkError, TimeoutError, subprocess.SubprocessError)
-
-
-def recover_can0(bitrate, listen_only, initial_error):
-    usb_port = os.environ.get('MOBOTERRA_CAN_USB_PORT', '')
-    if usb_port and not re.fullmatch(r'[1-9][0-9]*-[1-9][0-9]*(?:\.[1-9][0-9]*)*', usb_port):
-        raise ValueError('MOBOTERRA_CAN_USB_PORT must be a USB device path such as 1-2 or 1-2.3')
-    print(f'Initial CAN startup failed: {initial_error}', flush=True)
-    for attempt in (1, 2):
-        if attempt == 2:
-            print(f'Retrying USB-to-CAN recovery in {CAN_RETRY_DELAY} seconds', flush=True)
-            time.sleep(CAN_RETRY_DELAY)
-        print(f'USB-to-CAN recovery attempt {attempt}/2', flush=True)
-        try:
-            restart_can_adapter(usb_port)
-        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-            print(f'USB-to-CAN reset did not complete: {error}', flush=True)
-        try:
-            prepare_can_link('can0', bitrate, listen_only, time.monotonic() + CAN_USB_TIMEOUT)
-        except CAN_SETUP_ERRORS as error:
-            print(f'can0 recovery attempt {attempt}/2 failed: {error}', flush=True)
-        else:
-            print(f'can0 recovered at {bitrate} bit/s', flush=True)
-            return
-    raise RuntimeError('Reconnect USB-to-CAN Adapter')
-
-
 def prepare_can(plan, deadline):
-    """Cycle can0 at startup and configure other links only when down."""
+    """Cycle can0 at startup without USB resets or recovery retries."""
     for interface, (bitrate, listen_only) in sorted(plan.items()):
-        try:
-            prepare_can_link(interface, bitrate, listen_only, deadline)
-        except CAN_SETUP_ERRORS as error:
-            if interface != 'can0':
-                raise
-            recover_can0(bitrate, listen_only, error)
+        prepare_can_link(interface, bitrate, listen_only, deadline)
 
 
 def prepare_stack(wait_seconds=60):
@@ -423,10 +344,11 @@ def acquire_image(selected=None, archive=None):
     else:
         for profile in sorted((ROOT / 'src/mobotic_config/config').glob('platform-*.yaml')):
             configuration(profile.name)
-        package = ROOT / 'deploy/vendor/agv_kinematics.deb'
-        expected = (package.with_suffix('.deb.sha256')).read_text().split()[0]
-        if hashlib.sha256(package.read_bytes()).hexdigest() != expected:
-            raise ValueError('The bundled ROMB package checksum does not match the delivery')
+        for name in ('agv_kinematics.deb', 'agv_kinematics_arm64.deb'):
+            package = ROOT / 'deploy/vendor' / name
+            expected = (package.with_suffix('.deb.sha256')).read_text().split()[0]
+            if hashlib.sha256(package.read_bytes()).hexdigest() != expected:
+                raise ValueError(f'The bundled ROMB package checksum does not match the delivery: {name}')
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S%f')
         image = 'moboterra-current:' + stamp
         revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--short=12', 'HEAD'],
