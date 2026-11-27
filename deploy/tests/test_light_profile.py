@@ -9,9 +9,26 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('prepare_light', ROOT / 'deploy/container/prepare_light.py')
 light = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(light)
+scanner_spec = importlib.util.spec_from_file_location('scanner_deb', ROOT / 'deploy/container/prepare_scanner_deb.py')
+scanner = importlib.util.module_from_spec(scanner_spec)
+scanner_spec.loader.exec_module(scanner)
 
 
 class LightProfileTest(unittest.TestCase):
+    def test_scanner_keeps_runtime_dependencies_without_demo_gui_dependencies(self):
+        original = ('Package: ros-jazzy-sick-safetyscanners2\nVersion: 1.0.5\n'
+                    'Depends: libc6 (>= 2.34), ros-jazzy-rviz2,\n'
+                    ' ros-jazzy-robot-state-publisher, ros-jazzy-xacro, ros-jazzy-rclcpp,\n'
+                    ' ros-jazzy-sick-safetyscanners-base\nArchitecture: arm64\n')
+        filtered = scanner.filter_control(original)
+        self.assertNotIn('ros-jazzy-rviz2', filtered)
+        self.assertNotIn('ros-jazzy-robot-state-publisher', filtered)
+        self.assertNotIn('ros-jazzy-xacro', filtered)
+        self.assertIn('libc6 (>= 2.34)', filtered)
+        self.assertIn('ros-jazzy-rclcpp', filtered)
+        self.assertIn('ros-jazzy-sick-safetyscanners-base', filtered)
+        self.assertIn('\nArchitecture: arm64\n', filtered)
+
     def test_dependency_filter_preserves_driver_and_safety(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

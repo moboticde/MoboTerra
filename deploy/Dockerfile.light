@@ -14,13 +14,19 @@ FROM ${ROS_IMAGE} AS light
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
+COPY deploy/container/prepare_scanner_deb.py /tmp/prepare_scanner_deb.py
 RUN --mount=type=bind,from=prepared,source=/workspace/src,target=/tmp/moboterra-src,readonly \
     apt-get update \
+    && printf 'APT::Install-Recommends "false";\nAPT::Install-Suggests "false";\n' > /etc/apt/apt.conf.d/90moboterra-light \
+    && mkdir /tmp/scanner-deb && cd /tmp/scanner-deb \
+    && apt-get download ros-jazzy-sick-safetyscanners2 \
+    && python3 /tmp/prepare_scanner_deb.py ros-jazzy-sick-safetyscanners2_*.deb /tmp/scanner-light.deb \
+    && apt-get install -y --no-install-recommends /tmp/scanner-light.deb \
     && (for attempt in 1 2 3; do rosdep update --rosdistro jazzy && exit 0; sleep 2; done; exit 1) \
     && rosdep install --from-paths /tmp/moboterra-src --ignore-src --rosdistro jazzy \
         --dependency-types=exec -y \
     && apt-get install -y --no-install-recommends iproute2 util-linux procps fastdds-tools python3-yaml \
-    && rm -rf /root/.ros/rosdep /var/lib/apt/lists/*
+    && rm -rf /root/.ros/rosdep /var/lib/apt/lists/* /tmp/scanner-deb /tmp/scanner-light.deb
 RUN groupadd --gid 10001 moboterra \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin moboterra \
     && install -d -o 10001 -g 10001 /var/log/ros /tmp/moboterra \

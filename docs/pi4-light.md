@@ -10,6 +10,11 @@ the odometry package are absent. The launcher disables description, odometry and
 RViz, and the installation check rejects TF topics or excluded nodes. TF message
 or utility libraries needed transitively by ROS may remain; no TF publisher runs.
 Drive feedback, wheel-module status and vehicle velocity from ROMB remain available.
+The upstream scanner Debian package requires RViz and robot-state-publisher for
+its demonstration launch files. The light build repackages that repository package
+with those optional dependencies removed; the scanner executable and libraries
+are unchanged. Its Debian version receives a `+moboterra1` suffix. Runtime checks
+verify the excluded packages are absent before an image can be published.
 
 The virtual check uses all eight unchanged controller protocol models through one
 CAN subscriber and publisher, replacing eight separate DDS participants. It still
