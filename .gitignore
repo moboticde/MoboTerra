@@ -39,3 +39,6 @@ can_telemetry_records/
 
 # Imported diagnostic snapshots are data.
 /config/raspberry-pi/*.json
+
+.venv/
+.ci-venv/

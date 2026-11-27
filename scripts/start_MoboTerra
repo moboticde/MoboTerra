@@ -22,6 +22,11 @@ start_rviz=true
 start_description=true
 start_odometry=true
 rviz_config="$config_dir/live.rviz"
+if [[ "${MOBOTERRA_RUNTIME_PROFILE:-full}" == light ]]; then
+  start_rviz=false
+  start_description=false
+  start_odometry=false
+fi
 for argument in "$@"; do
   case "$argument" in
     start_rviz:=*) start_rviz="${argument#*:=}" ;;
@@ -30,6 +35,12 @@ for argument in "$@"; do
     rviz_config:=*) rviz_config="${argument#*:=}" ;;
   esac
 done
+if [[ "${MOBOTERRA_RUNTIME_PROFILE:-full}" == light ]]; then
+  if [[ "$start_rviz" != false || "$start_description" != false || "$start_odometry" != false ]]; then
+    echo 'The light image has no RViz, robot description publisher, odometry or TF publishers.' >&2
+    exit 1
+  fi
+fi
 visualization_args=(--profile "$profile" --rviz-config "$rviz_config"
   --start-rviz "$start_rviz" --start-description "$start_description" --start-odometry "$start_odometry")
 if [[ "${1:-}" != "--check" ]]; then
@@ -114,6 +125,6 @@ exec python3 -m mobotic_bringup.shutdown_guard --platform-config "$profile" --in
   ros2 launch mobotic_bringup moboterra.launch.py \
   stack_type:=hardware \
   kinematics_backend:=romb \
-  start_description:=true start_odometry:=true \
-  start_rviz:=true rviz_config:="$config_dir/live.rviz" \
+  start_description:="$start_description" start_odometry:="$start_odometry" \
+  start_rviz:="$start_rviz" rviz_config:="$config_dir/live.rviz" \
   "$@" start_scanners:=true

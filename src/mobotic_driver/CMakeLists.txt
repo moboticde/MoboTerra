@@ -42,6 +42,10 @@ target_include_directories(virtual_mobotic_drive
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
 ament_target_dependencies(virtual_mobotic_drive rclcpp std_msgs sensor_msgs geometry_msgs can_msgs ros2_socketcan)
 
+add_executable(virtual_can_fleet src/virtual_can_fleet.cpp)
+target_include_directories(virtual_can_fleet PRIVATE include)
+ament_target_dependencies(virtual_can_fleet rclcpp can_msgs)
+
 install(DIRECTORY launch
         DESTINATION share/${PROJECT_NAME})
 
@@ -49,6 +53,7 @@ install(TARGETS
         mobotic_driver
         paced_socket_can_sender
         virtual_mobotic_drive
+        virtual_can_fleet
         DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

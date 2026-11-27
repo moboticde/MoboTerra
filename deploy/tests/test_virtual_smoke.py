@@ -34,7 +34,7 @@ def load_smoke():
 
 
 class VirtualSmokeTest(unittest.TestCase):
-    def exercise(self, *, health_failure=False, unexpected_motion=False):
+    def exercise(self, *, health_failure=False, unexpected_motion=False, light=False, tf_topic=False):
         smoke = load_smoke()
         events = []
         subscriptions = {}
@@ -42,6 +42,9 @@ class VirtualSmokeTest(unittest.TestCase):
         node = Mock()
         names = ('mobotic_driver', 'mobotic_kinematics', 'mobotic_odometry',
                  'mobotic_supervisor', 'platform_diagnostics')
+        if light:
+            names = tuple(n for n in names if n != 'mobotic_odometry')
+        node.get_topic_names_and_types.return_value = [('/moboterra/tf', ['tf2_msgs/msg/TFMessage'])] if tf_topic else []
         node.get_node_names_and_namespaces.return_value = [(name, '/moboterra') for name in names]
         node.create_subscription.side_effect = lambda kind, topic, callback, qos: subscriptions.update(
             {topic: callback})
@@ -80,7 +83,9 @@ class VirtualSmokeTest(unittest.TestCase):
                 'wheel_modules/command': types.SimpleNamespace(modules=[command]),
             }
             for topic, message in messages.items():
-                subscriptions['/moboterra/' + topic](message)
+                callback = subscriptions.get('/moboterra/' + topic)
+                if callback:
+                    callback(message)
 
         def health(_path, _node):
             self.assertFalse(state['enabled'])
@@ -108,16 +113,37 @@ class VirtualSmokeTest(unittest.TestCase):
                 patch.object(smoke, 'configure_discovery'), \
                 patch.object(smoke, 'check_runtime_health', side_effect=health), \
                 patch.object(smoke.Path, 'exists', return_value=True), \
-                patch.object(smoke.subprocess, 'Popen', return_value=launch), \
-                patch.object(smoke.os, 'killpg'), \
+                patch.object(smoke.subprocess, 'Popen', return_value=launch) as popen, \
+                patch.object(smoke.os, 'killpg', create=True), \
+                patch.dict(smoke.os.environ, {'MOBOTERRA_RUNTIME_PROFILE': 'light' if light else 'full'}), \
                 patch.object(smoke.time, 'monotonic', side_effect=monotonic):
             smoke.main()
+            launch_args = popen.call_args
+        if light:
+            self.assertNotIn('/moboterra/vehicle/odom', subscriptions)
+            arguments = launch_args[0][0]
+            self.assertIn('virtual_drive_transport:=fleet', arguments)
+            self.assertIn('start_odometry:=false', arguments)
+            self.assertIn('start_description:=false', arguments)
         return events, state
 
     def test_graph_health_precedes_enable_and_sustained_readiness(self):
         events, state = self.exercise()
         self.assertEqual(events, ['health', 'enable'])
         self.assertGreaterEqual(state['clock'] - state['enabled_at'], 3.0)
+
+    def test_light_requires_all_modules_and_enable_without_odometry(self):
+        events, state = self.exercise(light=True)
+        self.assertEqual(events, ['health', 'enable'])
+        self.assertGreaterEqual(state['clock'] - state['enabled_at'], 3.0)
+
+    def test_light_rejects_unexpected_tf_topics(self):
+        with self.assertRaisesRegex(RuntimeError, 'TF topics'):
+            self.exercise(light=True, tf_topic=True)
+
+    def test_light_still_rejects_motion(self):
+        with self.assertRaisesRegex(RuntimeError, 'Unexpected motion command'):
+            self.exercise(light=True, unexpected_motion=True)
 
     def test_failed_graph_health_prevents_enable(self):
         with self.assertRaises(subprocess.CalledProcessError):

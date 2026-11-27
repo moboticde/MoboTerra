@@ -59,6 +59,7 @@ RUN groupadd --gid 10001 moboterra \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/moboterra --shell /usr/sbin/nologin moboterra \
     && install -d -o 10001 -g 10001 /var/log/ros /tmp/moboterra /var/lib/moboterra/position-state
 COPY deploy/checks/virtual_smoke.py /opt/moboterra-checks/virtual_smoke.py
+COPY deploy/checks/check_runtime.py /opt/moboterra-checks/check_runtime.py
 COPY deploy/checks/virtual-fastdds.xml /opt/moboterra-checks/virtual-fastdds.xml
 COPY deploy/config/virtual-pail.rviz /opt/moboterra-checks/virtual-pail.rviz
 COPY --chmod=0755 deploy/container/entrypoint.sh /usr/local/bin/moboterra-entrypoint

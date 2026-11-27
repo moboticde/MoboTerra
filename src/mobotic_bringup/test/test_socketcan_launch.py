@@ -3,6 +3,7 @@ import ast
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'mobotic_config'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'mobotic_config/test'))
 from launch_harness import factory, resolve
@@ -21,6 +22,26 @@ namespace = {'generate_launch_description': resolved_factory(SOURCE)}
 
 
 class SocketCanLaunchTest(unittest.TestCase):
+    def test_light_fleet_launch_has_all_models_without_optional_publishers(self):
+        generate = factory(SOURCE)
+        generate.__globals__['render_description'] = Mock(side_effect=AssertionError('description rendered'))
+        actions, context = resolve(generate(), {
+            'stack_type': 'virtual', 'virtual_drive_transport': 'fleet',
+            'start_rviz': 'false', 'start_description': 'false', 'start_odometry': 'false',
+            'publish_odom_tf': 'false',
+        })
+        nodes = [a for a in actions if a.kind == 'Node']
+        self.assertFalse(any(a.kwargs.get('executable') == 'virtual_mobotic_drive' for a in nodes))
+        fleet = next(a for a in nodes if a.kwargs.get('executable') == 'virtual_can_fleet')
+        self.assertTrue(fleet.kwargs['condition'].perform(context))
+        self.assertEqual(set(fleet.kwargs['parameters'][0]['node_ids']),
+                         {f'0x{i:02X}' for i in range(1, 9)})
+        for name in ('rviz2', 'robot_state_publisher', 'mobotic_odometry'):
+            node = next(a for a in nodes if a.kwargs.get('executable') == name)
+            self.assertFalse(node.kwargs['condition'].perform(context))
+        supervisor = next(a for a in nodes if a.kwargs.get('executable') == 'mobotic_supervisor')
+        self.assertEqual(supervisor.kwargs['parameters'][0]['required_health_sources'], ['kinematics'])
+
     def test_optional_rviz_uses_robot_namespace_and_shared_tf_topics(self):
         for enabled in ('false', 'true'):
             actions, context = resolve(factory(SOURCE)(), {
@@ -234,6 +255,9 @@ class SocketCanLaunchTest(unittest.TestCase):
             self.assertEqual(supervisor.kwargs['parameters'][0]['required_health_sources'],
                              ['custom_monitor', 'kinematics', 'odometry'])
     def setUp(self):
+        runtime = patch('mobotic_kinematics.launching.runtime_command', return_value=([], {}))
+        runtime.start()
+        self.addCleanup(runtime.stop)
         description = namespace['generate_launch_description']()
         self.actions = description.args[0]
         self.group = next(

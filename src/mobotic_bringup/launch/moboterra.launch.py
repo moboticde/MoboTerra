@@ -201,8 +201,25 @@ def _launch_setup(context):
             remappings=[('can_rx', 'can_tx'), ('can_tx', 'can_rx')],
             output='screen',
         )
-        for name, parameters in cfg.virtual_drives()
+        for name, parameters in (cfg.virtual_drives()
+            if LaunchConfiguration('virtual_drive_transport').perform(context) == 'processes' else [])
     ]
+
+    # One CAN subscriber routes requests to all eight independent controller models.
+    # This avoids eight DDS deliveries and participants for every virtual frame.
+    models = cfg.virtual_drives()
+    virtual_fleet = Node(
+        condition=IfCondition(PythonExpression(["'", stack_type, "' == 'virtual' and '",
+            LaunchConfiguration('virtual_drive_transport'), "' == 'fleet'"])),
+        package='mobotic_driver', executable='virtual_can_fleet', name='virtual_can_fleet',
+        namespace=robot_name, output='screen',
+        parameters=[{
+            'node_ids': [p['can_node_id'] for _, p in models],
+            'drive_types': [p['drive_type'] for _, p in models],
+            'controller_types': [p['controller_type'] for _, p in models],
+            'resolutions': [p['encoder_resolution'] for _, p in models],
+            'gear_ratios': [p['gear_ratio'] for _, p in models],
+        }], remappings=[('can_rx', 'can_tx'), ('can_tx', 'can_rx')])
 
     mock_platform_state = Node(
         condition=_stack_condition(stack_type, 'virtual'),
@@ -411,7 +428,7 @@ def _launch_setup(context):
         condition=IfCondition(LaunchConfiguration('start_description')),
         package='robot_state_publisher', executable='robot_state_publisher', name='robot_state_publisher',
         namespace=robot_name, output='screen',
-        parameters=[{'robot_description': ParameterValue(render_description(cfg), value_type=str)}],
+        parameters=[{'robot_description': ParameterValue(render_description(cfg) if LaunchConfiguration('start_description').perform(context) == 'true' else '', value_type=str)}],
         remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')])
     rviz_config = LaunchConfiguration('rviz_config').perform(context)
     rviz = Node(
@@ -438,6 +455,7 @@ def _launch_setup(context):
         hardware_driver,
         virtual_driver,
         *virtual_drives,
+        virtual_fleet,
         mock_platform_state,
         *kinematics,
         odometry,
@@ -459,6 +477,8 @@ def _launch_setup(context):
 
 def generate_launch_description():
     arguments = common_arguments() + [
+        DeclareLaunchArgument('virtual_drive_transport', default_value='processes', choices=['processes', 'fleet'],
+                              description='Virtual CAN topology; fleet keeps all models in one process'),
         DeclareLaunchArgument('control_mode', default_value='supervised',
                               choices=['supervised', 'manual_only'],
                               description='Explicit manual-only test authority; independent hardware safety required'),

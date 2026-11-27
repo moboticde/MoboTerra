@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.7
+ARG ROS_IMAGE=ros:jazzy-ros-base-noble
+ARG BUILDER_IMAGE=moboterra-light-builder
+
+# The separately built builder has run the full native ROS/C++ test suite.
+# None of its GUI, compiler or optional runtime dependencies enter this image.
+FROM ${BUILDER_IMAGE} AS prepared
+USER root
+COPY deploy/container/prepare_light.py /tmp/prepare_light.py
+RUN python3 /tmp/prepare_light.py overlay /workspace/install \
+    && python3 /tmp/prepare_light.py source /workspace/src
+
+FROM ${ROS_IMAGE} AS light
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+RUN --mount=type=bind,from=prepared,source=/workspace/src,target=/tmp/moboterra-src,readonly \
+    apt-get update \
+    && (for attempt in 1 2 3; do rosdep update --rosdistro jazzy && exit 0; sleep 2; done; exit 1) \
+    && rosdep install --from-paths /tmp/moboterra-src --ignore-src --rosdistro jazzy \
+        --dependency-types=exec -y \
+    && apt-get install -y --no-install-recommends iproute2 util-linux procps fastdds-tools python3-yaml \
+    && rm -rf /root/.ros/rosdep /var/lib/apt/lists/*
+RUN groupadd --gid 10001 moboterra \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin moboterra \
+    && install -d -o 10001 -g 10001 /var/log/ros /tmp/moboterra \
+        /var/lib/moboterra/position-state /opt/moboterra-project/runtime
+COPY --from=prepared /workspace/install/ /opt/moboterra/
+COPY --from=prepared /opt/moboterra-romb/ /opt/moboterra-romb/
+COPY scripts/ /opt/moboterra-project/scripts/
+COPY tools/pi/ /opt/moboterra-project/tools/pi/
+COPY config/raspberry-pi/ /opt/moboterra-project/config/raspberry-pi/
+COPY deploy/checks/virtual_smoke.py deploy/checks/check_runtime.py deploy/checks/virtual-fastdds.xml /opt/moboterra-checks/
+COPY --chmod=0755 deploy/container/entrypoint.sh /usr/local/bin/moboterra-entrypoint
+COPY --chmod=0755 deploy/container/healthcheck.sh /usr/local/bin/moboterra-healthcheck
+ENV ROS_DISTRO=jazzy ROS_HOME=/var/log/ros PYTHONDONTWRITEBYTECODE=1 \
+    MOBOTERRA_RUNTIME_PROFILE=light MOBOTERRA_ROS_OVERLAY=/opt/moboterra \
+    MOBOTERRA_ROMB_RUNTIME=/opt/moboterra-romb HOME=/opt/moboterra-project/runtime/home
+WORKDIR /opt/moboterra-project
+USER 10001:10001
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="MoboTerra light ARM64 control stack" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      com.mobotic.stack="four-micontrol-bundled-romb-v1" \
+      com.mobotic.profile="light"
+ENTRYPOINT ["/usr/local/bin/moboterra-entrypoint"]
+CMD ["bash", "scripts/start_MoboTerra", "start_rviz:=false", "start_odometry:=false", "start_description:=false", "publish_odom_tf:=false"]

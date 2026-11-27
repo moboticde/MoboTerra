@@ -1,4 +1,5 @@
 #include <mobotic_driver/virtual_drive_protocol.hpp>
+#include <mobotic_driver/virtual_can_fleet.hpp>
 #include <mobotic_driver/traction_position.hpp>
 #include <functional>
 #include <iostream>
@@ -274,6 +275,31 @@ void currentModeProtocol()
     check(read(drive, node, 0x3A04, 1) == 0, "current mode must not invent velocity dynamics");
   }
 }
+void routedFleetIsolation()
+{
+  VirtualCanFleet fleet;
+  for (unsigned node = 1; node <= 8; ++node)
+  { fleet.add(node, node % 2 == 0, node % 2 == 0 ? 4096.0 : 121.0, 121.0, "micontrol"); }
+  for (unsigned node = 1; node <= 8; ++node)
+  {
+    auto frames = fleet.handle(request(node, 0x3003, 0, 4, POSITION));
+    check(frames.size() == 1 && frames[0].id == 0x580 + node && frames[0].data[0] == WRITE_REPLY,
+          "fleet routes each write to exactly one controller");
+    frames = fleet.handle(request(node, 0x3003));
+    check(frames.size() == 1 && frames[0].id == 0x580 + node && signedIntFromSdoReadReply(frames[0], 4) == POSITION,
+          "fleet routes all eight replies with controller state retained");
+  }
+  check(fleet.handle(request(9, 0x3003)).empty(), "unconfigured nodes have no reply");
+  auto invalid = request(1, 0x3003); invalid.is_extended = true;
+  check(fleet.handle(invalid).empty(), "malformed frames remain rejected");
+  try { fleet.add(1, false, 121, 121, "micontrol"); throw std::runtime_error("duplicate accepted"); }
+  catch (const std::invalid_argument&) {}
+  auto frames = fleet.handle(request(1, 0x3003, 0, 4, S_VELOCITY));
+  check(frames.size() == 1, "mode change must acknowledge");
+  frames = fleet.handle(request(2, 0x3003));
+  check(signedIntFromSdoReadReply(frames[0], 4) == POSITION, "controller modes are independent");
+  fleet.advance(0.01);
+}
 int main()
 {
   const std::vector<std::pair<const char*, std::function<void()>>> cases{
@@ -284,6 +310,7 @@ int main()
     {"fault reset and unknown safety registers", faultsAndSafetyUnknown},
     {"disable/re-enable does not revive targets", disableNoResume}, {"malformed frames and controller isolation", malformedAndIsolation},
     {"configuration validation", configurationValidation},
+    {"single-endpoint eight-model fleet isolation", routedFleetIsolation},
     {"all eight drives satisfy production feedback readiness", allEightDriveReadiness},
     {"current-mode protocol convention without invented dynamics", currentModeProtocol},
   };

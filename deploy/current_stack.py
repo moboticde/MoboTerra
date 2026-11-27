@@ -326,7 +326,7 @@ def verify_image(image):
     run(['docker', 'run', '--rm', '--network', 'none', image,
          'bash', 'scripts/start_MoboTerra', '--check', 'start_rviz:=false'])
     run(['docker', 'run', '--rm', '--network', 'none', '--env', 'QT_QPA_PLATFORM=offscreen',
-         image, 'rviz2', '--help'], stdout=subprocess.DEVNULL)
+         image, 'python3', '/opt/moboterra-checks/check_runtime.py'], stdout=subprocess.DEVNULL)
     run(['docker', 'run', '--rm', '--network', 'none', '--env', 'ROS_DOMAIN_ID=192',
          image, 'python3', '/opt/moboterra-checks/virtual_smoke.py'])
 

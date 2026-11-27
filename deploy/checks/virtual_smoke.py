@@ -51,13 +51,20 @@ def main():
     expected_joints = set(cfg.parameters('driver')['drives.names'])
     expected_modules = set(cfg.parameters('supervisor')['expected_module_names'])
     configure_discovery()
+    light = os.environ.get('MOBOTERRA_RUNTIME_PROFILE') == 'light'
     expected = {'mobotic_driver', 'mobotic_kinematics', 'mobotic_odometry',
                 'mobotic_supervisor', 'platform_diagnostics'}
+    if light:
+        expected.remove('mobotic_odometry')
+    required_samples = {'joints', 'modules', 'diagnostics', 'mode'} | (set() if light else {'odom'})
+    fresh_samples = required_samples - {'diagnostics'}
     with tempfile.TemporaryFile(mode='w+') as log:
         launch = subprocess.Popen([
             'ros2', 'launch', 'mobotic_bringup', 'moboterra.launch.py',
             'stack_type:=virtual', 'robot_name:=moboterra',
-            'start_manual_interface:=false',
+            'start_manual_interface:=false', 'virtual_drive_transport:=fleet',
+            *(['start_rviz:=false', 'start_odometry:=false', 'start_description:=false',
+               'publish_odom_tf:=false'] if light else []),
         ] + ([f'platform_config:={cfg.path}'] if args.platform_config else []),
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         rclpy.init()
@@ -67,15 +74,16 @@ def main():
         def receive(key, msg):
             samples[key] = msg
             received[key] = time.monotonic()
-        handles = [node.create_subscription(kind, topic,
-                   lambda msg, key=key: receive(key, msg), 10)
-                   for kind, topic, key in (
+        topics = [
                        (JointState, '/moboterra/joint_states', 'joints'),
                        (Odometry, '/moboterra/vehicle/odom', 'odom'),
                        (WheelModuleStatusArray, '/moboterra/wheel_modules/status', 'modules'),
                        (DiagnosticArray, '/moboterra/diagnostics', 'diagnostics'),
                        (VehicleModeState, '/moboterra/vehicle/mode', 'mode'),
-                       (WheelModuleCommandArray, '/moboterra/wheel_modules/command', 'commands'))]
+                       (WheelModuleCommandArray, '/moboterra/wheel_modules/command', 'commands')]
+        handles = [node.create_subscription(kind, topic,
+                   lambda msg, key=key: receive(key, msg), 10)
+                   for kind, topic, key in topics if not (light and key == 'odom')]
         # This check launches only the virtual stack and no physical operator
         # receiver. Supply a clearly identified neutral virtual operator so the
         # supervisor must actually initialize/enable, without commanding motion.
@@ -106,6 +114,13 @@ def main():
                 rclpy.spin_once(node, timeout_sec=0.2)
                 names = {name for name, namespace in node.get_node_names_and_namespaces()
                          if namespace == '/moboterra'}
+                if light:
+                    forbidden = {'mobotic_odometry', 'robot_state_publisher', 'rviz2'} & names
+                    if forbidden:
+                        raise RuntimeError(f'Light image started excluded nodes: {sorted(forbidden)}')
+                    if any(topic.rsplit('/', 1)[-1] in ('tf', 'tf_static')
+                           for topic, _ in node.get_topic_names_and_types()):
+                        raise RuntimeError('Light image unexpectedly advertises TF topics')
                 if not health_checked:
                     if expected <= names:
                         # Check graph discovery before B2. A late DDS participant
@@ -130,9 +145,9 @@ def main():
                         and mode is not None and not mode.drives_enabled and not mode.reset_in_progress
                         and 'B2_ENABLE_REQUIRED' in mode.reason_codes):
                     enable_future = toggle.call_async(Trigger.Request())
-                ready = (expected <= names and {'joints', 'odom', 'modules', 'diagnostics', 'mode'} <= samples.keys()
+                ready = (expected <= names and required_samples <= samples.keys()
                          and all(time.monotonic() - received[key] <= 0.5
-                                 for key in ('joints', 'odom', 'modules', 'mode')))
+                                 for key in fresh_samples))
                 if ready:
                     if (len(samples['joints'].name) != len(expected_joints)
                             or set(samples['joints'].name) != expected_joints):
@@ -159,12 +174,13 @@ def main():
                     ready_since = None
             else:
                 raise RuntimeError(f'Virtual startup timed out: nodes={sorted(names)}, '
-                                   f'messages={sorted(samples)}')
+                                   f'messages={sorted(samples)}, '
+                                   f'reasons={getattr(samples.get("mode"), "reason_codes", [])}')
             if (launch.poll() is not None or time.monotonic() - received['mode'] > 0.5
                     or not mode_ready(samples['mode'])):
                 raise RuntimeError('Virtual stack lost readiness after validation')
             print(f'PASS: virtual nodes, {len(expected_joints)} joints, '
-                  f'{len(expected_modules)} enabled wheel modules, supervisor readiness, odometry and diagnostics',
+                  f'{len(expected_modules)} enabled wheel modules, supervisor readiness and diagnostics ({"light" if light else "full"} profile)',
                   flush=True)
         except Exception:
             log.seek(0)

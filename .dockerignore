@@ -17,3 +17,6 @@ log
 can_telemetry_records
 deploy/tests
 
+
+.venv
+.ci-venv

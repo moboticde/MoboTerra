@@ -1,0 +1,70 @@
+name: MoboTerra light ARM64 release
+
+on:
+  push:
+    branches: [pi4-light]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: light-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check deployment and light-profile regressions
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv
+          python3 -m venv .ci-venv
+          .ci-venv/bin/pip install pytest PyYAML xacro
+          PYTHONPATH=src/mobotic_config:src/mobotic_kinematics .ci-venv/bin/python -m pytest -q deploy/tests src/mobotic_bringup/test/test_socketcan_launch.py
+          bash -n scripts/start_MoboTerra
+      - name: Build and test native ARM64 workspace
+        run: |
+          docker build --platform linux/arm64 --file deploy/Dockerfile --target builder \
+            --tag moboterra-light-builder .
+      - name: Package light runtime and validate under CPU and memory limits
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:light-arm64-$GITHUB_SHA"
+          docker build --platform linux/arm64 --file deploy/Dockerfile.light \
+            --build-arg BUILDER_IMAGE=moboterra-light-builder \
+            --build-arg VCS_REF="$GITHUB_SHA" --build-arg BUILD_DATE="$(date -u +%FT%TZ)" \
+            --tag "$image" .
+          PYTHONDONTWRITEBYTECODE=1 python3 - "$image" <<'PY'
+          import sys
+          sys.path.insert(0, 'deploy')
+          from current_stack import inspect_image, verify_image
+          verify_image(inspect_image(sys.argv[1]))
+          PY
+          # Additional stress validation, not a claim of physical Pi 4 acceptance.
+          docker run --rm --network none --cpus=2 --memory=2g --memory-swap=2g \
+            --env ROS_DOMAIN_ID=193 "$image" python3 /opt/moboterra-checks/virtual_smoke.py
+          docker image inspect "$image" --format '{{json .}}' > image-inspect.json
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$image" | tee image-push.txt
+          digest=$(awk '$2 == "digest:" {print $3}' image-push.txt)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n --arg commit "$GITHUB_SHA" \
+            --arg image "ghcr.io/${GITHUB_REPOSITORY,,}@$digest" \
+            '{commit:$commit,image:$image,architecture:"arm64",profile:"light"}' > release.json
+      - name: Publish the ready-to-install light release
+        run: |
+          tag="light-arm64-$GITHUB_SHA"
+          gh release create "$tag" release.json image-inspect.json \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "MoboTerra light ARM64 $GITHUB_SHA" --prerelease --latest=false \
+            --notes 'Native ARM64 control runtime without RViz, odometry or TF publishers. All eight virtual controller models share one CAN endpoint. Hardware Pi 4 acceptance remains required.'
